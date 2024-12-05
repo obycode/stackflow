@@ -2,19 +2,43 @@ import { Cl } from "@stacks/transactions";
 import { describe, expect, it } from "vitest";
 
 const accounts = simnet.getAccounts();
+const deployer = accounts.get("deployer")!;
 const address1 = accounts.get("wallet_1")!;
 const address2 = accounts.get("wallet_2")!;
+
+describe("contract-of-optional", () => {
+  it("returns the contract principal", () => {
+    const { result } = simnet.callPrivateFn(
+      "stackflow",
+      "contract-of-optional",
+      [Cl.some(Cl.contractPrincipal(deployer, "test-token"))],
+      address1
+    );
+    expect(result).toBeSome(Cl.contractPrincipal(deployer, "test-token"));
+  });
+
+  it("returns none", () => {
+    const { result } = simnet.callPrivateFn(
+      "stackflow",
+      "contract-of-optional",
+      [Cl.none()],
+      address1
+    );
+    expect(result).toBeNone();
+  });
+});
 
 describe("get-channel-key", () => {
   it("ensures the channel key is built correctly", () => {
     const { result } = simnet.callPrivateFn(
       "stackflow",
       "get-channel-key",
-      [Cl.principal(address1), Cl.principal(address2)],
+      [Cl.none(), Cl.principal(address1), Cl.principal(address2)],
       address1
     );
     expect(result).toBeOk(
       Cl.tuple({
+        token: Cl.none(),
         "principal-1": Cl.principal(address1),
         "principal-2": Cl.principal(address2),
       })
@@ -25,11 +49,32 @@ describe("get-channel-key", () => {
     const { result } = simnet.callPrivateFn(
       "stackflow",
       "get-channel-key",
-      [Cl.principal(address2), Cl.principal(address1)],
+      [Cl.none(), Cl.principal(address2), Cl.principal(address1)],
       address1
     );
     expect(result).toBeOk(
       Cl.tuple({
+        token: Cl.none(),
+        "principal-1": Cl.principal(address1),
+        "principal-2": Cl.principal(address2),
+      })
+    );
+  });
+
+  it("ensures the channel key includes the specified token", () => {
+    const { result } = simnet.callPrivateFn(
+      "stackflow",
+      "get-channel-key",
+      [
+        Cl.some(Cl.contractPrincipal(address1, "test-token")),
+        Cl.principal(address1),
+        Cl.principal(address2),
+      ],
+      address1
+    );
+    expect(result).toBeOk(
+      Cl.tuple({
+        token: Cl.some(Cl.contractPrincipal(address1, "test-token")),
         "principal-1": Cl.principal(address1),
         "principal-2": Cl.principal(address2),
       })
@@ -37,90 +82,106 @@ describe("get-channel-key", () => {
   });
 });
 
-describe("increase-balance", () => {
+describe("increase-sender-balance", () => {
   it("increases the balance of principal-1", () => {
     const { result } = simnet.callPrivateFn(
       "stackflow",
-      "increase-balance",
+      "increase-sender-balance",
       [
         Cl.tuple({
+          token: Cl.none(),
           "principal-1": Cl.principal(address1),
           "principal-2": Cl.principal(address2),
         }),
         Cl.tuple({ "balance-1": Cl.uint(100), "balance-2": Cl.uint(0) }),
-        Cl.principal(address1),
+        Cl.none(),
         Cl.uint(123),
       ],
       address1
     );
-    expect(result).toBeTuple({
-      "balance-1": Cl.uint(223),
-      "balance-2": Cl.uint(0),
-    });
+    expect(result).toBeOk(
+      Cl.tuple({
+        "balance-1": Cl.uint(223),
+        "balance-2": Cl.uint(0),
+      })
+    );
   });
 
   it("increases the balance of principal-2", () => {
     const { result } = simnet.callPrivateFn(
       "stackflow",
-      "increase-balance",
+      "increase-sender-balance",
       [
         Cl.tuple({
+          token: Cl.none(),
           "principal-1": Cl.principal(address1),
           "principal-2": Cl.principal(address2),
         }),
         Cl.tuple({ "balance-1": Cl.uint(100), "balance-2": Cl.uint(0) }),
-        Cl.principal(address2),
+        Cl.none(),
         Cl.uint(123),
       ],
-      address1
+      address2
     );
-    expect(result).toBeTuple({
-      "balance-1": Cl.uint(100),
-      "balance-2": Cl.uint(123),
-    });
+    expect(result).toBeOk(
+      Cl.tuple({
+        "balance-1": Cl.uint(100),
+        "balance-2": Cl.uint(123),
+      })
+    );
   });
 });
 
-describe("decrease-balance", () => {
-  it("decreases the balance of principal-1", () => {
+describe("make-channel-data", () => {
+  it("ensures the channel data is built correctly", () => {
     const { result } = simnet.callPrivateFn(
       "stackflow",
-      "decrease-balance",
+      "make-channel-data",
       [
         Cl.tuple({
+          token: Cl.none(),
           "principal-1": Cl.principal(address1),
           "principal-2": Cl.principal(address2),
         }),
-        Cl.tuple({ "balance-1": Cl.uint(987), "balance-2": Cl.uint(654) }),
-        Cl.principal(address1),
-        Cl.uint(321),
+        Cl.uint(100),
+        Cl.uint(0),
+        Cl.uint(4),
       ],
       address1
     );
     expect(result).toBeTuple({
-      "balance-1": Cl.uint(666),
-      "balance-2": Cl.uint(654),
+      token: Cl.none(),
+      "principal-1": Cl.principal(address1),
+      "principal-2": Cl.principal(address2),
+      "balance-1": Cl.uint(100),
+      "balance-2": Cl.uint(0),
+      nonce: Cl.uint(4),
     });
   });
 
-  it("decreases the balance of principal-2", () => {
+  it("ensures the channel data is built correctly from principal-2", () => {
     const { result } = simnet.callPrivateFn(
       "stackflow",
-      "decrease-balance",
+      "make-channel-data",
       [
         Cl.tuple({
+          token: Cl.none(),
           "principal-1": Cl.principal(address1),
           "principal-2": Cl.principal(address2),
         }),
-        Cl.tuple({ "balance-1": Cl.uint(987), "balance-2": Cl.uint(654) }),
-        Cl.principal(address2),
-        Cl.uint(321),
+        Cl.uint(120),
+        Cl.uint(80),
+        Cl.uint(7),
       ],
-      address1
+      address2
     );
     expect(result).toBeTuple({
-      "balance-1": Cl.uint(987),
-      "balance-2": Cl.uint(333),
+      token: Cl.none(),
+      "principal-1": Cl.principal(address1),
+      "principal-2": Cl.principal(address2),
+      "balance-1": Cl.uint(80),
+      "balance-2": Cl.uint(120),
+      nonce: Cl.uint(7),
     });
   });
 });

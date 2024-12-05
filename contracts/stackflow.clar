@@ -31,6 +31,8 @@
 (define-constant err-consensus-buff (err u105))
 (define-constant err-unauthorized (err u106))
 (define-constant err-max-allowed (err u107))
+(define-constant err-invalid-total-balance (err u108))
+(define-constant err-withdrawal-failed (err u109))
 
 ;;; List of allowed SIP-010 tokens as set by the owner of the contract.
 ;;; This is required since SIP-010 tokens are not guaranteed not to have side-
@@ -94,9 +96,40 @@
     (
       (channel-key (try! (get-channel-key (contract-of-optional token) tx-sender with)))
       (balances (unwrap! (map-get? channels channel-key) err-no-such-channel))
-      
+      (data (make-channel-data channel-key my-balance their-balance nonce))
+      (data-hash (sha256 (unwrap! (to-consensus-buff? data) err-consensus-buff)))
+      (input (sha256 (concat structured-data-header data-hash)))
+      (sender tx-sender)
     )
-    ;; TODO: left off here
+    ;; If the total balance of the channel is not equal to the sum of the
+    ;; balances provided, the channel close is invalid.
+    (asserts!
+      (is-eq
+        (+ my-balance their-balance)
+        (+ (get balance-1 balances) (get balance-2 balances))
+      )
+      err-invalid-total-balance
+    )
+
+    ;; Verify the signatures of the two parties.
+    (asserts! (verify-signature input my-signature tx-sender) err-invalid-sender-signature)
+    (asserts! (verify-signature input their-signature with) err-invalid-other-signature)
+
+    ;; Remove the channel from the map.
+    (map-delete channels channel-key)
+
+    ;; Pay out the balances.
+    (match token
+      t
+      (begin
+        (unwrap! (as-contract (contract-call? t transfer my-balance tx-sender sender none)) err-withdrawal-failed)
+        (unwrap! (as-contract (contract-call? t transfer their-balance tx-sender with none)) err-withdrawal-failed)
+      )
+      (begin
+        (unwrap! (as-contract (stx-transfer? my-balance tx-sender sender)) err-withdrawal-failed)
+        (unwrap! (as-contract (stx-transfer? their-balance tx-sender with)) err-withdrawal-failed)
+      )
+    )
     (ok true)
   )
 )
@@ -128,7 +161,8 @@
 ;; Read Only Functions
 ;;
 
-;;; Get the current balances of the channel between `tx-sender` and `with`.
+;;; Get the current balances of the channel between `tx-sender` and `with` for
+;;; token `token` (`none` indicates STX).
 (define-read-only (get-channel-balances (token (optional principal)) (with principal))
   (let
     (
@@ -179,7 +213,7 @@
 ;;; balances.
 (define-private (increase-sender-balance
     (channel-key { token: (optional principal), principal-1: principal, principal-2: principal })
-    (channel { balance-1: uint, balance-2: uint })
+    (balances { balance-1: uint, balance-2: uint })
     (token (optional <sip-010>))
     (amount uint)
   )
@@ -191,8 +225,8 @@
     )
     (ok
       (if (is-eq tx-sender (get principal-1 channel-key))
-        (merge channel { balance-1: (+ (get balance-1 channel) amount) })
-        (merge channel { balance-2: (+ (get balance-2 channel) amount) })
+        (merge balances { balance-1: (+ (get balance-1 balances) amount) })
+        (merge balances { balance-2: (+ (get balance-2 balances) amount) })
       )
     )
   )
@@ -243,12 +277,28 @@
 (define-private (is-some_ (i (optional principal))) (is-some i))
 
 ;;; Build up the structured data for a channel close operation.
+;;; The structured data is a map with the following keys:
+;;; - token: the token used in the channel
+;;; - principal-1: the first principal in the channel
+;;; - principal-2: the second principal in the channel
+;;; - balance-1: the balance of the first principal in the channel
+;;; - balance-2: the balance of the second principal in the channel
+;;; - nonce: the nonce for this channel data
+;;; This function assumes that the channel has already been validated to
+;;; include these two principals.
 (define-private (make-channel-data
     (channel-key { token: (optional principal), principal-1: principal, principal-2: principal })
     (my-balance uint)
     (their-balance uint)
     (nonce uint)
   )
-  ;; TODO: left off here, the below code is not correct
-  (ok true)
+  (let
+    (
+      (balances (if (is-eq tx-sender (get principal-1 channel-key))
+        { balance-1: my-balance, balance-2: their-balance }
+        { balance-1: their-balance, balance-2: my-balance }
+      ))
+    )
+    (merge (merge channel-key balances) { nonce: nonce })
+  )
 )
