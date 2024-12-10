@@ -67,7 +67,7 @@
           existing-channel
           ch
           ch
-          { token: token-principal, balance-1: u0, balance-2: u0 }
+          { balance-1: u0, balance-2: u0 }
         )
       )
       (updated-channel (try! (increase-sender-balance channel-key channel token deposit)))

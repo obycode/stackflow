@@ -98,39 +98,6 @@ plan:
       transactions: []
       epoch: "2.1"
     - id: 15
-      transactions: []
-      epoch: "2.1"
-    - id: 16
-      transactions: []
-      epoch: "2.1"
-    - id: 17
-      transactions: []
-      epoch: "2.1"
-    - id: 18
-      transactions: []
-      epoch: "2.1"
-    - id: 19
-      transactions: []
-      epoch: "2.1"
-    - id: 20
-      transactions: []
-      epoch: "2.1"
-    - id: 21
-      transactions: []
-      epoch: "2.1"
-    - id: 22
-      transactions: []
-      epoch: "2.1"
-    - id: 23
-      transactions: []
-      epoch: "2.1"
-    - id: 24
-      transactions: []
-      epoch: "2.1"
-    - id: 25
-      transactions: []
-      epoch: "2.1"
-    - id: 26
       transactions:
         - emulated-contract-publish:
             contract-name: stackflow
@@ -143,75 +110,42 @@ plan:
             path: contracts/test-token.clar
             clarity-version: 3
       epoch: "3.0"
+    - id: 16
+      transactions: []
+      epoch: "3.0"
+    - id: 17
+      transactions: []
+      epoch: "3.0"
+    - id: 18
+      transactions: []
+      epoch: "3.0"
+    - id: 19
+      transactions: []
+      epoch: "3.0"
+    - id: 20
+      transactions: []
+      epoch: "3.0"
+    - id: 21
+      transactions: []
+      epoch: "3.0"
+    - id: 22
+      transactions: []
+      epoch: "3.0"
+    - id: 23
+      transactions: []
+      epoch: "3.0"
+    - id: 24
+      transactions: []
+      epoch: "3.0"
+    - id: 25
+      transactions: []
+      epoch: "3.0"
+    - id: 26
+      transactions: []
+      epoch: "3.0"
     - id: 27
       transactions: []
       epoch: "3.0"
     - id: 28
-      transactions: []
-      epoch: "3.0"
-    - id: 29
-      transactions: []
-      epoch: "3.0"
-    - id: 30
-      transactions: []
-      epoch: "3.0"
-    - id: 31
-      transactions: []
-      epoch: "3.0"
-    - id: 32
-      transactions: []
-      epoch: "3.0"
-    - id: 33
-      transactions: []
-      epoch: "3.0"
-    - id: 34
-      transactions: []
-      epoch: "3.0"
-    - id: 35
-      transactions: []
-      epoch: "3.0"
-    - id: 36
-      transactions: []
-      epoch: "3.0"
-    - id: 37
-      transactions: []
-      epoch: "3.0"
-    - id: 38
-      transactions: []
-      epoch: "3.0"
-    - id: 39
-      transactions: []
-      epoch: "3.0"
-    - id: 40
-      transactions: []
-      epoch: "3.0"
-    - id: 41
-      transactions: []
-      epoch: "3.0"
-    - id: 42
-      transactions: []
-      epoch: "3.0"
-    - id: 43
-      transactions: []
-      epoch: "3.0"
-    - id: 44
-      transactions: []
-      epoch: "3.0"
-    - id: 45
-      transactions: []
-      epoch: "3.0"
-    - id: 46
-      transactions: []
-      epoch: "3.0"
-    - id: 47
-      transactions: []
-      epoch: "3.0"
-    - id: 48
-      transactions: []
-      epoch: "3.0"
-    - id: 49
-      transactions: []
-      epoch: "3.0"
-    - id: 50
       transactions: []
       epoch: "3.0"

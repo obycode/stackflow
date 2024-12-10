@@ -2,11 +2,12 @@ import {
   Cl,
   ClarityValue,
   createStacksPrivateKey,
+  cvToString,
   serializeCV,
   signWithKey,
   StacksPrivateKey,
 } from "@stacks/transactions";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { createHash } from "crypto";
 
 const accounts = simnet.getAccounts();
@@ -52,6 +53,29 @@ function signStructuredData(
   const data = signWithKey(privateKey, input.toString("hex")).data;
   return Buffer.from(data.slice(2) + data.slice(0, 2), "hex");
 }
+
+describe("get-channel-balances", () => {
+  it("returns the channel balances", () => {
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      address1
+    );
+    const { result } = simnet.callReadOnlyFn(
+      "stackflow",
+      "get-channel-balances",
+      [Cl.none(), Cl.principal(address2)],
+      address1
+    );
+    expect(result).toBeOk(
+      Cl.tuple({
+        "balance-1": Cl.uint(1000000),
+        "balance-2": Cl.uint(0),
+      })
+    );
+  });
+});
 
 describe("verify-signed-structured-data", () => {
   it("verifies the signed structured data", () => {
