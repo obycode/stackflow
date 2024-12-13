@@ -22,17 +22,21 @@
 ))))
 (define-constant structured-data-header (concat structured-data-prefix message-domain-hash))
 
+;; Actions
+(define-constant ACTION_CLOSE "close")
+(define-constant ACTION_TRANSFER "transfer")
+
 ;; Error codes
-(define-constant err-deposit-failed (err u100))
-(define-constant err-no-such-channel (err u101))
-(define-constant err-invalid-principal (err u102))
-(define-constant err-invalid-sender-signature (err u103))
-(define-constant err-invalid-other-signature (err u104))
-(define-constant err-consensus-buff (err u105))
-(define-constant err-unauthorized (err u106))
-(define-constant err-max-allowed (err u107))
-(define-constant err-invalid-total-balance (err u108))
-(define-constant err-withdrawal-failed (err u109))
+(define-constant ERR_DEPOSIT_FAILED (err u100))
+(define-constant ERR_NO_SUCH_CHANNEL (err u101))
+(define-constant ERR_INVALID_PRINCIPAL (err u102))
+(define-constant ERR_INVALID_SENDER_SIGNATURE (err u103))
+(define-constant ERR_INVALID_OTHER_SIGNATURE (err u104))
+(define-constant ERR_CONSENSUS_BUFF (err u105))
+(define-constant ERR_UNAUTHORIZED (err u106))
+(define-constant ERR_MAX_ALLOWED (err u107))
+(define-constant ERR_INVALID_TOTAL_BALANCE (err u108))
+(define-constant ERR_WITHDRAWAL_FAILED (err u109))
 
 ;;; List of allowed SIP-010 tokens as set by the owner of the contract.
 ;;; This is required since SIP-010 tokens are not guaranteed not to have side-
@@ -95,9 +99,9 @@
   (let
     (
       (channel-key (try! (get-channel-key (contract-of-optional token) tx-sender with)))
-      (balances (unwrap! (map-get? channels channel-key) err-no-such-channel))
-      (data (make-channel-data channel-key my-balance their-balance nonce))
-      (data-hash (sha256 (unwrap! (to-consensus-buff? data) err-consensus-buff)))
+      (balances (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
+      (data (make-channel-data channel-key my-balance their-balance nonce ACTION_CLOSE))
+      (data-hash (sha256 (unwrap! (to-consensus-buff? data) ERR_CONSENSUS_BUFF)))
       (input (sha256 (concat structured-data-header data-hash)))
       (sender tx-sender)
     )
@@ -108,12 +112,12 @@
         (+ my-balance their-balance)
         (+ (get balance-1 balances) (get balance-2 balances))
       )
-      err-invalid-total-balance
+      ERR_INVALID_TOTAL_BALANCE
     )
 
     ;; Verify the signatures of the two parties.
-    (asserts! (verify-signature input my-signature tx-sender) err-invalid-sender-signature)
-    (asserts! (verify-signature input their-signature with) err-invalid-other-signature)
+    (asserts! (verify-signature input my-signature tx-sender) ERR_INVALID_SENDER_SIGNATURE)
+    (asserts! (verify-signature input their-signature with) ERR_INVALID_OTHER_SIGNATURE)
 
     ;; Remove the channel from the map.
     (map-delete channels channel-key)
@@ -122,12 +126,12 @@
     (match token
       t
       (begin
-        (unwrap! (as-contract (contract-call? t transfer my-balance tx-sender sender none)) err-withdrawal-failed)
-        (unwrap! (as-contract (contract-call? t transfer their-balance tx-sender with none)) err-withdrawal-failed)
+        (unwrap! (as-contract (contract-call? t transfer my-balance tx-sender sender none)) ERR_WITHDRAWAL_FAILED)
+        (unwrap! (as-contract (contract-call? t transfer their-balance tx-sender with none)) ERR_WITHDRAWAL_FAILED)
       )
       (begin
-        (unwrap! (as-contract (stx-transfer? my-balance tx-sender sender)) err-withdrawal-failed)
-        (unwrap! (as-contract (stx-transfer? their-balance tx-sender with)) err-withdrawal-failed)
+        (unwrap! (as-contract (stx-transfer? my-balance tx-sender sender)) ERR_WITHDRAWAL_FAILED)
+        (unwrap! (as-contract (stx-transfer? their-balance tx-sender with)) ERR_WITHDRAWAL_FAILED)
       )
     )
     (ok true)
@@ -139,9 +143,9 @@
 (define-public (add-allowed-sip-010 (token principal))
   (let (
       (current (var-get allowed-sip-010s))
-      (updated (unwrap! (as-max-len? (append current token) u256) err-max-allowed))
+      (updated (unwrap! (as-max-len? (append current token) u256) ERR_MAX_ALLOWED))
     )
-    (asserts! (is-eq contract-caller contract-deployer) err-unauthorized)
+    (asserts! (is-eq contract-caller contract-deployer) ERR_UNAUTHORIZED)
     (ok (var-set allowed-sip-010s updated))
   )
 )
@@ -153,7 +157,7 @@
       (current (var-get allowed-sip-010s))
       (updated (remove-principal-from-list current token))
     )
-    (asserts! (is-eq contract-caller contract-deployer) err-unauthorized)
+    (asserts! (is-eq contract-caller contract-deployer) ERR_UNAUTHORIZED)
     (ok (var-set allowed-sip-010s updated))
   )
 )
@@ -167,7 +171,7 @@
   (let
     (
       (channel-key (try! (get-channel-key token tx-sender with)))
-      (balances (unwrap! (map-get? channels channel-key) err-no-such-channel))
+      (balances (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
     )
     (ok balances)
   )
@@ -199,8 +203,8 @@
 (define-private (get-channel-key (token (optional principal)) (principal-1 principal) (principal-2 principal))
   (let
     (
-      (p1 (unwrap! (to-consensus-buff? principal-1) err-invalid-principal))
-      (p2 (unwrap! (to-consensus-buff? principal-2) err-invalid-principal))
+      (p1 (unwrap! (to-consensus-buff? principal-1) ERR_INVALID_PRINCIPAL))
+      (p2 (unwrap! (to-consensus-buff? principal-2) ERR_INVALID_PRINCIPAL))
     )
     (ok (if (< p1 p2)
       { token: token, principal-1: principal-1, principal-2: principal-2 }
@@ -220,8 +224,8 @@
   (begin
     (match token
       t
-      (unwrap! (contract-call? t transfer amount tx-sender (as-contract tx-sender) none) err-deposit-failed)
-      (unwrap! (stx-transfer? amount tx-sender (as-contract tx-sender)) err-deposit-failed)
+      (unwrap! (contract-call? t transfer amount tx-sender (as-contract tx-sender) none) ERR_DEPOSIT_FAILED)
+      (unwrap! (stx-transfer? amount tx-sender (as-contract tx-sender)) ERR_DEPOSIT_FAILED)
     )
     (ok
       (if (is-eq tx-sender (get principal-1 channel-key))
@@ -291,6 +295,7 @@
     (my-balance uint)
     (their-balance uint)
     (nonce uint)
+    (action (string-ascii 8))
   )
   (let
     (
@@ -299,6 +304,6 @@
         { balance-1: their-balance, balance-2: my-balance }
       ))
     )
-    (merge (merge channel-key balances) { nonce: nonce })
+    (merge (merge channel-key balances) { nonce: nonce, action: action })
   )
 )
