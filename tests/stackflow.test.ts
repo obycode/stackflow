@@ -1,7 +1,9 @@
 import {
   Cl,
+  ClarityType,
   ClarityValue,
   createStacksPrivateKey,
+  ResponseOkCV,
   serializeCV,
   signWithKey,
   StacksPrivateKey,
@@ -13,6 +15,7 @@ const accounts = simnet.getAccounts();
 const deployer = accounts.get("deployer")!;
 const address1 = accounts.get("wallet_1")!;
 const address2 = accounts.get("wallet_2")!;
+const address3 = accounts.get("wallet_3")!;
 const stackflowContract = `${deployer}.stackflow`;
 
 const address1PK = createStacksPrivateKey(
@@ -21,6 +24,8 @@ const address1PK = createStacksPrivateKey(
 const address2PK = createStacksPrivateKey(
   "530d9f61984c888536871c6573073bdfc0058896dc1adfe9a6a10dfacadc209101"
 );
+
+const WAITING_PERIOD = 6;
 
 enum ChannelAction {
   Close = "close",
@@ -537,6 +542,137 @@ describe("close-channel", () => {
   });
 });
 
+describe("force-close", () => {
+  it("account 1 can force close account with no transfers", () => {
+    // Setup the channel and save the channel key
+    const { result: fundResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      address1
+    );
+    expect(fundResult.type).toBe(ClarityType.ResponseOk);
+    const channelKey = (fundResult as ResponseOkCV).value;
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      address2
+    );
+
+    const current_height = simnet.burnBlockHeight;
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "force-close",
+      [Cl.none(), Cl.principal(address2)],
+      address1
+    );
+    expect(result).toBeOk(Cl.uint(current_height + WAITING_PERIOD));
+
+    // Verify that the waiting period has been set in the map
+    const channel = simnet.getMapEntry(
+      stackflowContract,
+      "channels",
+      channelKey
+    );
+    expect(channel).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(1000000),
+        "balance-2": Cl.uint(2000000),
+        "expires-at": Cl.uint(current_height + WAITING_PERIOD),
+      })
+    );
+
+    // Verify the balances have not changed yet
+    const stxBalances = simnet.getAssetsMap().get("STX")!;
+
+    const balance1 = stxBalances.get(address1);
+    expect(balance1).toBe(99999999000000n);
+
+    const balance2 = stxBalances.get(address2);
+    expect(balance2).toBe(99999998000000n);
+
+    const contractBalance = stxBalances.get(stackflowContract);
+    expect(contractBalance).toBe(3000000n);
+  });
+
+  it("account 2 can force close account with no transfers", () => {
+    // Setup the channel and save the channel key
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      address1
+    );
+    const { result: fundResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      address2
+    );
+    expect(fundResult.type).toBe(ClarityType.ResponseOk);
+    const channelKey = (fundResult as ResponseOkCV).value;
+
+    const current_height = simnet.burnBlockHeight;
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "force-close",
+      [Cl.none(), Cl.principal(address1)],
+      address2
+    );
+    expect(result).toBeOk(Cl.uint(current_height + WAITING_PERIOD));
+
+    // Verify that the waiting period has been set in the map
+    const channel = simnet.getMapEntry(
+      stackflowContract,
+      "channels",
+      channelKey
+    );
+    expect(channel).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(1000000),
+        "balance-2": Cl.uint(2000000),
+        "expires-at": Cl.uint(current_height + WAITING_PERIOD),
+      })
+    );
+
+    // Verify the balances have not changed yet
+    const stxBalances = simnet.getAssetsMap().get("STX")!;
+    const balance1 = stxBalances.get(address1);
+    expect(balance1).toBe(99999999000000n);
+
+    const balance2 = stxBalances.get(address2);
+    expect(balance2).toBe(99999998000000n);
+
+    const contractBalance = stxBalances.get(stackflowContract);
+    expect(contractBalance).toBe(3000000n);
+  });
+
+  it("closing a non-existent channel gives an error", () => {
+    // Setup a channel
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      address1
+    );
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      address2
+    );
+
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "force-close",
+      [Cl.none(), Cl.principal(address1)],
+      address3
+    );
+    expect(result).toBeErr(Cl.uint(TxError.NoSuchChannel));
+  });
+});
+
 describe("get-channel-balances", () => {
   it("returns the channel balances", () => {
     simnet.callPublicFn(
@@ -555,6 +691,7 @@ describe("get-channel-balances", () => {
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(0),
+        "expires-at": Cl.uint(340282366920938463463374607431768211455n),
       })
     );
   });

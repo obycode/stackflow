@@ -10,6 +10,8 @@
 (use-trait sip-010 'SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE.sip-010-trait-ft-standard.sip-010-trait)
 
 (define-constant contract-deployer tx-sender)
+(define-constant MAX_HEIGHT u340282366920938463463374607431768211455)
+(define-constant WAITING_PERIOD u6)
 
 ;; Constants for SIP-018 structured data
 (define-constant structured-data-prefix 0x534950303138)
@@ -50,11 +52,35 @@
 (define-map
   channels
   { token: (optional principal), principal-1: principal, principal-2: principal }
-  { balance-1: uint, balance-2: uint }
+  { balance-1: uint, balance-2: uint, expires-at: uint }
 )
 
 ;; Public Functions
 ;;
+
+;;; As the owner of this contract, add a SIP-010 token to the list of allowed
+;;; tokens.
+(define-public (add-allowed-sip-010 (token principal))
+  (let (
+      (current (var-get allowed-sip-010s))
+      (updated (unwrap! (as-max-len? (append current token) u256) ERR_MAX_ALLOWED))
+    )
+    (asserts! (is-eq contract-caller contract-deployer) ERR_UNAUTHORIZED)
+    (ok (var-set allowed-sip-010s updated))
+  )
+)
+
+;;; As the owner of this contract, remove a SIP-010 token from the list of
+;;; allowed tokens.
+(define-public (remove-allowed-sip-010 (token principal))
+  (let (
+      (current (var-get allowed-sip-010s))
+      (updated (remove-principal-from-list current token))
+    )
+    (asserts! (is-eq contract-caller contract-deployer) ERR_UNAUTHORIZED)
+    (ok (var-set allowed-sip-010s updated))
+  )
+)
 
 ;;; Deposit `deposit` funds into a channel between `tx-sender` and `with` for
 ;;; FT `token` (`none` indicates STX). Create the channel if one does not
@@ -71,7 +97,7 @@
           existing-channel
           ch
           ch
-          { balance-1: u0, balance-2: u0 }
+          { balance-1: u0, balance-2: u0, expires-at: MAX_HEIGHT }
         )
       )
       (updated-channel (try! (increase-sender-balance channel-key channel token deposit)))
@@ -87,6 +113,7 @@
   )
 )
 
+;;; Cooperatively close the channel, with authorization from both parties.
 (define-public (close-channel
     (token (optional <sip-010>))
     (with principal)
@@ -138,27 +165,21 @@
   )
 )
 
-;;; As the owner of this contract, add a SIP-010 token to the list of allowed
-;;; tokens.
-(define-public (add-allowed-sip-010 (token principal))
-  (let (
-      (current (var-get allowed-sip-010s))
-      (updated (unwrap! (as-max-len? (append current token) u256) ERR_MAX_ALLOWED))
+;;; Close the channel and return the original balances to both participants.
+;;; This initiates a waiting period, giving the other party the opportunity to
+;;; dispute the closing of the channel, by calling `dispute-closure`.
+(define-public (force-close (token (optional <sip-010>)) (with principal))
+  (let
+    (
+      (channel-key (try! (get-channel-key (contract-of-optional token) tx-sender with)))
+      (balances (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
+      (expires-at (+ burn-block-height WAITING_PERIOD))
     )
-    (asserts! (is-eq contract-caller contract-deployer) ERR_UNAUTHORIZED)
-    (ok (var-set allowed-sip-010s updated))
-  )
-)
 
-;;; As the owner of this contract, remove a SIP-010 token from the list of
-;;; allowed tokens.
-(define-public (remove-allowed-sip-010 (token principal))
-  (let (
-      (current (var-get allowed-sip-010s))
-      (updated (remove-principal-from-list current token))
-    )
-    (asserts! (is-eq contract-caller contract-deployer) ERR_UNAUTHORIZED)
-    (ok (var-set allowed-sip-010s updated))
+    ;; Set the waiting period for this channel.
+    (map-set channels channel-key (merge balances { expires-at: expires-at }))
+
+    (ok expires-at)
   )
 )
 
@@ -217,7 +238,7 @@
 ;;; balances.
 (define-private (increase-sender-balance
     (channel-key { token: (optional principal), principal-1: principal, principal-2: principal })
-    (balances { balance-1: uint, balance-2: uint })
+    (balances { balance-1: uint, balance-2: uint, expires-at: uint })
     (token (optional <sip-010>))
     (amount uint)
   )
@@ -288,6 +309,7 @@
 ;;; - balance-1: the balance of the first principal in the channel
 ;;; - balance-2: the balance of the second principal in the channel
 ;;; - nonce: the nonce for this channel data
+;;; - action: the action being performed (e.g., "close")
 ;;; This function assumes that the channel has already been validated to
 ;;; include these two principals.
 (define-private (make-channel-data

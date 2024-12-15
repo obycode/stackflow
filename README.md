@@ -122,3 +122,37 @@ decrypt each buffer until it finds the one encrypted with its public key.
 
 For the final hop in the chain, **D** in our example, the `receiver` is set to
 **D** and the amount is set to `0`.
+
+## Closing a channel
+
+There are two ways to close a channel, cooperatively or forcefully. In the
+normal scenario, both parties agree to close the channel and authorize the
+closure by signing a message agreeing upon the final balances. One party calls
+`close-channel`, passing in these balances and signatures, and then the contract
+pays out both parties and the channel is closed.
+
+In the unfortunate scenario where one party becomes unresponsive, the other
+party needs a way to retrieve their funds from the channel unilaterally. This
+user has two options:
+
+1. `force-close` allows the user to close the channel and refund the initial
+   balances to both parties. This option requires no signatures, but it does
+   require a waiting period, allowing the other party to dispute the closure by
+   submitting signatures validating a transfer on this channel.
+2. `stateful-close` allows the user to close the channel and return the balances
+   recorded in the latest transfer on this channel. Arguments to this function
+   include signatures from the latest transfer, along with the agreed upon
+   balances at that transfer. This function also requires a waiting period,
+   allowing the other party to dispute the closure by submitting a later pair of
+   signatures, indicating a more recent balance agreement (one with a higher
+   nonce).
+
+During the waiting period for both of these closures, the other party may call
+`dispute-closure`, passing in balances and signatures from the latest transfer.
+If the signatures are confirmed, and the nonce is higher in the case of a
+`stateful-close`, then the channel is immediately closed, transferring with the
+balances specified to both parties.
+
+If the closure is not disputed by the time the waiting period is over, the the
+user may call `finalize-closure` to complete the closure and transfer the
+appropriate balances to both parties.
