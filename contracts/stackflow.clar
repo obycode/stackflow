@@ -42,6 +42,8 @@
 (define-constant ERR_CHANNEL_EXPIRED (err u110))
 (define-constant ERR_NONCE_TOO_LOW (err u111))
 (define-constant ERR_CLOSE_IN_PROGRESS (err u112))
+(define-constant ERR_NO_CLOSE_IN_PROGRESS (err u113))
+(define-constant ERR_SELF_DISPUTE (err u114))
 
 ;;; List of allowed SIP-010 tokens as set by the owner of the contract.
 ;;; This is required since SIP-010 tokens are not guaranteed not to have side-
@@ -55,7 +57,7 @@
 (define-map
   channels
   { token: (optional principal), principal-1: principal, principal-2: principal }
-  { balance-1: uint, balance-2: uint, expires-at: uint, nonce: uint }
+  { balance-1: uint, balance-2: uint, expires-at: uint, nonce: uint, closer: (optional principal) }
 )
 
 ;; Public Functions
@@ -100,7 +102,7 @@
           existing-channel
           ch
           ch
-          { balance-1: u0, balance-2: u0, expires-at: MAX_HEIGHT, nonce: u0 }
+          { balance-1: u0, balance-2: u0, expires-at: MAX_HEIGHT, nonce: u0, closer: none }
         )
       )
       (updated-channel (try! (increase-sender-balance channel-key channel token deposit)))
@@ -157,18 +159,7 @@
     (map-delete channels channel-key)
 
     ;; Pay out the balances.
-    (match token
-      t
-      (begin
-        (unwrap! (as-contract (contract-call? t transfer my-balance tx-sender sender none)) ERR_WITHDRAWAL_FAILED)
-        (unwrap! (as-contract (contract-call? t transfer their-balance tx-sender with none)) ERR_WITHDRAWAL_FAILED)
-      )
-      (begin
-        (unwrap! (as-contract (stx-transfer? my-balance tx-sender sender)) ERR_WITHDRAWAL_FAILED)
-        (unwrap! (as-contract (stx-transfer? their-balance tx-sender with)) ERR_WITHDRAWAL_FAILED)
-      )
-    )
-    (ok true)
+    (payout token tx-sender with my-balance their-balance)
   )
 )
 
@@ -186,9 +177,55 @@
     (asserts! (is-eq channel-nonce u0) ERR_CLOSE_IN_PROGRESS)
 
     ;; Set the waiting period for this channel.
-    (map-set channels channel-key (merge balances { expires-at: expires-at }))
+    (map-set
+      channels
+      channel-key
+      (merge balances { expires-at: expires-at, closer: (some tx-sender) })
+    )
 
     (ok expires-at)
+  )
+)
+
+;;; Dispute the closing of a channel that has been closed early by submitting a
+;;; dispute within the waiting period.
+(define-public (dispute-closure
+    (token (optional <sip-010>))
+    (with principal)
+    (my-balance uint)
+    (their-balance uint)
+    (my-signature (buff 65))
+    (their-signature (buff 65))
+    (nonce uint)
+  )
+  (let
+    (
+      (channel-key (try! (get-channel-key (contract-of-optional token) tx-sender with)))
+      (balances (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
+      (expires-at (get expires-at balances))
+      (close-nonce (get nonce balances))
+      (closer (unwrap! (get closer balances) ERR_NO_CLOSE_IN_PROGRESS))
+      (data (make-channel-data channel-key my-balance their-balance nonce ACTION_TRANSFER))
+      (data-hash (sha256 (unwrap! (to-consensus-buff? data) ERR_CONSENSUS_BUFF)))
+      (input (sha256 (concat structured-data-header data-hash)))
+      (new-balances (if (is-eq tx-sender (get principal-1 channel-key))
+        { balance-1: my-balance, balance-2: their-balance }
+        { balance-1: their-balance, balance-2: my-balance }
+      ))
+    )
+    (asserts! (not (is-eq tx-sender closer)) ERR_SELF_DISPUTE)
+    (asserts! (< burn-block-height expires-at) ERR_CHANNEL_EXPIRED)
+    (asserts! (> nonce close-nonce) ERR_NONCE_TOO_LOW)
+
+    ;; Verify the signatures of the two parties.
+    (asserts! (verify-signature input my-signature tx-sender) ERR_INVALID_SENDER_SIGNATURE)
+    (asserts! (verify-signature input their-signature with) ERR_INVALID_OTHER_SIGNATURE)
+
+    ;; Remove the channel from the map.
+    (map-delete channels channel-key)
+
+    ;; Pay out the balances.
+    (payout token tx-sender with my-balance their-balance)
   )
 )
 
@@ -247,7 +284,7 @@
 ;;; balances.
 (define-private (increase-sender-balance
     (channel-key { token: (optional principal), principal-1: principal, principal-2: principal })
-    (balances { balance-1: uint, balance-2: uint, expires-at: uint, nonce: uint })
+    (balances { balance-1: uint, balance-2: uint, expires-at: uint, nonce: uint, closer: (optional principal) })
     (token (optional <sip-010>))
     (amount uint)
   )
@@ -310,7 +347,7 @@
 (define-private (cmp (x principal) (y principal)) (if (is-eq x y) none (some x)))
 (define-private (is-some_ (i (optional principal))) (is-some i))
 
-;;; Build up the structured data for a channel close operation.
+;;; Build up the structured data for a channel operation.
 ;;; The structured data is a map with the following keys:
 ;;; - token: the token used in the channel
 ;;; - principal-1: the first principal in the channel
@@ -336,5 +373,30 @@
       ))
     )
     (merge (merge channel-key balances) { nonce: nonce, action: action })
+  )
+)
+
+;;; Payout the balances. Handles both SIP-010 tokens and STX.
+;;; Returns `(ok true)` upons successfully paying out SIP-010 balances and
+;;; `(ok false)` upon successfully paying out STX balances.
+(define-private (payout
+    (token (optional <sip-010>))
+    (principal-1 principal)
+    (principal-2 principal)
+    (balance-1 uint)
+    (balance-2 uint)
+  )
+  (match token
+    t
+    (begin
+      (unwrap! (as-contract (contract-call? t transfer balance-1 tx-sender principal-1 none)) ERR_WITHDRAWAL_FAILED)
+      (unwrap! (as-contract (contract-call? t transfer balance-2 tx-sender principal-2 none)) ERR_WITHDRAWAL_FAILED)
+      (ok true)
+    )
+    (begin
+      (unwrap! (as-contract (stx-transfer? balance-1 tx-sender principal-1)) ERR_WITHDRAWAL_FAILED)
+      (unwrap! (as-contract (stx-transfer? balance-2 tx-sender principal-2)) ERR_WITHDRAWAL_FAILED)
+      (ok false)
+    )
   )
 )

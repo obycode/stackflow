@@ -24,8 +24,12 @@ const address1PK = createStacksPrivateKey(
 const address2PK = createStacksPrivateKey(
   "530d9f61984c888536871c6573073bdfc0058896dc1adfe9a6a10dfacadc209101"
 );
+const address3PK = createStacksPrivateKey(
+  "d655b2523bcd65e34889725c73064feb17ceb796831c0e111ba1a552b0f31b3901"
+);
 
 const WAITING_PERIOD = 144;
+const MAX_HEIGHT = 340282366920938463463374607431768211455n;
 
 enum ChannelAction {
   Close = "close",
@@ -43,6 +47,11 @@ enum TxError {
   MaxAllowed = 107,
   InvalidTotalBalance = 108,
   WithdrawalFailed = 109,
+  ChannelExpired = 110,
+  NonceTooLow = 111,
+  CloseInProgress = 112,
+  NoCloseInProgress = 113,
+  SelfDispute = 114,
 }
 
 const structuredDataPrefix = Buffer.from([0x53, 0x49, 0x50, 0x30, 0x31, 0x38]);
@@ -80,14 +89,15 @@ function signStructuredData(
   return Buffer.from(data.slice(2) + data.slice(0, 2), "hex");
 }
 
-function generateCloseChannelSignature(
+function generateChannelSignature(
   privateKey: StacksPrivateKey,
   token: [string, string] | null,
   myPrincipal: string,
   theirPrincipal: string,
   myBalance: number,
   theirBalance: number,
-  nonce: number
+  nonce: number,
+  action: ChannelAction
 ): Buffer {
   const meFirst = myPrincipal < theirPrincipal;
   const principal1 = meFirst ? myPrincipal : theirPrincipal;
@@ -107,9 +117,51 @@ function generateCloseChannelSignature(
     "balance-1": Cl.uint(balance1),
     "balance-2": Cl.uint(balance2),
     nonce: Cl.uint(nonce),
-    action: Cl.stringAscii(ChannelAction.Close),
+    action: Cl.stringAscii(action),
   });
   return signStructuredData(privateKey, data);
+}
+
+function generateCloseChannelSignature(
+  privateKey: StacksPrivateKey,
+  token: [string, string] | null,
+  myPrincipal: string,
+  theirPrincipal: string,
+  myBalance: number,
+  theirBalance: number,
+  nonce: number
+): Buffer {
+  return generateChannelSignature(
+    privateKey,
+    token,
+    myPrincipal,
+    theirPrincipal,
+    myBalance,
+    theirBalance,
+    nonce,
+    ChannelAction.Close
+  );
+}
+
+function generateTransferSignature(
+  privateKey: StacksPrivateKey,
+  token: [string, string] | null,
+  myPrincipal: string,
+  theirPrincipal: string,
+  myBalance: number,
+  theirBalance: number,
+  nonce: number
+): Buffer {
+  return generateChannelSignature(
+    privateKey,
+    token,
+    myPrincipal,
+    theirPrincipal,
+    myBalance,
+    theirBalance,
+    nonce,
+    ChannelAction.Transfer
+  );
 }
 
 describe("close-channel", () => {
@@ -162,7 +214,7 @@ describe("close-channel", () => {
       ],
       address1
     );
-    expect(result).toBeOk(Cl.bool(true));
+    expect(result).toBeOk(Cl.bool(false));
 
     // Verify the balances
     const stxBalances = simnet.getAssetsMap().get("STX")!;
@@ -223,7 +275,7 @@ describe("close-channel", () => {
       ],
       address2
     );
-    expect(result).toBeOk(Cl.bool(true));
+    expect(result).toBeOk(Cl.bool(false));
 
     // Verify the balances
     const stxBalances = simnet.getAssetsMap().get("STX")!;
@@ -284,7 +336,7 @@ describe("close-channel", () => {
       ],
       address1
     );
-    expect(result).toBeOk(Cl.bool(true));
+    expect(result).toBeOk(Cl.bool(false));
 
     // Verify the balances
     const stxBalances = simnet.getAssetsMap().get("STX")!;
@@ -345,7 +397,7 @@ describe("close-channel", () => {
       ],
       address2
     );
-    expect(result).toBeOk(Cl.bool(true));
+    expect(result).toBeOk(Cl.bool(false));
 
     // Verify the balances
     const stxBalances = simnet.getAssetsMap().get("STX")!;
@@ -501,16 +553,24 @@ describe("close-channel", () => {
     );
 
     // Create the signatures
-    const data = Cl.tuple({
-      token: Cl.none(),
-      "principal-1": Cl.principal(address1),
-      "principal-2": Cl.principal(address2),
-      "balance-1": Cl.uint(2000000),
-      "balance-2": Cl.uint(2000000),
-      nonce: Cl.uint(1),
-    });
-    const signature1 = signStructuredData(address1PK, data);
-    const signature2 = signStructuredData(address2PK, data);
+    const signature1 = generateCloseChannelSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      2000000,
+      2000000,
+      1
+    );
+    const signature2 = generateCloseChannelSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      2000000,
+      2000000,
+      1
+    );
 
     const { result } = simnet.callPublicFn(
       "stackflow",
@@ -581,6 +641,7 @@ describe("force-cancel", () => {
         "balance-2": Cl.uint(2000000),
         "expires-at": Cl.uint(current_height + WAITING_PERIOD),
         nonce: Cl.uint(0),
+        closer: Cl.some(Cl.principal(address1)),
       })
     );
 
@@ -635,6 +696,7 @@ describe("force-cancel", () => {
         "balance-2": Cl.uint(2000000),
         "expires-at": Cl.uint(current_height + WAITING_PERIOD),
         nonce: Cl.uint(0),
+        closer: Cl.some(Cl.principal(address2)),
       })
     );
 
@@ -675,6 +737,407 @@ describe("force-cancel", () => {
   });
 });
 
+describe("dispute-closure", () => {
+  it("disputing a non-existent channel gives an error", () => {
+    // Setup a channel
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      address1
+    );
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      address2
+    );
+
+    // Create the signatures for a transfer
+    const data = Cl.tuple({
+      token: Cl.none(),
+      "principal-1": Cl.principal(address1),
+      "principal-2": Cl.principal(address3),
+      "balance-1": Cl.uint(1300000),
+      "balance-2": Cl.uint(1700000),
+      nonce: Cl.uint(1),
+      action: Cl.stringAscii(ChannelAction.Transfer),
+    });
+    const signature1 = signStructuredData(address1PK, data);
+    const signature3 = signStructuredData(address3PK, data);
+
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "dispute-closure",
+      [
+        Cl.none(),
+        Cl.principal(address1),
+        Cl.uint(1700000),
+        Cl.uint(1300000),
+        Cl.buffer(signature3),
+        Cl.buffer(signature1),
+        Cl.uint(1),
+      ],
+      address3
+    );
+    expect(result).toBeErr(Cl.uint(TxError.NoSuchChannel));
+  });
+
+  it("disputing a channel that is not closing gives an error", () => {
+    // Setup the channel and save the channel key
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      address1
+    );
+    const { result: fundResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      address2
+    );
+    expect(fundResult.type).toBe(ClarityType.ResponseOk);
+    const channelKey = (fundResult as ResponseOkCV).value;
+
+    // Create the signatures for a transfer
+    const signature1 = generateTransferSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      1300000,
+      1700000,
+      1
+    );
+    const signature2 = generateTransferSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      1700000,
+      1300000,
+      1
+    );
+
+    // Account 2 disputes the closure
+    const { result: disputeResult } = simnet.callPublicFn(
+      "stackflow",
+      "dispute-closure",
+      [
+        Cl.none(),
+        Cl.principal(address1),
+        Cl.uint(1700000),
+        Cl.uint(1300000),
+        Cl.buffer(signature2),
+        Cl.buffer(signature1),
+        Cl.uint(1),
+      ],
+      address2
+    );
+    expect(disputeResult).toBeErr(Cl.uint(TxError.NoCloseInProgress));
+
+    // Verify that the map entry is unchanged
+    const channel = simnet.getMapEntry(
+      stackflowContract,
+      "channels",
+      channelKey
+    );
+    expect(channel).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(1000000),
+        "balance-2": Cl.uint(2000000),
+        "expires-at": Cl.uint(MAX_HEIGHT),
+        nonce: Cl.uint(0),
+        closer: Cl.none(),
+      })
+    );
+
+    // Verify the balances have not changed
+    const stxBalances = simnet.getAssetsMap().get("STX")!;
+
+    const balance1 = stxBalances.get(address1);
+    expect(balance1).toBe(99999999000000n);
+
+    const balance2 = stxBalances.get(address2);
+    expect(balance2).toBe(99999998000000n);
+
+    const contractBalance = stxBalances.get(stackflowContract);
+    expect(contractBalance).toBe(3000000n);
+  });
+
+  it("account 2 can dispute account 1's closure", () => {
+    // Setup the channel and save the channel key
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      address1
+    );
+    const { result: fundResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      address2
+    );
+    expect(fundResult.type).toBe(ClarityType.ResponseOk);
+    const channelKey = (fundResult as ResponseOkCV).value;
+
+    const cancel_height = simnet.burnBlockHeight;
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "force-cancel",
+      [Cl.none(), Cl.principal(address2)],
+      address1
+    );
+    expect(result).toBeOk(Cl.uint(cancel_height + WAITING_PERIOD));
+
+    // Increment the burn block height
+    simnet.mineEmptyBurnBlock();
+
+    // Create the signatures for a transfer
+    const signature1 = generateTransferSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      1300000,
+      1700000,
+      1
+    );
+    const signature2 = generateTransferSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      1700000,
+      1300000,
+      1
+    );
+
+    // Account 2 disputes the closure
+    const { result: disputeResult } = simnet.callPublicFn(
+      "stackflow",
+      "dispute-closure",
+      [
+        Cl.none(),
+        Cl.principal(address1),
+        Cl.uint(1700000),
+        Cl.uint(1300000),
+        Cl.buffer(signature2),
+        Cl.buffer(signature1),
+        Cl.uint(1),
+      ],
+      address2
+    );
+    expect(disputeResult).toBeOk(Cl.bool(false));
+
+    // Verify that the channel has been deleted
+    const channel = simnet.getMapEntry(
+      stackflowContract,
+      "channels",
+      channelKey
+    );
+    expect(channel).toBeNone();
+
+    // Verify the balances have changed
+    const stxBalances = simnet.getAssetsMap().get("STX")!;
+
+    const balance1 = stxBalances.get(address1);
+    expect(balance1).toBe(100000000300000n);
+
+    const balance2 = stxBalances.get(address2);
+    expect(balance2).toBe(99999999700000n);
+
+    const contractBalance = stxBalances.get(stackflowContract);
+    expect(contractBalance).toBe(0n);
+  });
+
+  it("account 1 can dispute account 2's closure", () => {
+    // Setup the channel and save the channel key
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      address1
+    );
+    const { result: fundResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      address2
+    );
+    expect(fundResult.type).toBe(ClarityType.ResponseOk);
+    const channelKey = (fundResult as ResponseOkCV).value;
+
+    const cancel_height = simnet.burnBlockHeight;
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "force-cancel",
+      [Cl.none(), Cl.principal(address1)],
+      address2
+    );
+    expect(result).toBeOk(Cl.uint(cancel_height + WAITING_PERIOD));
+
+    // Increment the burn block height
+    simnet.mineEmptyBurnBlock();
+
+    // Create the signatures for a transfer
+    const signature1 = generateTransferSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      1300000,
+      1700000,
+      1
+    );
+    const signature2 = generateTransferSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      1700000,
+      1300000,
+      1
+    );
+
+    // Account 1 disputes the closure
+    const { result: disputeResult } = simnet.callPublicFn(
+      "stackflow",
+      "dispute-closure",
+      [
+        Cl.none(),
+        Cl.principal(address2),
+        Cl.uint(1300000),
+        Cl.uint(1700000),
+        Cl.buffer(signature1),
+        Cl.buffer(signature2),
+        Cl.uint(1),
+      ],
+      address1
+    );
+    expect(disputeResult).toBeOk(Cl.bool(false));
+
+    // Verify that the channel has been deleted
+    const channel = simnet.getMapEntry(
+      stackflowContract,
+      "channels",
+      channelKey
+    );
+    expect(channel).toBeNone();
+
+    // Verify the balances have changed
+    const stxBalances = simnet.getAssetsMap().get("STX")!;
+
+    const balance1 = stxBalances.get(address1);
+    expect(balance1).toBe(100000000300000n);
+
+    const balance2 = stxBalances.get(address2);
+    expect(balance2).toBe(99999999700000n);
+
+    const contractBalance = stxBalances.get(stackflowContract);
+    expect(contractBalance).toBe(0n);
+  });
+
+  it("account 1 cannot dispute its own closure", () => {
+    // Setup the channel and save the channel key
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      address1
+    );
+    const { result: fundResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      address2
+    );
+    expect(fundResult.type).toBe(ClarityType.ResponseOk);
+    const channelKey = (fundResult as ResponseOkCV).value;
+
+    const cancel_height = simnet.burnBlockHeight;
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "force-cancel",
+      [Cl.none(), Cl.principal(address2)],
+      address1
+    );
+    expect(result).toBeOk(Cl.uint(cancel_height + WAITING_PERIOD));
+
+    // Increment the burn block height
+    simnet.mineEmptyBurnBlock();
+
+    // Create the signatures for a transfer
+    const signature1 = generateTransferSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      1300000,
+      1700000,
+      1
+    );
+    const signature2 = generateTransferSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      1700000,
+      1300000,
+      1
+    );
+
+    simnet.mineEmptyBurnBlock();
+
+    // Account 1 disputes the closure
+    const { result: disputeResult } = simnet.callPublicFn(
+      "stackflow",
+      "dispute-closure",
+      [
+        Cl.none(),
+        Cl.principal(address2),
+        Cl.uint(1300000),
+        Cl.uint(1700000),
+        Cl.buffer(signature1),
+        Cl.buffer(signature2),
+        Cl.uint(1),
+      ],
+      address1
+    );
+    expect(disputeResult).toBeErr(Cl.uint(TxError.SelfDispute));
+
+    // Verify that the map entry is unchanged
+    const channel = simnet.getMapEntry(
+      stackflowContract,
+      "channels",
+      channelKey
+    );
+    expect(channel).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(1000000),
+        "balance-2": Cl.uint(2000000),
+        "expires-at": Cl.uint(cancel_height + WAITING_PERIOD),
+        nonce: Cl.uint(0),
+        closer: Cl.some(Cl.principal(address1)),
+      })
+    );
+
+    // Verify the balances have not changed
+    const stxBalances = simnet.getAssetsMap().get("STX")!;
+
+    const balance1 = stxBalances.get(address1);
+    expect(balance1).toBe(99999999000000n);
+
+    const balance2 = stxBalances.get(address2);
+    expect(balance2).toBe(99999998000000n);
+
+    const contractBalance = stxBalances.get(stackflowContract);
+    expect(contractBalance).toBe(3000000n);
+  });
+});
+
 describe("get-channel-balances", () => {
   it("returns the channel balances", () => {
     simnet.callPublicFn(
@@ -695,6 +1158,7 @@ describe("get-channel-balances", () => {
         "balance-2": Cl.uint(0),
         "expires-at": Cl.uint(340282366920938463463374607431768211455n),
         nonce: Cl.uint(0),
+        closer: Cl.none(),
       })
     );
   });
