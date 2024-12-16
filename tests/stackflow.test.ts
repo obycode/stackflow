@@ -25,7 +25,7 @@ const address2PK = createStacksPrivateKey(
   "530d9f61984c888536871c6573073bdfc0058896dc1adfe9a6a10dfacadc209101"
 );
 
-const WAITING_PERIOD = 6;
+const WAITING_PERIOD = 144;
 
 enum ChannelAction {
   Close = "close",
@@ -136,7 +136,7 @@ describe("close-channel", () => {
       address2,
       1000000,
       2000000,
-      0
+      1
     );
     const signature2 = generateCloseChannelSignature(
       address2PK,
@@ -145,7 +145,7 @@ describe("close-channel", () => {
       address1,
       2000000,
       1000000,
-      0
+      1
     );
 
     const { result } = simnet.callPublicFn(
@@ -158,7 +158,7 @@ describe("close-channel", () => {
         Cl.uint(2000000),
         Cl.buffer(signature1),
         Cl.buffer(signature2),
-        Cl.uint(0),
+        Cl.uint(1),
       ],
       address1
     );
@@ -197,7 +197,7 @@ describe("close-channel", () => {
       address2,
       1000000,
       2000000,
-      0
+      1
     );
     const signature2 = generateCloseChannelSignature(
       address2PK,
@@ -206,7 +206,7 @@ describe("close-channel", () => {
       address1,
       2000000,
       1000000,
-      0
+      1
     );
 
     const { result } = simnet.callPublicFn(
@@ -219,7 +219,7 @@ describe("close-channel", () => {
         Cl.uint(1000000),
         Cl.buffer(signature2),
         Cl.buffer(signature1),
-        Cl.uint(0),
+        Cl.uint(1),
       ],
       address2
     );
@@ -258,7 +258,7 @@ describe("close-channel", () => {
       address2,
       1600000,
       1400000,
-      0
+      1
     );
     const signature2 = generateCloseChannelSignature(
       address2PK,
@@ -267,7 +267,7 @@ describe("close-channel", () => {
       address1,
       1400000,
       1600000,
-      0
+      1
     );
 
     const { result } = simnet.callPublicFn(
@@ -280,7 +280,7 @@ describe("close-channel", () => {
         Cl.uint(1400000),
         Cl.buffer(signature1),
         Cl.buffer(signature2),
-        Cl.uint(0),
+        Cl.uint(1),
       ],
       address1
     );
@@ -319,7 +319,7 @@ describe("close-channel", () => {
       address2,
       1300000,
       1700000,
-      0
+      1
     );
     const signature2 = generateCloseChannelSignature(
       address2PK,
@@ -328,7 +328,7 @@ describe("close-channel", () => {
       address1,
       1700000,
       1300000,
-      0
+      1
     );
 
     const { result } = simnet.callPublicFn(
@@ -341,7 +341,7 @@ describe("close-channel", () => {
         Cl.uint(1300000),
         Cl.buffer(signature2),
         Cl.buffer(signature1),
-        Cl.uint(0),
+        Cl.uint(1),
       ],
       address2
     );
@@ -380,7 +380,7 @@ describe("close-channel", () => {
       address2,
       1000000,
       2000000,
-      0
+      1
     );
     const signature2 = generateCloseChannelSignature(
       address2PK,
@@ -389,7 +389,7 @@ describe("close-channel", () => {
       address1,
       2000000,
       1000000,
-      0
+      1
     );
 
     const { result } = simnet.callPublicFn(
@@ -402,7 +402,7 @@ describe("close-channel", () => {
         Cl.uint(1400000),
         Cl.buffer(signature1),
         Cl.buffer(signature2),
-        Cl.uint(0),
+        Cl.uint(1),
       ],
       address1
     );
@@ -444,7 +444,7 @@ describe("close-channel", () => {
       address2,
       1000000,
       2000000,
-      0
+      1
     );
     const signature2 = generateCloseChannelSignature(
       address2PK,
@@ -453,7 +453,7 @@ describe("close-channel", () => {
       address1,
       1700000,
       1300000,
-      0
+      1
     );
 
     const { result } = simnet.callPublicFn(
@@ -466,7 +466,7 @@ describe("close-channel", () => {
         Cl.uint(1300000),
         Cl.buffer(signature2),
         Cl.buffer(signature1),
-        Cl.uint(0),
+        Cl.uint(1),
       ],
       address2
     );
@@ -507,7 +507,7 @@ describe("close-channel", () => {
       "principal-2": Cl.principal(address2),
       "balance-1": Cl.uint(2000000),
       "balance-2": Cl.uint(2000000),
-      nonce: Cl.uint(0),
+      nonce: Cl.uint(1),
     });
     const signature1 = signStructuredData(address1PK, data);
     const signature2 = signStructuredData(address2PK, data);
@@ -522,7 +522,7 @@ describe("close-channel", () => {
         Cl.uint(2000000),
         Cl.buffer(signature1),
         Cl.buffer(signature2),
-        Cl.uint(0),
+        Cl.uint(1),
       ],
       address1
     );
@@ -542,8 +542,8 @@ describe("close-channel", () => {
   });
 });
 
-describe("force-close", () => {
-  it("account 1 can force close account with no transfers", () => {
+describe("force-cancel", () => {
+  it("account 1 can force cancel a channel", () => {
     // Setup the channel and save the channel key
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
@@ -563,7 +563,7 @@ describe("force-close", () => {
     const current_height = simnet.burnBlockHeight;
     const { result } = simnet.callPublicFn(
       "stackflow",
-      "force-close",
+      "force-cancel",
       [Cl.none(), Cl.principal(address2)],
       address1
     );
@@ -580,6 +580,7 @@ describe("force-close", () => {
         "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(2000000),
         "expires-at": Cl.uint(current_height + WAITING_PERIOD),
+        nonce: Cl.uint(0),
       })
     );
 
@@ -596,7 +597,7 @@ describe("force-close", () => {
     expect(contractBalance).toBe(3000000n);
   });
 
-  it("account 2 can force close account with no transfers", () => {
+  it("account 2 can force cancel channel", () => {
     // Setup the channel and save the channel key
     simnet.callPublicFn(
       "stackflow",
@@ -616,7 +617,7 @@ describe("force-close", () => {
     const current_height = simnet.burnBlockHeight;
     const { result } = simnet.callPublicFn(
       "stackflow",
-      "force-close",
+      "force-cancel",
       [Cl.none(), Cl.principal(address1)],
       address2
     );
@@ -633,6 +634,7 @@ describe("force-close", () => {
         "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(2000000),
         "expires-at": Cl.uint(current_height + WAITING_PERIOD),
+        nonce: Cl.uint(0),
       })
     );
 
@@ -648,7 +650,7 @@ describe("force-close", () => {
     expect(contractBalance).toBe(3000000n);
   });
 
-  it("closing a non-existent channel gives an error", () => {
+  it("canceling a non-existent channel gives an error", () => {
     // Setup a channel
     simnet.callPublicFn(
       "stackflow",
@@ -665,7 +667,7 @@ describe("force-close", () => {
 
     const { result } = simnet.callPublicFn(
       "stackflow",
-      "force-close",
+      "force-cancel",
       [Cl.none(), Cl.principal(address1)],
       address3
     );
@@ -692,6 +694,7 @@ describe("get-channel-balances", () => {
         "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(0),
         "expires-at": Cl.uint(340282366920938463463374607431768211455n),
+        nonce: Cl.uint(0),
       })
     );
   });

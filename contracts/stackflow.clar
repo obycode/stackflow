@@ -11,7 +11,7 @@
 
 (define-constant contract-deployer tx-sender)
 (define-constant MAX_HEIGHT u340282366920938463463374607431768211455)
-(define-constant WAITING_PERIOD u6)
+(define-constant WAITING_PERIOD u144) ;; 24 hours in blocks
 
 ;; Constants for SIP-018 structured data
 (define-constant structured-data-prefix 0x534950303138)
@@ -39,6 +39,9 @@
 (define-constant ERR_MAX_ALLOWED (err u107))
 (define-constant ERR_INVALID_TOTAL_BALANCE (err u108))
 (define-constant ERR_WITHDRAWAL_FAILED (err u109))
+(define-constant ERR_CHANNEL_EXPIRED (err u110))
+(define-constant ERR_NONCE_TOO_LOW (err u111))
+(define-constant ERR_CLOSE_IN_PROGRESS (err u112))
 
 ;;; List of allowed SIP-010 tokens as set by the owner of the contract.
 ;;; This is required since SIP-010 tokens are not guaranteed not to have side-
@@ -52,7 +55,7 @@
 (define-map
   channels
   { token: (optional principal), principal-1: principal, principal-2: principal }
-  { balance-1: uint, balance-2: uint, expires-at: uint }
+  { balance-1: uint, balance-2: uint, expires-at: uint, nonce: uint }
 )
 
 ;; Public Functions
@@ -97,7 +100,7 @@
           existing-channel
           ch
           ch
-          { balance-1: u0, balance-2: u0, expires-at: MAX_HEIGHT }
+          { balance-1: u0, balance-2: u0, expires-at: MAX_HEIGHT, nonce: u0 }
         )
       )
       (updated-channel (try! (increase-sender-balance channel-key channel token deposit)))
@@ -127,11 +130,15 @@
     (
       (channel-key (try! (get-channel-key (contract-of-optional token) tx-sender with)))
       (balances (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
+      (channel-nonce (get nonce balances))
       (data (make-channel-data channel-key my-balance their-balance nonce ACTION_CLOSE))
       (data-hash (sha256 (unwrap! (to-consensus-buff? data) ERR_CONSENSUS_BUFF)))
       (input (sha256 (concat structured-data-header data-hash)))
       (sender tx-sender)
     )
+    ;; A forced closure must not already be in progress
+    (asserts! (is-eq channel-nonce u0) ERR_CLOSE_IN_PROGRESS)
+
     ;; If the total balance of the channel is not equal to the sum of the
     ;; balances provided, the channel close is invalid.
     (asserts!
@@ -168,13 +175,15 @@
 ;;; Close the channel and return the original balances to both participants.
 ;;; This initiates a waiting period, giving the other party the opportunity to
 ;;; dispute the closing of the channel, by calling `dispute-closure`.
-(define-public (force-close (token (optional <sip-010>)) (with principal))
+(define-public (force-cancel (token (optional <sip-010>)) (with principal))
   (let
     (
       (channel-key (try! (get-channel-key (contract-of-optional token) tx-sender with)))
       (balances (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
+      (channel-nonce (get nonce balances))
       (expires-at (+ burn-block-height WAITING_PERIOD))
     )
+    (asserts! (is-eq channel-nonce u0) ERR_CLOSE_IN_PROGRESS)
 
     ;; Set the waiting period for this channel.
     (map-set channels channel-key (merge balances { expires-at: expires-at }))
@@ -238,7 +247,7 @@
 ;;; balances.
 (define-private (increase-sender-balance
     (channel-key { token: (optional principal), principal-1: principal, principal-2: principal })
-    (balances { balance-1: uint, balance-2: uint, expires-at: uint })
+    (balances { balance-1: uint, balance-2: uint, expires-at: uint, nonce: uint })
     (token (optional <sip-010>))
     (amount uint)
   )
