@@ -44,6 +44,7 @@
 (define-constant ERR_CLOSE_IN_PROGRESS (err u112))
 (define-constant ERR_NO_CLOSE_IN_PROGRESS (err u113))
 (define-constant ERR_SELF_DISPUTE (err u114))
+(define-constant ERR_ALREADY_FUNDED (err u115))
 
 ;;; List of allowed SIP-010 tokens as set by the owner of the contract.
 ;;; This is required since SIP-010 tokens are not guaranteed not to have side-
@@ -107,6 +108,12 @@
       )
       (updated-channel (try! (increase-sender-balance channel-key channel token deposit)))
     )
+
+    ;; Only fund a channel with a 0 balance for the sender can be funded. After
+    ;; the channel is initially funded, additional funds must use the `deposit`
+    ;; function, which requires signatures from both parties.
+    (asserts! (not (is-funded tx-sender channel-key channel)) ERR_ALREADY_FUNDED)
+
     (map-set channels channel-key updated-channel)
     (print {
       event: "channel-funded",
@@ -165,16 +172,17 @@
 
 ;;; Close the channel and return the original balances to both participants.
 ;;; This initiates a waiting period, giving the other party the opportunity to
-;;; dispute the closing of the channel, by calling `dispute-closure`.
+;;; dispute the closing of the channel, by calling `dispute-closure` and
+;;; providing signatures proving a transfer.
 (define-public (force-cancel (token (optional <sip-010>)) (with principal))
   (let
     (
       (channel-key (try! (get-channel-key (contract-of-optional token) tx-sender with)))
       (balances (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
-      (channel-nonce (get nonce balances))
+      (closer (get closer balances))
       (expires-at (+ burn-block-height WAITING_PERIOD))
     )
-    (asserts! (is-eq channel-nonce u0) ERR_CLOSE_IN_PROGRESS)
+    (asserts! (is-none closer) ERR_CLOSE_IN_PROGRESS)
 
     ;; Set the waiting period for this channel.
     (map-set
@@ -187,8 +195,73 @@
   )
 )
 
+;;; Close the channel using signatures from the most recent transfer.
+;;; This initiates a waiting period, giving the other party the opportunity to
+;;; dispute the closing of the channel, by calling `dispute-closure` and
+;;; providing signatures with a later nonce.
+(define-public (force-close
+    (token (optional <sip-010>))
+    (with principal)
+    (my-balance uint)
+    (their-balance uint)
+    (my-signature (buff 65))
+    (their-signature (buff 65))
+    (nonce uint)
+  )
+  (let
+    (
+      (channel-key (try! (get-channel-key (contract-of-optional token) tx-sender with)))
+      (balances (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
+      (channel-nonce (get nonce balances))
+      (closer (get closer balances))
+    )
+
+    ;; Exit early if a forced closure is already in progress.
+    (asserts! (is-none closer) ERR_CLOSE_IN_PROGRESS)
+
+    ;; If the total balance of the channel is not equal to the sum of the
+    ;; balances provided, the channel close is invalid.
+    (asserts!
+      (is-eq
+        (+ my-balance their-balance)
+        (+ (get balance-1 balances) (get balance-2 balances))
+      )
+      ERR_INVALID_TOTAL_BALANCE
+    )
+
+    (let
+      (
+        (expires-at (+ burn-block-height WAITING_PERIOD))
+        (data (make-channel-data channel-key my-balance their-balance nonce ACTION_TRANSFER))
+        (data-hash (sha256 (unwrap! (to-consensus-buff? data) ERR_CONSENSUS_BUFF)))
+        (input (sha256 (concat structured-data-header data-hash)))
+        (new-balances (if (is-eq tx-sender (get principal-1 channel-key))
+          { balance-1: my-balance, balance-2: their-balance }
+          { balance-1: their-balance, balance-2: my-balance }
+        ))
+        (complete-balances (merge new-balances { expires-at: expires-at, closer: (some tx-sender), nonce: nonce }))
+      )
+
+      ;; Verify the signatures of the two parties.
+      (asserts! (verify-signature input my-signature tx-sender) ERR_INVALID_SENDER_SIGNATURE)
+      (asserts! (verify-signature input their-signature with) ERR_INVALID_OTHER_SIGNATURE)
+
+      ;; Set the waiting period for this channel.
+      (map-set
+        channels
+        channel-key
+        complete-balances
+      )
+
+      (ok expires-at)
+    )
+  )
+)
+
 ;;; Dispute the closing of a channel that has been closed early by submitting a
-;;; dispute within the waiting period.
+;;; dispute within the waiting period. If the dispute is valid, the channel
+;;; will be closed and the new balances will be paid out to the appropriate
+;;; parties.
 (define-public (dispute-closure
     (token (optional <sip-010>))
     (with principal)
@@ -205,27 +278,32 @@
       (expires-at (get expires-at balances))
       (close-nonce (get nonce balances))
       (closer (unwrap! (get closer balances) ERR_NO_CLOSE_IN_PROGRESS))
-      (data (make-channel-data channel-key my-balance their-balance nonce ACTION_TRANSFER))
-      (data-hash (sha256 (unwrap! (to-consensus-buff? data) ERR_CONSENSUS_BUFF)))
-      (input (sha256 (concat structured-data-header data-hash)))
-      (new-balances (if (is-eq tx-sender (get principal-1 channel-key))
-        { balance-1: my-balance, balance-2: their-balance }
-        { balance-1: their-balance, balance-2: my-balance }
-      ))
     )
     (asserts! (not (is-eq tx-sender closer)) ERR_SELF_DISPUTE)
     (asserts! (< burn-block-height expires-at) ERR_CHANNEL_EXPIRED)
     (asserts! (> nonce close-nonce) ERR_NONCE_TOO_LOW)
 
-    ;; Verify the signatures of the two parties.
-    (asserts! (verify-signature input my-signature tx-sender) ERR_INVALID_SENDER_SIGNATURE)
-    (asserts! (verify-signature input their-signature with) ERR_INVALID_OTHER_SIGNATURE)
+    (let
+      (
+        (data (make-channel-data channel-key my-balance their-balance nonce ACTION_TRANSFER))
+        (data-hash (sha256 (unwrap! (to-consensus-buff? data) ERR_CONSENSUS_BUFF)))
+        (input (sha256 (concat structured-data-header data-hash)))
+        (new-balances (if (is-eq tx-sender (get principal-1 channel-key))
+          { balance-1: my-balance, balance-2: their-balance }
+          { balance-1: their-balance, balance-2: my-balance }
+        ))
+      )
 
-    ;; Remove the channel from the map.
-    (map-delete channels channel-key)
+      ;; Verify the signatures of the two parties.
+      (asserts! (verify-signature input my-signature tx-sender) ERR_INVALID_SENDER_SIGNATURE)
+      (asserts! (verify-signature input their-signature with) ERR_INVALID_OTHER_SIGNATURE)
 
-    ;; Pay out the balances.
-    (payout token tx-sender with my-balance their-balance)
+      ;; Remove the channel from the map.
+      (map-delete channels channel-key)
+
+      ;; Pay out the balances.
+      (payout token tx-sender with my-balance their-balance)
+    )
   )
 )
 
@@ -300,6 +378,18 @@
         (merge balances { balance-2: (+ (get balance-2 balances) amount) })
       )
     )
+  )
+)
+
+;;; Check if the balance of `account` in the channel is greater than 0.
+(define-private (is-funded
+    (account principal)
+    (channel-key { token: (optional principal), principal-1: principal, principal-2: principal })
+    (balances { balance-1: uint, balance-2: uint, expires-at: uint, nonce: uint, closer: (optional principal) })
+  )
+  (or
+    (and (is-eq account (get principal-1 channel-key)) (> (get balance-1 balances) u0))
+    (and (is-eq account (get principal-2 channel-key)) (> (get balance-2 balances) u0))
   )
 )
 
