@@ -27,6 +27,8 @@
 ;; Actions
 (define-constant ACTION_CLOSE "close")
 (define-constant ACTION_TRANSFER "transfer")
+(define-constant ACTION_DEPOSIT "deposit")
+(define-constant ACTION_WITHDRAWAL "withdraw")
 
 ;; Error codes
 (define-constant ERR_DEPOSIT_FAILED (err u100))
@@ -45,6 +47,7 @@
 (define-constant ERR_NO_CLOSE_IN_PROGRESS (err u113))
 (define-constant ERR_SELF_DISPUTE (err u114))
 (define-constant ERR_ALREADY_FUNDED (err u115))
+(define-constant ERR_INVALID_WITHDRAWAL (err u116))
 
 ;;; List of allowed SIP-010 tokens as set by the owner of the contract.
 ;;; This is required since SIP-010 tokens are not guaranteed not to have side-
@@ -88,11 +91,11 @@
   )
 )
 
-;;; Deposit `deposit` funds into a channel between `tx-sender` and `with` for
-;;; FT `token` (`none` indicates STX). Create the channel if one does not
-;;; already exist.
+;;; Deposit `amount` funds into an unfunded channel between `tx-sender` and
+;;; `with` for FT `token` (`none` indicates STX). Create the channel if one
+;;; does not already exist.
 ;;; Returns the channel key on success.
-(define-public (fund-channel (token (optional <sip-010>)) (deposit uint) (with principal))
+(define-public (fund-channel (token (optional <sip-010>)) (amount uint) (with principal))
   (let
     (
       (channel-key (try! (get-channel-key (contract-of-optional token) tx-sender with)))
@@ -106,7 +109,7 @@
           { balance-1: u0, balance-2: u0, expires-at: MAX_HEIGHT, nonce: u0, closer: none }
         )
       )
-      (updated-channel (try! (increase-sender-balance channel-key channel token deposit)))
+      (updated-channel (try! (increase-sender-balance channel-key channel token amount)))
     )
 
     ;; Only fund a channel with a 0 balance for the sender can be funded. After
@@ -119,7 +122,7 @@
       event: "channel-funded",
       channel-key: channel-key,
       sender: tx-sender,
-      amount: deposit,
+      amount: amount,
     })
     (ok channel-key)
   )
@@ -138,22 +141,23 @@
   (let
     (
       (channel-key (try! (get-channel-key (contract-of-optional token) tx-sender with)))
-      (balances (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
-      (channel-nonce (get nonce balances))
+      (channel (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
+      (channel-nonce (get nonce channel))
+      (closer (get closer channel))
       (data (make-channel-data channel-key my-balance their-balance nonce ACTION_CLOSE))
       (data-hash (sha256 (unwrap! (to-consensus-buff? data) ERR_CONSENSUS_BUFF)))
       (input (sha256 (concat structured-data-header data-hash)))
       (sender tx-sender)
     )
     ;; A forced closure must not already be in progress
-    (asserts! (is-eq channel-nonce u0) ERR_CLOSE_IN_PROGRESS)
+    (asserts! (is-none closer) ERR_CLOSE_IN_PROGRESS)
 
     ;; If the total balance of the channel is not equal to the sum of the
     ;; balances provided, the channel close is invalid.
     (asserts!
       (is-eq
         (+ my-balance their-balance)
-        (+ (get balance-1 balances) (get balance-2 balances))
+        (+ (get balance-1 channel) (get balance-2 channel))
       )
       ERR_INVALID_TOTAL_BALANCE
     )
@@ -307,6 +311,137 @@
   )
 )
 
+;;; Deposit `amount` additional funds into an existing channel between
+;;; `tx-sender` and `with` for FT `token` (`none` indicates STX). Signatures
+;;; must confirm the deposit and the new balances.
+;;; Returns the channel key on success.
+(define-public (deposit
+    (amount uint)
+    (token (optional <sip-010>))
+    (with principal)
+    (my-balance uint)
+    (their-balance uint)
+    (my-signature (buff 65))
+    (their-signature (buff 65))
+    (nonce uint)
+  )
+  (let
+    (
+      (channel-key (try! (get-channel-key (contract-of-optional token) tx-sender with)))
+      (channel (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
+      (channel-nonce (get nonce channel))
+      (closer (get closer channel))
+      (updated-channel (update-channel-tuple channel-key channel my-balance their-balance nonce))
+      (data (make-channel-data channel-key my-balance their-balance nonce ACTION_DEPOSIT))
+      (data-hash (sha256 (unwrap! (to-consensus-buff? data) ERR_CONSENSUS_BUFF)))
+      (input (sha256 (concat structured-data-header data-hash)))
+    )
+    ;; A forced closure must not be in progress
+    (asserts! (is-none closer) ERR_CLOSE_IN_PROGRESS)
+
+    ;; Nonce must be greater than the channel nonce
+    (asserts! (> nonce channel-nonce) ERR_NONCE_TOO_LOW)
+
+    ;; If the new balance of the channel is not equal to the sum of the
+    ;; existing balances and the deposit amount, the deposit is invalid.
+    (asserts!
+      (is-eq
+        (+ my-balance their-balance)
+        (+ (get balance-1 channel) (get balance-2 channel) amount)
+      )
+      ERR_INVALID_TOTAL_BALANCE
+    )
+
+    ;; Verify the signatures of the two parties.
+    (asserts! (verify-signature input my-signature tx-sender) ERR_INVALID_SENDER_SIGNATURE)
+    (asserts! (verify-signature input their-signature with) ERR_INVALID_OTHER_SIGNATURE)
+
+    ;; Perform the deposit
+    (try! (increase-sender-balance channel-key channel token amount))
+
+    (map-set
+      channels
+      channel-key
+      updated-channel
+    )
+    (print {
+      event: "deposit",
+      channel-key: channel-key,
+      sender: tx-sender,
+      amount: amount,
+      channel: updated-channel,
+    })
+    (ok channel-key)
+  )
+)
+
+;;; Withdrawal `amount` funds from an existing channel between `tx-sender` and
+;;; `with` for FT `token` (`none` indicates STX). Signatures must confirm the
+;;; withdrawal and the new balances.
+;;; Returns the channel key on success.
+(define-public (withdraw
+    (amount uint)
+    (token (optional <sip-010>))
+    (with principal)
+    (my-balance uint)
+    (their-balance uint)
+    (my-signature (buff 65))
+    (their-signature (buff 65))
+    (nonce uint)
+  )
+  (let
+    (
+      (channel-key (try! (get-channel-key (contract-of-optional token) tx-sender with)))
+      (channel (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
+      (channel-nonce (get nonce channel))
+      (closer (get closer channel))
+      (updated-channel (update-channel-tuple channel-key channel my-balance their-balance nonce))
+      (data (make-channel-data channel-key my-balance their-balance nonce ACTION_DEPOSIT))
+      (data-hash (sha256 (unwrap! (to-consensus-buff? data) ERR_CONSENSUS_BUFF)))
+      (input (sha256 (concat structured-data-header data-hash)))
+    )
+    ;; A forced closure must not be in progress
+    (asserts! (is-none closer) ERR_CLOSE_IN_PROGRESS)
+
+    ;; Nonce must be greater than the channel nonce
+    (asserts! (> nonce channel-nonce) ERR_NONCE_TOO_LOW)
+
+    ;; Withdrawal amount cannot be greater than the total channel balance
+    (asserts! (> (+ (get balance-1 channel) (get balance-2 channel)) amount) ERR_INVALID_WITHDRAWAL)
+
+    ;; If the new balance of the channel is not equal to the sum of the
+    ;; prior balances minus the withdraw amount, the withdrawal is invalid.
+    (asserts!
+      (is-eq
+        (+ my-balance their-balance)
+        (+ (get balance-1 channel) (get balance-2 channel) amount)
+      )
+      ERR_INVALID_TOTAL_BALANCE
+    )
+
+    ;; Verify the signatures of the two parties.
+    (asserts! (verify-signature input my-signature tx-sender) ERR_INVALID_SENDER_SIGNATURE)
+    (asserts! (verify-signature input their-signature with) ERR_INVALID_OTHER_SIGNATURE)
+
+    ;; Perform the withdraw
+    (try! (execute-withdraw token amount))
+
+    (map-set
+      channels
+      channel-key
+      updated-channel
+    )
+    (print {
+      event: "deposit",
+      channel-key: channel-key,
+      sender: tx-sender,
+      amount: amount,
+      channel: updated-channel,
+    })
+    (ok channel-key)
+  )
+)
+
 ;; Read Only Functions
 ;;
 
@@ -378,6 +513,26 @@
         (merge balances { balance-2: (+ (get balance-2 balances) amount) })
       )
     )
+  )
+)
+
+;;; Transfer `amount` from the contract to `tx-sender`.
+;;; Note that this function assumes that the token contract has already been
+;;; verified (by finding the corresponding channel).
+(define-private (execute-withdraw
+    (token (optional <sip-010>))
+    (amount uint)
+  )
+  (let ((sender tx-sender))
+    (unwrap!
+      (match token
+        t
+        (as-contract (contract-call? t transfer amount tx-sender sender none))
+        (as-contract (stx-transfer? amount tx-sender sender))
+      )
+      ERR_WITHDRAWAL_FAILED
+    )
+    (ok true)
   )
 )
 
@@ -463,6 +618,31 @@
       ))
     )
     (merge (merge channel-key balances) { nonce: nonce, action: action })
+  )
+)
+
+;;; Build up the channel tuple from its parts.
+;;; This function updates the following keys of the tuple:
+;;; - balance-1: the balance of the first principal in the channel
+;;; - balance-2: the balance of the second principal in the channel
+;;; - nonce: the nonce for this channel data
+;;; This function assumes that the channel has already been validated to
+;;; include these two principals.
+(define-private (update-channel-tuple
+    (channel-key { token: (optional principal), principal-1: principal, principal-2: principal })
+    (existing { balance-1: uint, balance-2: uint, expires-at: uint, nonce: uint, closer: (optional principal) })
+    (my-balance uint)
+    (their-balance uint)
+    (nonce uint)
+  )
+  (let
+    (
+      (balances (if (is-eq tx-sender (get principal-1 channel-key))
+        { balance-1: my-balance, balance-2: their-balance }
+        { balance-1: their-balance, balance-2: my-balance }
+      ))
+    )
+    (merge (merge existing balances) { nonce: nonce })
   )
 )
 

@@ -3,6 +3,7 @@ import {
   ClarityType,
   ClarityValue,
   createStacksPrivateKey,
+  cvToString,
   ResponseOkCV,
   serializeCV,
   signWithKey,
@@ -34,6 +35,8 @@ const MAX_HEIGHT = 340282366920938463463374607431768211455n;
 enum ChannelAction {
   Close = "close",
   Transfer = "transfer",
+  Deposit = "deposit",
+  Withdrawal = "withdraw",
 }
 
 enum TxError {
@@ -162,6 +165,27 @@ function generateTransferSignature(
     theirBalance,
     nonce,
     ChannelAction.Transfer
+  );
+}
+
+function generateDepositSignature(
+  privateKey: StacksPrivateKey,
+  token: [string, string] | null,
+  myPrincipal: string,
+  theirPrincipal: string,
+  myBalance: number,
+  theirBalance: number,
+  nonce: number
+): Buffer {
+  return generateChannelSignature(
+    privateKey,
+    token,
+    myPrincipal,
+    theirPrincipal,
+    myBalance,
+    theirBalance,
+    nonce,
+    ChannelAction.Deposit
   );
 }
 
@@ -1723,6 +1747,563 @@ describe("dispute-closure", () => {
   });
 });
 
+describe("deposit", () => {
+  it("can deposit to a valid channel from account1", () => {
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      address1
+    );
+    const { result: fundResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      address2
+    );
+    expect(fundResult).toBeOk(
+      Cl.tuple({
+        token: Cl.none(),
+        "principal-1": Cl.principal(address1),
+        "principal-2": Cl.principal(address2),
+      })
+    );
+    const channelKey = (fundResult as ResponseOkCV).value;
+
+    // Create the signatures for a deposit
+    const signature1 = generateDepositSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      1050000,
+      2000000,
+      1
+    );
+    const signature2 = generateDepositSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      2000000,
+      1050000,
+      1
+    );
+
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "deposit",
+      [
+        Cl.uint(50000),
+        Cl.none(),
+        Cl.principal(address2),
+        Cl.uint(1050000),
+        Cl.uint(2000000),
+        Cl.buffer(signature1),
+        Cl.buffer(signature2),
+        Cl.uint(1),
+      ],
+      address1
+    );
+
+    expect(result).toBeOk(
+      Cl.tuple({
+        "principal-1": Cl.principal(address1),
+        "principal-2": Cl.principal(address2),
+        token: Cl.none(),
+      })
+    );
+
+    // Verify the balances
+    const stxBalances = simnet.getAssetsMap().get("STX")!;
+
+    const balance1 = stxBalances.get(address1);
+    expect(balance1).toBe(99999998950000n);
+
+    const balance2 = stxBalances.get(address2);
+    expect(balance2).toBe(99999998000000n);
+
+    const contractBalance = stxBalances.get(stackflowContract);
+    expect(contractBalance).toBe(3050000n);
+
+    // Verify the channel
+    const channel = simnet.getMapEntry(
+      stackflowContract,
+      "channels",
+      channelKey
+    );
+    expect(channel).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(1050000),
+        "balance-2": Cl.uint(2000000),
+        "expires-at": Cl.uint(MAX_HEIGHT),
+        nonce: Cl.uint(1),
+        closer: Cl.none(),
+      })
+    );
+  });
+
+  it("can deposit to a valid channel from account2", () => {
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      address1
+    );
+    const { result: fundResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      address2
+    );
+    expect(fundResult).toBeOk(
+      Cl.tuple({
+        token: Cl.none(),
+        "principal-1": Cl.principal(address1),
+        "principal-2": Cl.principal(address2),
+      })
+    );
+    const channelKey = (fundResult as ResponseOkCV).value;
+
+    // Create the signatures for a deposit
+    const signature1 = generateDepositSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      1000000,
+      2050000,
+      3
+    );
+    const signature2 = generateDepositSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      2050000,
+      1000000,
+      3
+    );
+
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "deposit",
+      [
+        Cl.uint(50000),
+        Cl.none(),
+        Cl.principal(address1),
+        Cl.uint(2050000),
+        Cl.uint(1000000),
+        Cl.buffer(signature2),
+        Cl.buffer(signature1),
+        Cl.uint(3),
+      ],
+      address2
+    );
+    expect(result).toBeOk(
+      Cl.tuple({
+        "principal-1": Cl.principal(address1),
+        "principal-2": Cl.principal(address2),
+        token: Cl.none(),
+      })
+    );
+
+    // Verify the balances
+    const stxBalances = simnet.getAssetsMap().get("STX")!;
+
+    const balance1 = stxBalances.get(address1);
+    expect(balance1).toBe(99999999000000n);
+
+    const balance2 = stxBalances.get(address2);
+    expect(balance2).toBe(99999997950000n);
+
+    const contractBalance = stxBalances.get(stackflowContract);
+    expect(contractBalance).toBe(3050000n);
+
+    // Verify the channel
+    const channel = simnet.getMapEntry(
+      stackflowContract,
+      "channels",
+      channelKey
+    );
+    expect(channel).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(1000000),
+        "balance-2": Cl.uint(2050000),
+        "expires-at": Cl.uint(MAX_HEIGHT),
+        nonce: Cl.uint(3),
+        closer: Cl.none(),
+      })
+    );
+  });
+
+  it("can deposit after transfers", () => {
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      address1
+    );
+    const { result: fundResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      address2
+    );
+    expect(fundResult).toBeOk(
+      Cl.tuple({
+        token: Cl.none(),
+        "principal-1": Cl.principal(address1),
+        "principal-2": Cl.principal(address2),
+      })
+    );
+    const channelKey = (fundResult as ResponseOkCV).value;
+
+    // Create the signatures for a deposit
+    const signature1 = generateDepositSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      3040000,
+      10000,
+      3
+    );
+    const signature2 = generateDepositSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      10000,
+      3040000,
+      3
+    );
+
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "deposit",
+      [
+        Cl.uint(50000),
+        Cl.none(),
+        Cl.principal(address1),
+        Cl.uint(10000),
+        Cl.uint(3040000),
+        Cl.buffer(signature2),
+        Cl.buffer(signature1),
+        Cl.uint(3),
+      ],
+      address2
+    );
+    expect(result).toBeOk(
+      Cl.tuple({
+        "principal-1": Cl.principal(address1),
+        "principal-2": Cl.principal(address2),
+        token: Cl.none(),
+      })
+    );
+
+    // Verify the balances
+    const stxBalances = simnet.getAssetsMap().get("STX")!;
+
+    const balance1 = stxBalances.get(address1);
+    expect(balance1).toBe(99999999000000n);
+
+    const balance2 = stxBalances.get(address2);
+    expect(balance2).toBe(99999997950000n);
+
+    const contractBalance = stxBalances.get(stackflowContract);
+    expect(contractBalance).toBe(3050000n);
+
+    // Verify the channel
+    const channel = simnet.getMapEntry(
+      stackflowContract,
+      "channels",
+      channelKey
+    );
+    expect(channel).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(3040000n),
+        "balance-2": Cl.uint(10000),
+        "expires-at": Cl.uint(MAX_HEIGHT),
+        nonce: Cl.uint(3),
+        closer: Cl.none(),
+      })
+    );
+  });
+
+  it("cannot deposit into non-existant channel", () => {
+    // Create the signatures for a deposit
+    const signature1 = generateDepositSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      3040000,
+      10000,
+      3
+    );
+    const signature3 = generateDepositSignature(
+      address3PK,
+      null,
+      address2,
+      address1,
+      10000,
+      3040000,
+      3
+    );
+
+    // Try a deposit when no channels exist
+    const { result: result1 } = simnet.callPublicFn(
+      "stackflow",
+      "deposit",
+      [
+        Cl.uint(50000),
+        Cl.none(),
+        Cl.principal(address3),
+        Cl.uint(10000),
+        Cl.uint(3040000),
+        Cl.buffer(signature1),
+        Cl.buffer(signature3),
+        Cl.uint(3),
+      ],
+      address1
+    );
+    expect(result1).toBeErr(Cl.uint(TxError.NoSuchChannel));
+
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      address1
+    );
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      address2
+    );
+
+    // Try a deposit when no channels exist
+    const { result: result2 } = simnet.callPublicFn(
+      "stackflow",
+      "deposit",
+      [
+        Cl.uint(50000),
+        Cl.none(),
+        Cl.principal(address3),
+        Cl.uint(10000),
+        Cl.uint(3040000),
+        Cl.buffer(signature1),
+        Cl.buffer(signature3),
+        Cl.uint(3),
+      ],
+      address1
+    );
+    expect(result2).toBeErr(Cl.uint(TxError.NoSuchChannel));
+  });
+
+  it("can not deposit with bad signatures", () => {
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      address1
+    );
+    const { result: fundResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      address2
+    );
+    expect(fundResult).toBeOk(
+      Cl.tuple({
+        token: Cl.none(),
+        "principal-1": Cl.principal(address1),
+        "principal-2": Cl.principal(address2),
+      })
+    );
+    const channelKey = (fundResult as ResponseOkCV).value;
+
+    // Create the signatures for a deposit
+    const signature1 = generateDepositSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      3040000,
+      10000,
+      3
+    );
+    const signature2 = generateDepositSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      10000,
+      3040000,
+      3
+    );
+
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "deposit",
+      [
+        Cl.uint(50000),
+        Cl.none(),
+        Cl.principal(address1),
+        Cl.uint(20000),
+        Cl.uint(3030000),
+        Cl.buffer(signature2),
+        Cl.buffer(signature1),
+        Cl.uint(3),
+      ],
+      address2
+    );
+    expect(result).toBeErr(Cl.uint(TxError.InvalidSenderSignature));
+
+    // Verify the balances
+    const stxBalances = simnet.getAssetsMap().get("STX")!;
+
+    const balance1 = stxBalances.get(address1);
+    expect(balance1).toBe(99999999000000n);
+
+    const balance2 = stxBalances.get(address2);
+    expect(balance2).toBe(99999998000000n);
+
+    const contractBalance = stxBalances.get(stackflowContract);
+    expect(contractBalance).toBe(3000000n);
+
+    // Verify the channel
+    const channel = simnet.getMapEntry(
+      stackflowContract,
+      "channels",
+      channelKey
+    );
+    expect(channel).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(1000000n),
+        "balance-2": Cl.uint(2000000n),
+        "expires-at": Cl.uint(MAX_HEIGHT),
+        nonce: Cl.uint(0),
+        closer: Cl.none(),
+      })
+    );
+  });
+
+  it("cannot deposit with an old nonce", () => {
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      address1
+    );
+    const { result: fundResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      address2
+    );
+    expect(fundResult).toBeOk(
+      Cl.tuple({
+        token: Cl.none(),
+        "principal-1": Cl.principal(address1),
+        "principal-2": Cl.principal(address2),
+      })
+    );
+    const channelKey = (fundResult as ResponseOkCV).value;
+
+    // Create the signatures for a deposit
+    const signature1 = generateDepositSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      1050000,
+      2000000,
+      1
+    );
+    const signature2 = generateDepositSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      2000000,
+      1050000,
+      1
+    );
+
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "deposit",
+      [
+        Cl.uint(50000),
+        Cl.none(),
+        Cl.principal(address2),
+        Cl.uint(1050000),
+        Cl.uint(2000000),
+        Cl.buffer(signature1),
+        Cl.buffer(signature2),
+        Cl.uint(1),
+      ],
+      address1
+    );
+
+    expect(result).toBeOk(
+      Cl.tuple({
+        "principal-1": Cl.principal(address1),
+        "principal-2": Cl.principal(address2),
+        token: Cl.none(),
+      })
+    );
+
+    const { result: result2 } = simnet.callPublicFn(
+      "stackflow",
+      "deposit",
+      [
+        Cl.uint(10000),
+        Cl.none(),
+        Cl.principal(address2),
+        Cl.uint(1060000),
+        Cl.uint(2000000),
+        Cl.buffer(signature1),
+        Cl.buffer(signature2),
+        Cl.uint(1),
+      ],
+      address1
+    );
+
+    expect(result2).toBeErr(Cl.uint(TxError.NonceTooLow));
+
+    // Verify the balances did not change with the failed deposit
+    const stxBalances = simnet.getAssetsMap().get("STX")!;
+
+    const balance1 = stxBalances.get(address1);
+    expect(balance1).toBe(99999998950000n);
+
+    const balance2 = stxBalances.get(address2);
+    expect(balance2).toBe(99999998000000n);
+
+    const contractBalance = stxBalances.get(stackflowContract);
+    expect(contractBalance).toBe(3050000n);
+
+    // Verify the channel did not change with the failed deposit
+    const channel = simnet.getMapEntry(
+      stackflowContract,
+      "channels",
+      channelKey
+    );
+    expect(channel).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(1050000),
+        "balance-2": Cl.uint(2000000),
+        "expires-at": Cl.uint(MAX_HEIGHT),
+        nonce: Cl.uint(1),
+        closer: Cl.none(),
+      })
+    );
+  });
+});
+
 describe("get-channel-balances", () => {
   it("returns the channel balances", () => {
     simnet.callPublicFn(
@@ -1906,6 +2487,70 @@ describe("increase-sender-balance", () => {
   });
 });
 
+describe("execute-withdraw", () => {
+  it("fails when the contract has no balance", () => {
+    const { result } = simnet.callPrivateFn(
+      "stackflow",
+      "execute-withdraw",
+      [Cl.none(), Cl.uint(100)],
+      address1
+    );
+    expect(result).toBeErr(Cl.uint(TxError.WithdrawalFailed));
+  });
+
+  it("passes when the contract has a sufficient balance", () => {
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      address1
+    );
+
+    const { result } = simnet.callPrivateFn(
+      "stackflow",
+      "execute-withdraw",
+      [Cl.none(), Cl.uint(100)],
+      address1
+    );
+    expect(result).toBeOk(Cl.bool(true));
+
+    // Verify the balances
+    const stxBalances = simnet.getAssetsMap().get("STX")!;
+
+    const balance1 = stxBalances.get(address1);
+    expect(balance1).toBe(99999999000100n);
+
+    const contractBalance = stxBalances.get(stackflowContract);
+    expect(contractBalance).toBe(999900n);
+  });
+
+  it("fails when the contract has an insufficient balance", () => {
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(100), Cl.principal(address2)],
+      address1
+    );
+
+    const { result } = simnet.callPrivateFn(
+      "stackflow",
+      "execute-withdraw",
+      [Cl.none(), Cl.uint(101)],
+      address1
+    );
+    expect(result).toBeErr(Cl.uint(TxError.WithdrawalFailed));
+
+    // Verify the balances have not changed
+    const stxBalances = simnet.getAssetsMap().get("STX")!;
+
+    const balance1 = stxBalances.get(address1);
+    expect(balance1).toBe(99999999999900n);
+
+    const contractBalance = stxBalances.get(stackflowContract);
+    expect(contractBalance).toBe(100n);
+  });
+});
+
 describe("make-channel-data", () => {
   it("ensures the channel data is built correctly", () => {
     const { result } = simnet.callPrivateFn(
@@ -1960,6 +2605,72 @@ describe("make-channel-data", () => {
       "balance-2": Cl.uint(120),
       nonce: Cl.uint(7),
       action: Cl.stringAscii(ChannelAction.Close),
+    });
+  });
+});
+
+describe("update-channel-tuple", () => {
+  it("updates channel correctly from account-1", () => {
+    const { result } = simnet.callPrivateFn(
+      "stackflow",
+      "update-channel-tuple",
+      [
+        Cl.tuple({
+          token: Cl.none(),
+          "principal-1": Cl.principal(address1),
+          "principal-2": Cl.principal(address2),
+        }),
+        Cl.tuple({
+          "balance-1": Cl.uint(123),
+          "balance-2": Cl.uint(456),
+          "expires-at": Cl.uint(789),
+          nonce: Cl.uint(0),
+          closer: Cl.none(),
+        }),
+        Cl.uint(999),
+        Cl.uint(888),
+        Cl.uint(4),
+      ],
+      address1
+    );
+    expect(result).toBeTuple({
+      "balance-1": Cl.uint(999),
+      "balance-2": Cl.uint(888),
+      "expires-at": Cl.uint(789),
+      nonce: Cl.uint(4),
+      closer: Cl.none(),
+    });
+  });
+
+  it("updates channel correctly from account-2", () => {
+    const { result } = simnet.callPrivateFn(
+      "stackflow",
+      "update-channel-tuple",
+      [
+        Cl.tuple({
+          token: Cl.none(),
+          "principal-1": Cl.principal(address1),
+          "principal-2": Cl.principal(address2),
+        }),
+        Cl.tuple({
+          "balance-1": Cl.uint(123),
+          "balance-2": Cl.uint(456),
+          "expires-at": Cl.uint(789),
+          nonce: Cl.uint(0),
+          closer: Cl.some(Cl.principal(address1)),
+        }),
+        Cl.uint(999),
+        Cl.uint(888),
+        Cl.uint(4),
+      ],
+      address2
+    );
+    expect(result).toBeTuple({
+      "balance-1": Cl.uint(888),
+      "balance-2": Cl.uint(999),
+      "expires-at": Cl.uint(789),
+      nonce: Cl.uint(4),
+      closer: Cl.some(Cl.principal(address1)),
     });
   });
 });
