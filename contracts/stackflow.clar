@@ -110,7 +110,10 @@
         )
       )
       (updated-channel (try! (increase-sender-balance channel-key channel token amount)))
+      (closer (get closer channel))
     )
+    ;; A forced closure must not be in progress
+    (asserts! (is-none closer) ERR_CLOSE_IN_PROGRESS)
 
     ;; Only fund a channel with a 0 balance for the sender can be funded. After
     ;; the channel is initially funded, additional funds must use the `deposit`
@@ -149,9 +152,6 @@
       (input (sha256 (concat structured-data-header data-hash)))
       (sender tx-sender)
     )
-    ;; A forced closure must not already be in progress
-    (asserts! (is-none closer) ERR_CLOSE_IN_PROGRESS)
-
     ;; If the total balance of the channel is not equal to the sum of the
     ;; balances provided, the channel close is invalid.
     (asserts!
@@ -186,6 +186,7 @@
       (closer (get closer balances))
       (expires-at (+ burn-block-height WAITING_PERIOD))
     )
+    ;; A forced closure must not be in progress
     (asserts! (is-none closer) ERR_CLOSE_IN_PROGRESS)
 
     ;; Set the waiting period for this channel.
@@ -219,7 +220,6 @@
       (channel-nonce (get nonce balances))
       (closer (get closer balances))
     )
-
     ;; Exit early if a forced closure is already in progress.
     (asserts! (is-none closer) ERR_CLOSE_IN_PROGRESS)
 
