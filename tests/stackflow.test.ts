@@ -56,6 +56,8 @@ enum TxError {
   NoCloseInProgress = 113,
   SelfDispute = 114,
   AlreadyFunded = 115,
+  InvalidWithdrawal = 116,
+  UnapprovedToken = 117,
 }
 
 const structuredDataPrefix = Buffer.from([0x53, 0x49, 0x50, 0x30, 0x31, 0x38]);
@@ -188,6 +190,80 @@ function generateDepositSignature(
     ChannelAction.Deposit
   );
 }
+
+describe("manage allowed SIP tokens", () => {
+  it("unadded token is not allowed", () => {
+    const { result } = simnet.callReadOnlyFn(
+      "stackflow",
+      "is-allowed-token",
+      [Cl.principal(`${deployer}.foo`)],
+      deployer
+    );
+
+    expect(result).toBeBool(false);
+  });
+
+  it("adding a token makes it allowed", () => {
+    simnet.callPublicFn(
+      "stackflow",
+      "add-allowed-sip-010",
+      [Cl.principal(`${deployer}.foo`)],
+      deployer
+    );
+
+    const { result } = simnet.callReadOnlyFn(
+      "stackflow",
+      "is-allowed-token",
+      [Cl.principal(`${deployer}.foo`)],
+      deployer
+    );
+
+    expect(result).toBeBool(true);
+  });
+
+  it("removing a token makes it unallowed", () => {
+    simnet.callPublicFn(
+      "stackflow",
+      "add-allowed-sip-010",
+      [Cl.principal(`${deployer}.foo`)],
+      deployer
+    );
+
+    simnet.callPublicFn(
+      "stackflow",
+      "remove-allowed-sip-010",
+      [Cl.principal(`${deployer}.foo`)],
+      deployer
+    );
+
+    const { result } = simnet.callReadOnlyFn(
+      "stackflow",
+      "is-allowed-token",
+      [Cl.principal(`${deployer}.foo`)],
+      deployer
+    );
+
+    expect(result).toBeBool(false);
+  });
+
+  it("removing a token that was never added is still unallowed", () => {
+    simnet.callPublicFn(
+      "stackflow",
+      "remove-allowed-sip-010",
+      [Cl.principal(`${deployer}.foo`)],
+      deployer
+    );
+
+    const { result } = simnet.callReadOnlyFn(
+      "stackflow",
+      "is-allowed-token",
+      [Cl.principal(`${deployer}.foo`)],
+      deployer
+    );
+
+    expect(result).toBeBool(false);
+  });
+});
 
 describe("fund-channel", () => {
   it("can fund a channel", () => {
@@ -411,6 +487,378 @@ describe("fund-channel", () => {
     expect(balance2).toBe(99999998000000n);
 
     const contractBalance = stxBalances.get(stackflowContract);
+    expect(contractBalance).toBe(3000000n);
+  });
+
+  it("cannot fund channel with unapproved token", () => {
+    // Give address1 and address2 some test tokens
+    simnet.callPublicFn(
+      "test-token",
+      "mint",
+      [Cl.uint(100000000000000n), Cl.principal(address1)],
+      deployer
+    );
+    simnet.callPublicFn(
+      "test-token",
+      "mint",
+      [Cl.uint(100000000000000n), Cl.principal(address2)],
+      deployer
+    );
+
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [
+        Cl.some(Cl.principal(`${deployer}.test-token`)),
+        Cl.uint(1000000),
+        Cl.principal(address2),
+      ],
+      address1
+    );
+    expect(result).toBeErr(Cl.uint(TxError.UnapprovedToken));
+  });
+
+  it("can fund a channel with an approved token", () => {
+    // Give address1 and address2 some test tokens
+    simnet.callPublicFn(
+      "test-token",
+      "mint",
+      [Cl.uint(100000000000000n), Cl.principal(address1)],
+      deployer
+    );
+    simnet.callPublicFn(
+      "test-token",
+      "mint",
+      [Cl.uint(100000000000000n), Cl.principal(address2)],
+      deployer
+    );
+
+    // Set the test-token as approved
+    simnet.callPublicFn(
+      "stackflow",
+      "add-allowed-sip-010",
+      [Cl.principal(`${deployer}.test-token`)],
+      deployer
+    );
+
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [
+        Cl.some(Cl.principal(`${deployer}.test-token`)),
+        Cl.uint(1000000),
+        Cl.principal(address2),
+      ],
+      address1
+    );
+    expect(result).toBeOk(
+      Cl.tuple({
+        token: Cl.some(Cl.principal(`${deployer}.test-token`)),
+        "principal-1": Cl.principal(address1),
+        "principal-2": Cl.principal(address2),
+      })
+    );
+    const channelKey = (result as ResponseOkCV).value;
+
+    // Verify the channel
+    const channel = simnet.getMapEntry(
+      stackflowContract,
+      "channels",
+      channelKey
+    );
+    expect(channel).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(1000000),
+        "balance-2": Cl.uint(0),
+        "expires-at": Cl.uint(MAX_HEIGHT),
+        nonce: Cl.uint(0),
+        closer: Cl.none(),
+      })
+    );
+
+    // Verify the balances
+    const tokenBalances = simnet.getAssetsMap().get(".test-token.test-coin")!;
+
+    const balance1 = tokenBalances.get(address1);
+    expect(balance1).toBe(99999999000000n);
+
+    const balance2 = tokenBalances.get(address2);
+    expect(balance2).toBe(100000000000000n);
+
+    const contractBalance = tokenBalances.get(stackflowContract);
+    expect(contractBalance).toBe(1000000n);
+  });
+
+  it("can fund a SIP-010 token channel that has been funded by the other party", () => {
+    // Give address1 and address2 some test tokens
+    simnet.callPublicFn(
+      "test-token",
+      "mint",
+      [Cl.uint(100000000000000n), Cl.principal(address1)],
+      deployer
+    );
+    simnet.callPublicFn(
+      "test-token",
+      "mint",
+      [Cl.uint(100000000000000n), Cl.principal(address2)],
+      deployer
+    );
+
+    // Set the test-token as approved
+    simnet.callPublicFn(
+      "stackflow",
+      "add-allowed-sip-010",
+      [Cl.principal(`${deployer}.test-token`)],
+      deployer
+    );
+
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [
+        Cl.some(Cl.principal(`${deployer}.test-token`)),
+        Cl.uint(1000000),
+        Cl.principal(address2),
+      ],
+      address1
+    );
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [
+        Cl.some(Cl.principal(`${deployer}.test-token`)),
+        Cl.uint(2000000),
+        Cl.principal(address1),
+      ],
+      address2
+    );
+    expect(result).toBeOk(
+      Cl.tuple({
+        token: Cl.some(Cl.principal(`${deployer}.test-token`)),
+        "principal-1": Cl.principal(address1),
+        "principal-2": Cl.principal(address2),
+      })
+    );
+    const channelKey = (result as ResponseOkCV).value;
+
+    // Verify the channel
+    const channel = simnet.getMapEntry(
+      stackflowContract,
+      "channels",
+      channelKey
+    );
+    expect(channel).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(1000000),
+        "balance-2": Cl.uint(2000000),
+        "expires-at": Cl.uint(MAX_HEIGHT),
+        nonce: Cl.uint(0),
+        closer: Cl.none(),
+      })
+    );
+
+    // Verify the balances
+    const tokenBalances = simnet.getAssetsMap().get(".test-token.test-coin")!;
+
+    const balance1 = tokenBalances.get(address1);
+    expect(balance1).toBe(99999999000000n);
+
+    const balance2 = tokenBalances.get(address2);
+    expect(balance2).toBe(99999998000000n);
+
+    const contractBalance = tokenBalances.get(stackflowContract);
+    expect(contractBalance).toBe(3000000n);
+  });
+
+  it("cannot fund a SIP-010 token channel that has already been funded", () => {
+    // Give address1 and address2 some test tokens
+    simnet.callPublicFn(
+      "test-token",
+      "mint",
+      [Cl.uint(100000000000000n), Cl.principal(address1)],
+      deployer
+    );
+    simnet.callPublicFn(
+      "test-token",
+      "mint",
+      [Cl.uint(100000000000000n), Cl.principal(address2)],
+      deployer
+    );
+
+    // Set the test-token as approved
+    simnet.callPublicFn(
+      "stackflow",
+      "add-allowed-sip-010",
+      [Cl.principal(`${deployer}.test-token`)],
+      deployer
+    );
+
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [
+        Cl.some(Cl.principal(`${deployer}.test-token`)),
+        Cl.uint(1000000),
+        Cl.principal(address2),
+      ],
+      address1
+    );
+    expect(result).toBeOk(
+      Cl.tuple({
+        token: Cl.some(Cl.principal(`${deployer}.test-token`)),
+        "principal-1": Cl.principal(address1),
+        "principal-2": Cl.principal(address2),
+      })
+    );
+    const channelKey = (result as ResponseOkCV).value;
+
+    const { result: badResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [
+        Cl.some(Cl.principal(`${deployer}.test-token`)),
+        Cl.uint(2000000),
+        Cl.principal(address2),
+      ],
+      address1
+    );
+    expect(badResult).toBeErr(Cl.uint(TxError.AlreadyFunded));
+
+    // Verify the channel did not change
+    const channel = simnet.getMapEntry(
+      stackflowContract,
+      "channels",
+      channelKey
+    );
+    expect(channel).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(1000000),
+        "balance-2": Cl.uint(0),
+        "expires-at": Cl.uint(MAX_HEIGHT),
+        nonce: Cl.uint(0),
+        closer: Cl.none(),
+      })
+    );
+
+    // Verify the balances
+    const tokenBalances = simnet.getAssetsMap().get(".test-token.test-coin")!;
+
+    const balance1 = tokenBalances.get(address1);
+    expect(balance1).toBe(99999999000000n);
+
+    const balance2 = tokenBalances.get(address2);
+    expect(balance2).toBe(100000000000000n);
+
+    const contractBalance = tokenBalances.get(stackflowContract);
+    expect(contractBalance).toBe(1000000n);
+  });
+
+  it("second account cannot fund a SIP-010 token channel that has already been funded", () => {
+    // Give address1 and address2 some test tokens
+    simnet.callPublicFn(
+      "test-token",
+      "mint",
+      [Cl.uint(100000000000000n), Cl.principal(address1)],
+      deployer
+    );
+    simnet.callPublicFn(
+      "test-token",
+      "mint",
+      [Cl.uint(100000000000000n), Cl.principal(address2)],
+      deployer
+    );
+
+    // Set the test-token as approved
+    simnet.callPublicFn(
+      "stackflow",
+      "add-allowed-sip-010",
+      [Cl.principal(`${deployer}.test-token`)],
+      deployer
+    );
+
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [
+        Cl.some(Cl.principal(`${deployer}.test-token`)),
+        Cl.uint(1000000),
+        Cl.principal(address2),
+      ],
+      address1
+    );
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [
+        Cl.some(Cl.principal(`${deployer}.test-token`)),
+        Cl.uint(2000000),
+        Cl.principal(address1),
+      ],
+      address2
+    );
+    expect(result).toBeOk(
+      Cl.tuple({
+        token: Cl.some(Cl.principal(`${deployer}.test-token`)),
+        "principal-1": Cl.principal(address1),
+        "principal-2": Cl.principal(address2),
+      })
+    );
+    const channelKey = (result as ResponseOkCV).value;
+
+    // Verify the channel
+    const channelBefore = simnet.getMapEntry(
+      stackflowContract,
+      "channels",
+      channelKey
+    );
+    expect(channelBefore).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(1000000),
+        "balance-2": Cl.uint(2000000),
+        "expires-at": Cl.uint(MAX_HEIGHT),
+        nonce: Cl.uint(0),
+        closer: Cl.none(),
+      })
+    );
+
+    const { result: badResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [
+        Cl.some(Cl.principal(`${deployer}.test-token`)),
+        Cl.uint(3000000),
+        Cl.principal(address1),
+      ],
+      address2
+    );
+    expect(badResult).toBeErr(Cl.uint(TxError.AlreadyFunded));
+
+    // Verify the channel did not change
+    const channel = simnet.getMapEntry(
+      stackflowContract,
+      "channels",
+      channelKey
+    );
+    expect(channel).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(1000000),
+        "balance-2": Cl.uint(2000000),
+        "expires-at": Cl.uint(MAX_HEIGHT),
+        nonce: Cl.uint(0),
+        closer: Cl.none(),
+      })
+    );
+
+    // Verify the balances
+    const tokenBalances = simnet.getAssetsMap().get(".test-token.test-coin")!;
+
+    const balance1 = tokenBalances.get(address1);
+    expect(balance1).toBe(99999999000000n);
+
+    const balance2 = tokenBalances.get(address2);
+    expect(balance2).toBe(99999998000000n);
+
+    const contractBalance = tokenBalances.get(stackflowContract);
     expect(contractBalance).toBe(3000000n);
   });
 });

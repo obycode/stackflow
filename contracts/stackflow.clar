@@ -48,13 +48,14 @@
 (define-constant ERR_SELF_DISPUTE (err u114))
 (define-constant ERR_ALREADY_FUNDED (err u115))
 (define-constant ERR_INVALID_WITHDRAWAL (err u116))
+(define-constant ERR_UNAPPROVED_TOKEN (err u117))
 
 ;;; List of allowed SIP-010 tokens as set by the owner of the contract.
 ;;; This is required since SIP-010 tokens are not guaranteed not to have side-
 ;;; effects other than those defined in the SIP-010 standard. For example, an
 ;;; untrusted token could transfer funds from the contract when called within
 ;;; an `as-contract` expression.
-(define-data-var allowed-sip-010s (list 256 principal) (list))
+(define-map allowed-sip-010s principal bool)
 
 ;;; Map tracking the initial balances in channels between two principals for a
 ;;; given token.
@@ -70,24 +71,18 @@
 ;;; As the owner of this contract, add a SIP-010 token to the list of allowed
 ;;; tokens.
 (define-public (add-allowed-sip-010 (token principal))
-  (let (
-      (current (var-get allowed-sip-010s))
-      (updated (unwrap! (as-max-len? (append current token) u256) ERR_MAX_ALLOWED))
-    )
+  (begin
     (asserts! (is-eq contract-caller contract-deployer) ERR_UNAUTHORIZED)
-    (ok (var-set allowed-sip-010s updated))
+    (ok (map-set allowed-sip-010s token true))
   )
 )
 
 ;;; As the owner of this contract, remove a SIP-010 token from the list of
 ;;; allowed tokens.
 (define-public (remove-allowed-sip-010 (token principal))
-  (let (
-      (current (var-get allowed-sip-010s))
-      (updated (remove-principal-from-list current token))
-    )
+  (begin
     (asserts! (is-eq contract-caller contract-deployer) ERR_UNAUTHORIZED)
-    (ok (var-set allowed-sip-010s updated))
+    (ok (map-set allowed-sip-010s token false))
   )
 )
 
@@ -96,38 +91,45 @@
 ;;; does not already exist.
 ;;; Returns the channel key on success.
 (define-public (fund-channel (token (optional <sip-010>)) (amount uint) (with principal))
-  (let
-    (
-      (channel-key (try! (get-channel-key (contract-of-optional token) tx-sender with)))
-      (existing-channel (map-get? channels channel-key))
-      (token-principal (match token t (some (contract-of t)) none))
-      (channel
-        (match
-          existing-channel
-          ch
-          ch
-          { balance-1: u0, balance-2: u0, expires-at: MAX_HEIGHT, nonce: u0, closer: none }
-        )
-      )
-      (updated-channel (try! (increase-sender-balance channel-key channel token amount)))
-      (closer (get closer channel))
+  (begin
+    ;; If a SIP-010 token is specified, it must be in the allowed list
+    (match token
+      t (asserts! (is-allowed-token (contract-of t)) ERR_UNAPPROVED_TOKEN)
+      true
     )
-    ;; A forced closure must not be in progress
-    (asserts! (is-none closer) ERR_CLOSE_IN_PROGRESS)
+    
+    (let
+      (
+        (channel-key (try! (get-channel-key (contract-of-optional token) tx-sender with)))
+        (existing-channel (map-get? channels channel-key))
+        (channel
+          (match
+            existing-channel
+            ch
+            ch
+            { balance-1: u0, balance-2: u0, expires-at: MAX_HEIGHT, nonce: u0, closer: none }
+          )
+        )
+        (updated-channel (try! (increase-sender-balance channel-key channel token amount)))
+        (closer (get closer channel))
+      )
+      ;; A forced closure must not be in progress
+      (asserts! (is-none closer) ERR_CLOSE_IN_PROGRESS)
 
-    ;; Only fund a channel with a 0 balance for the sender can be funded. After
-    ;; the channel is initially funded, additional funds must use the `deposit`
-    ;; function, which requires signatures from both parties.
-    (asserts! (not (is-funded tx-sender channel-key channel)) ERR_ALREADY_FUNDED)
+      ;; Only fund a channel with a 0 balance for the sender can be funded. After
+      ;; the channel is initially funded, additional funds must use the `deposit`
+      ;; function, which requires signatures from both parties.
+      (asserts! (not (is-funded tx-sender channel-key channel)) ERR_ALREADY_FUNDED)
 
-    (map-set channels channel-key updated-channel)
-    (print {
-      event: "channel-funded",
-      channel-key: channel-key,
-      sender: tx-sender,
-      amount: amount,
-    })
-    (ok channel-key)
+      (map-set channels channel-key updated-channel)
+      (print {
+        event: "channel-funded",
+        channel-key: channel-key,
+        sender: tx-sender,
+        amount: amount,
+      })
+      (ok channel-key)
+    )
   )
 )
 
@@ -463,6 +465,13 @@
 
 (define-read-only (verify-signed-structured-data (structured-data-hash (buff 32)) (signature (buff 65)) (signer principal))
 	(verify-signature (sha256 (concat structured-data-header structured-data-hash)) signature signer)
+)
+
+(define-read-only (is-allowed-token (token principal))
+  (match (map-get? allowed-sip-010s token)
+    allowed allowed
+    false
+  )
 )
 
 ;; Private Functions
