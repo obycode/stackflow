@@ -25,10 +25,10 @@
 (define-constant structured-data-header (concat structured-data-prefix message-domain-hash))
 
 ;; Actions
-(define-constant ACTION_CLOSE "close")
-(define-constant ACTION_TRANSFER "transfer")
-(define-constant ACTION_DEPOSIT "deposit")
-(define-constant ACTION_WITHDRAWAL "withdraw")
+(define-constant ACTION_CLOSE u0)
+(define-constant ACTION_TRANSFER u1)
+(define-constant ACTION_DEPOSIT u2)
+(define-constant ACTION_WITHDRAWAL u3)
 
 ;; Error codes
 (define-constant ERR_DEPOSIT_FAILED (err u100))
@@ -97,7 +97,7 @@
       t (asserts! (is-allowed-token (contract-of t)) ERR_UNAPPROVED_TOKEN)
       true
     )
-    
+
     (let
       (
         (channel-key (try! (get-channel-key (contract-of-optional token) tx-sender with)))
@@ -398,7 +398,7 @@
       (channel-nonce (get nonce channel))
       (closer (get closer channel))
       (updated-channel (update-channel-tuple channel-key channel my-balance their-balance nonce))
-      (data (make-channel-data channel-key my-balance their-balance nonce ACTION_DEPOSIT))
+      (data (make-channel-data channel-key my-balance their-balance nonce ACTION_WITHDRAWAL))
       (data-hash (sha256 (unwrap! (to-consensus-buff? data) ERR_CONSENSUS_BUFF)))
       (input (sha256 (concat structured-data-header data-hash)))
     )
@@ -617,7 +617,7 @@
     (my-balance uint)
     (their-balance uint)
     (nonce uint)
-    (action (string-ascii 8))
+    (action uint)
   )
   (let
     (

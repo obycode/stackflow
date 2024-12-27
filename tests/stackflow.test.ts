@@ -33,10 +33,10 @@ const WAITING_PERIOD = 144;
 const MAX_HEIGHT = 340282366920938463463374607431768211455n;
 
 enum ChannelAction {
-  Close = "close",
-  Transfer = "transfer",
-  Deposit = "deposit",
-  Withdrawal = "withdraw",
+  Close = 0,
+  Transfer = 1,
+  Deposit = 2,
+  Withdraw = 3,
 }
 
 enum TxError {
@@ -123,7 +123,7 @@ function generateChannelSignature(
     "balance-1": Cl.uint(balance1),
     "balance-2": Cl.uint(balance2),
     nonce: Cl.uint(nonce),
-    action: Cl.stringAscii(action),
+    action: Cl.uint(action),
   });
   return signStructuredData(privateKey, data);
 }
@@ -188,6 +188,27 @@ function generateDepositSignature(
     theirBalance,
     nonce,
     ChannelAction.Deposit
+  );
+}
+
+function generateWithdrawSignature(
+  privateKey: StacksPrivateKey,
+  token: [string, string] | null,
+  myPrincipal: string,
+  theirPrincipal: string,
+  myBalance: number,
+  theirBalance: number,
+  nonce: number
+): Buffer {
+  return generateChannelSignature(
+    privateKey,
+    token,
+    myPrincipal,
+    theirPrincipal,
+    myBalance,
+    theirBalance,
+    nonce,
+    ChannelAction.Withdraw
   );
 }
 
@@ -1818,7 +1839,7 @@ describe("dispute-closure", () => {
       "balance-1": Cl.uint(1300000),
       "balance-2": Cl.uint(1700000),
       nonce: Cl.uint(1),
-      action: Cl.stringAscii(ChannelAction.Transfer),
+      action: Cl.uint(ChannelAction.Transfer),
     });
     const signature1 = signStructuredData(address1PK, data);
     const signature3 = signStructuredData(address3PK, data);
@@ -2752,6 +2773,103 @@ describe("deposit", () => {
   });
 });
 
+describe("withdraw", () => {
+  it("can withdraw from a valid channel from account1", () => {
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      address1
+    );
+    const { result: fundResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      address2
+    );
+    expect(fundResult).toBeOk(
+      Cl.tuple({
+        token: Cl.none(),
+        "principal-1": Cl.principal(address1),
+        "principal-2": Cl.principal(address2),
+      })
+    );
+    const channelKey = (fundResult as ResponseOkCV).value;
+
+    // Create the signatures for a withdraw
+    const signature1 = generateWithdrawSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      1000000,
+      2000000,
+      1
+    );
+    const signature2 = generateWithdrawSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      2000000,
+      1000000,
+      1
+    );
+
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "withdraw",
+      [
+        Cl.uint(50000),
+        Cl.none(),
+        Cl.principal(address2),
+        Cl.uint(1000000),
+        Cl.uint(2000000),
+        Cl.buffer(signature1),
+        Cl.buffer(signature2),
+        Cl.uint(1),
+      ],
+      address1
+    );
+
+    expect(result).toBeOk(
+      Cl.tuple({
+        "principal-1": Cl.principal(address1),
+        "principal-2": Cl.principal(address2),
+        token: Cl.none(),
+      })
+    );
+
+    // Verify the balances
+    const stxBalances = simnet.getAssetsMap().get("STX")!;
+
+    const balance1 = stxBalances.get(address1);
+    expect(balance1).toBe(99999999500000n);
+
+    const balance2 = stxBalances.get(address2);
+    expect(balance2).toBe(99999998500000n);
+
+    const contractBalance = stxBalances.get(stackflowContract);
+    expect(contractBalance).toBe(3000000n);
+
+    // Verify the channel
+    const channel = simnet.getMapEntry(
+      stackflowContract,
+      "channels",
+      channelKey
+    );
+    expect(channel).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(0),
+        "balance-2": Cl.uint(0),
+        "expires-at": Cl.uint(MAX_HEIGHT),
+        nonce: Cl.uint(0),
+        closer: Cl.none(),
+      })
+    );
+  });
+});
+
 describe("get-channel-balances", () => {
   it("returns the channel balances", () => {
     simnet.callPublicFn(
@@ -3013,7 +3131,7 @@ describe("make-channel-data", () => {
         Cl.uint(100),
         Cl.uint(0),
         Cl.uint(4),
-        Cl.stringAscii(ChannelAction.Transfer),
+        Cl.uint(ChannelAction.Transfer),
       ],
       address1
     );
@@ -3024,7 +3142,7 @@ describe("make-channel-data", () => {
       "balance-1": Cl.uint(100),
       "balance-2": Cl.uint(0),
       nonce: Cl.uint(4),
-      action: Cl.stringAscii(ChannelAction.Transfer),
+      action: Cl.uint(ChannelAction.Transfer),
     });
   });
 
@@ -3041,7 +3159,7 @@ describe("make-channel-data", () => {
         Cl.uint(120),
         Cl.uint(80),
         Cl.uint(7),
-        Cl.stringAscii(ChannelAction.Close),
+        Cl.uint(ChannelAction.Close),
       ],
       address2
     );
@@ -3052,7 +3170,7 @@ describe("make-channel-data", () => {
       "balance-1": Cl.uint(80),
       "balance-2": Cl.uint(120),
       nonce: Cl.uint(7),
-      action: Cl.stringAscii(ChannelAction.Close),
+      action: Cl.uint(ChannelAction.Close),
     });
   });
 });
