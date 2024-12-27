@@ -103,7 +103,8 @@ function generateChannelSignature(
   myBalance: number,
   theirBalance: number,
   nonce: number,
-  action: ChannelAction
+  action: ChannelAction,
+  actor: string | null = null
 ): Buffer {
   const meFirst = myPrincipal < theirPrincipal;
   const principal1 = meFirst ? myPrincipal : theirPrincipal;
@@ -115,6 +116,7 @@ function generateChannelSignature(
     token === null
       ? Cl.none()
       : Cl.some(Cl.contractPrincipal(token[0], token[1]));
+  const actorCV = actor === null ? Cl.none() : Cl.some(Cl.principal(actor));
 
   const data = Cl.tuple({
     token: tokenCV,
@@ -124,6 +126,7 @@ function generateChannelSignature(
     "balance-2": Cl.uint(balance2),
     nonce: Cl.uint(nonce),
     action: Cl.uint(action),
+    actor: actorCV,
   });
   return signStructuredData(privateKey, data);
 }
@@ -177,7 +180,8 @@ function generateDepositSignature(
   theirPrincipal: string,
   myBalance: number,
   theirBalance: number,
-  nonce: number
+  nonce: number,
+  actor: string
 ): Buffer {
   return generateChannelSignature(
     privateKey,
@@ -187,7 +191,8 @@ function generateDepositSignature(
     myBalance,
     theirBalance,
     nonce,
-    ChannelAction.Deposit
+    ChannelAction.Deposit,
+    actor
   );
 }
 
@@ -198,7 +203,8 @@ function generateWithdrawSignature(
   theirPrincipal: string,
   myBalance: number,
   theirBalance: number,
-  nonce: number
+  nonce: number,
+  actor: string
 ): Buffer {
   return generateChannelSignature(
     privateKey,
@@ -208,7 +214,8 @@ function generateWithdrawSignature(
     myBalance,
     theirBalance,
     nonce,
-    ChannelAction.Withdraw
+    ChannelAction.Withdraw,
+    actor
   );
 }
 
@@ -1507,6 +1514,8 @@ describe("force-close", () => {
         Cl.buffer(signature1),
         Cl.buffer(signature2),
         Cl.uint(1),
+        Cl.uint(ChannelAction.Transfer),
+        Cl.none(),
       ],
       address1
     );
@@ -1589,6 +1598,8 @@ describe("force-close", () => {
         Cl.buffer(signature2),
         Cl.buffer(signature1),
         Cl.uint(1),
+        Cl.uint(ChannelAction.Transfer),
+        Cl.none(),
       ],
       address2
     );
@@ -1668,6 +1679,8 @@ describe("force-close", () => {
         Cl.buffer(signature1),
         Cl.buffer(signature2),
         Cl.uint(1),
+        Cl.uint(ChannelAction.Transfer),
+        Cl.none(),
       ],
       address1
     );
@@ -1732,6 +1745,8 @@ describe("force-close", () => {
         Cl.buffer(signature2),
         Cl.buffer(signature1),
         Cl.uint(1),
+        Cl.uint(ChannelAction.Transfer),
+        Cl.none(),
       ],
       address2
     );
@@ -1796,6 +1811,8 @@ describe("force-close", () => {
         Cl.buffer(signature1),
         Cl.buffer(signature2),
         Cl.uint(1),
+        Cl.uint(ChannelAction.Transfer),
+        Cl.none(),
       ],
       address1
     );
@@ -1855,6 +1872,8 @@ describe("dispute-closure", () => {
         Cl.buffer(signature3),
         Cl.buffer(signature1),
         Cl.uint(1),
+        Cl.uint(ChannelAction.Transfer),
+        Cl.none(),
       ],
       address3
     );
@@ -1910,6 +1929,8 @@ describe("dispute-closure", () => {
         Cl.buffer(signature2),
         Cl.buffer(signature1),
         Cl.uint(1),
+        Cl.uint(ChannelAction.Transfer),
+        Cl.none(),
       ],
       address2
     );
@@ -2005,6 +2026,8 @@ describe("dispute-closure", () => {
         Cl.buffer(signature2),
         Cl.buffer(signature1),
         Cl.uint(1),
+        Cl.uint(ChannelAction.Transfer),
+        Cl.none(),
       ],
       address2
     );
@@ -2092,6 +2115,8 @@ describe("dispute-closure", () => {
         Cl.buffer(signature1),
         Cl.buffer(signature2),
         Cl.uint(1),
+        Cl.uint(ChannelAction.Transfer),
+        Cl.none(),
       ],
       address1
     );
@@ -2181,6 +2206,8 @@ describe("dispute-closure", () => {
         Cl.buffer(signature1),
         Cl.buffer(signature2),
         Cl.uint(1),
+        Cl.uint(ChannelAction.Transfer),
+        Cl.none(),
       ],
       address1
     );
@@ -2247,7 +2274,8 @@ describe("deposit", () => {
       address2,
       1050000,
       2000000,
-      1
+      1,
+      address1
     );
     const signature2 = generateDepositSignature(
       address2PK,
@@ -2256,7 +2284,8 @@ describe("deposit", () => {
       address1,
       2000000,
       1050000,
-      1
+      1,
+      address1
     );
 
     const { result } = simnet.callPublicFn(
@@ -2342,7 +2371,8 @@ describe("deposit", () => {
       address2,
       1000000,
       2050000,
-      3
+      3,
+      address2
     );
     const signature2 = generateDepositSignature(
       address2PK,
@@ -2351,7 +2381,8 @@ describe("deposit", () => {
       address1,
       2050000,
       1000000,
-      3
+      3,
+      address2
     );
 
     const { result } = simnet.callPublicFn(
@@ -2436,7 +2467,8 @@ describe("deposit", () => {
       address2,
       3040000,
       10000,
-      3
+      3,
+      address2
     );
     const signature2 = generateDepositSignature(
       address2PK,
@@ -2445,7 +2477,8 @@ describe("deposit", () => {
       address1,
       10000,
       3040000,
-      3
+      3,
+      address2
     );
 
     const { result } = simnet.callPublicFn(
@@ -2509,7 +2542,8 @@ describe("deposit", () => {
       address2,
       3040000,
       10000,
-      3
+      3,
+      address1
     );
     const signature3 = generateDepositSignature(
       address3PK,
@@ -2518,7 +2552,8 @@ describe("deposit", () => {
       address1,
       10000,
       3040000,
-      3
+      3,
+      address1
     );
 
     // Try a deposit when no channels exist
@@ -2601,7 +2636,8 @@ describe("deposit", () => {
       address2,
       3040000,
       10000,
-      3
+      3,
+      address2
     );
     const signature2 = generateDepositSignature(
       address2PK,
@@ -2610,7 +2646,8 @@ describe("deposit", () => {
       address1,
       10000,
       3040000,
-      3
+      3,
+      address2
     );
 
     const { result } = simnet.callPublicFn(
@@ -2689,7 +2726,8 @@ describe("deposit", () => {
       address2,
       1050000,
       2000000,
-      1
+      1,
+      address1
     );
     const signature2 = generateDepositSignature(
       address2PK,
@@ -2698,7 +2736,8 @@ describe("deposit", () => {
       address1,
       2000000,
       1050000,
-      1
+      1,
+      address1
     );
 
     const { result } = simnet.callPublicFn(
@@ -2802,9 +2841,10 @@ describe("withdraw", () => {
       null,
       address1,
       address2,
-      1000000,
+      500000,
       2000000,
-      1
+      1,
+      address1
     );
     const signature2 = generateWithdrawSignature(
       address2PK,
@@ -2812,18 +2852,19 @@ describe("withdraw", () => {
       address2,
       address1,
       2000000,
-      1000000,
-      1
+      500000,
+      1,
+      address1
     );
 
     const { result } = simnet.callPublicFn(
       "stackflow",
       "withdraw",
       [
-        Cl.uint(50000),
+        Cl.uint(500000),
         Cl.none(),
         Cl.principal(address2),
-        Cl.uint(1000000),
+        Cl.uint(500000),
         Cl.uint(2000000),
         Cl.buffer(signature1),
         Cl.buffer(signature2),
@@ -2844,13 +2885,13 @@ describe("withdraw", () => {
     const stxBalances = simnet.getAssetsMap().get("STX")!;
 
     const balance1 = stxBalances.get(address1);
-    expect(balance1).toBe(99999999500000n);
+    expect(balance1).toBe(99999999000000n);
 
     const balance2 = stxBalances.get(address2);
     expect(balance2).toBe(99999998500000n);
 
     const contractBalance = stxBalances.get(stackflowContract);
-    expect(contractBalance).toBe(3000000n);
+    expect(contractBalance).toBe(2500000n);
 
     // Verify the channel
     const channel = simnet.getMapEntry(
@@ -2860,10 +2901,10 @@ describe("withdraw", () => {
     );
     expect(channel).toBeSome(
       Cl.tuple({
-        "balance-1": Cl.uint(0),
-        "balance-2": Cl.uint(0),
+        "balance-1": Cl.uint(500000),
+        "balance-2": Cl.uint(2500000),
         "expires-at": Cl.uint(MAX_HEIGHT),
-        nonce: Cl.uint(0),
+        nonce: Cl.uint(1),
         closer: Cl.none(),
       })
     );
@@ -3132,6 +3173,7 @@ describe("make-channel-data", () => {
         Cl.uint(0),
         Cl.uint(4),
         Cl.uint(ChannelAction.Transfer),
+        Cl.none(),
       ],
       address1
     );
@@ -3143,6 +3185,7 @@ describe("make-channel-data", () => {
       "balance-2": Cl.uint(0),
       nonce: Cl.uint(4),
       action: Cl.uint(ChannelAction.Transfer),
+      actor: Cl.none(),
     });
   });
 
@@ -3160,6 +3203,7 @@ describe("make-channel-data", () => {
         Cl.uint(80),
         Cl.uint(7),
         Cl.uint(ChannelAction.Close),
+        Cl.none(),
       ],
       address2
     );
@@ -3171,6 +3215,7 @@ describe("make-channel-data", () => {
       "balance-2": Cl.uint(120),
       nonce: Cl.uint(7),
       action: Cl.uint(ChannelAction.Close),
+      actor: Cl.none(),
     });
   });
 });
