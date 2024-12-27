@@ -2909,6 +2909,513 @@ describe("withdraw", () => {
       })
     );
   });
+
+  it("can withdraw from a valid channel from account2", () => {
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      address1
+    );
+    const { result: fundResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      address2
+    );
+    expect(fundResult).toBeOk(
+      Cl.tuple({
+        token: Cl.none(),
+        "principal-1": Cl.principal(address1),
+        "principal-2": Cl.principal(address2),
+      })
+    );
+    const channelKey = (fundResult as ResponseOkCV).value;
+
+    // Create the signatures for a withdraw
+    const signature1 = generateWithdrawSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      500000,
+      2000000,
+      1,
+      address2
+    );
+    const signature2 = generateWithdrawSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      2000000,
+      500000,
+      1,
+      address2
+    );
+
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "withdraw",
+      [
+        Cl.uint(500000),
+        Cl.none(),
+        Cl.principal(address1),
+        Cl.uint(2000000),
+        Cl.uint(500000),
+        Cl.buffer(signature2),
+        Cl.buffer(signature1),
+        Cl.uint(1),
+      ],
+      address2
+    );
+
+    expect(result).toBeOk(
+      Cl.tuple({
+        "principal-1": Cl.principal(address1),
+        "principal-2": Cl.principal(address2),
+        token: Cl.none(),
+      })
+    );
+
+    // Verify the balances
+    const stxBalances = simnet.getAssetsMap().get("STX")!;
+
+    const balance1 = stxBalances.get(address1);
+    expect(balance1).toBe(99999999000000n);
+
+    const balance2 = stxBalances.get(address2);
+    expect(balance2).toBe(99999998500000n);
+
+    const contractBalance = stxBalances.get(stackflowContract);
+    expect(contractBalance).toBe(2500000n);
+
+    // Verify the channel
+    const channel = simnet.getMapEntry(
+      stackflowContract,
+      "channels",
+      channelKey
+    );
+    expect(channel).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(500000),
+        "balance-2": Cl.uint(2000000),
+        "expires-at": Cl.uint(MAX_HEIGHT),
+        nonce: Cl.uint(1),
+        closer: Cl.none(),
+      })
+    );
+  });
+
+  it("cannot withdraw with a bad sender signature", () => {
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      address1
+    );
+    const { result: fundResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      address2
+    );
+    expect(fundResult).toBeOk(
+      Cl.tuple({
+        token: Cl.none(),
+        "principal-1": Cl.principal(address1),
+        "principal-2": Cl.principal(address2),
+      })
+    );
+    const channelKey = (fundResult as ResponseOkCV).value;
+
+    // Create the signatures for a withdraw
+    const signature1 = generateWithdrawSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      1000000,
+      2000000,
+      1,
+      address1
+    );
+    const signature2 = generateWithdrawSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      2000000,
+      500000,
+      1,
+      address1
+    );
+
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "withdraw",
+      [
+        Cl.uint(500000),
+        Cl.none(),
+        Cl.principal(address2),
+        Cl.uint(500000),
+        Cl.uint(2000000),
+        Cl.buffer(signature1),
+        Cl.buffer(signature2),
+        Cl.uint(1),
+      ],
+      address1
+    );
+
+    expect(result).toBeErr(Cl.uint(TxError.InvalidSenderSignature));
+
+    // Verify the balances
+    const stxBalances = simnet.getAssetsMap().get("STX")!;
+
+    const balance1 = stxBalances.get(address1);
+    expect(balance1).toBe(99999999000000n);
+
+    const balance2 = stxBalances.get(address2);
+    expect(balance2).toBe(99999998000000n);
+
+    const contractBalance = stxBalances.get(stackflowContract);
+    expect(contractBalance).toBe(3000000n);
+
+    // Verify the channel
+    const channel = simnet.getMapEntry(
+      stackflowContract,
+      "channels",
+      channelKey
+    );
+    expect(channel).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(1000000),
+        "balance-2": Cl.uint(2000000),
+        "expires-at": Cl.uint(MAX_HEIGHT),
+        nonce: Cl.uint(0),
+        closer: Cl.none(),
+      })
+    );
+  });
+
+  it("cannot withdraw with an invalid other signature", () => {
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      address1
+    );
+    const { result: fundResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      address2
+    );
+    expect(fundResult).toBeOk(
+      Cl.tuple({
+        token: Cl.none(),
+        "principal-1": Cl.principal(address1),
+        "principal-2": Cl.principal(address2),
+      })
+    );
+    const channelKey = (fundResult as ResponseOkCV).value;
+
+    // Create the signatures for a withdraw
+    const signature1 = generateWithdrawSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      500000,
+      2000000,
+      1,
+      address1
+    );
+    const signature2 = generateWithdrawSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      2500000,
+      500000,
+      1,
+      address1
+    );
+
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "withdraw",
+      [
+        Cl.uint(500000),
+        Cl.none(),
+        Cl.principal(address2),
+        Cl.uint(500000),
+        Cl.uint(2000000),
+        Cl.buffer(signature1),
+        Cl.buffer(signature2),
+        Cl.uint(1),
+      ],
+      address1
+    );
+
+    expect(result).toBeErr(Cl.uint(TxError.InvalidOtherSignature));
+
+    // Verify the balances
+    const stxBalances = simnet.getAssetsMap().get("STX")!;
+
+    const balance1 = stxBalances.get(address1);
+    expect(balance1).toBe(99999999000000n);
+
+    const balance2 = stxBalances.get(address2);
+    expect(balance2).toBe(99999998000000n);
+
+    const contractBalance = stxBalances.get(stackflowContract);
+    expect(contractBalance).toBe(3000000n);
+
+    // Verify the channel
+    const channel = simnet.getMapEntry(
+      stackflowContract,
+      "channels",
+      channelKey
+    );
+    expect(channel).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(1000000),
+        "balance-2": Cl.uint(2000000),
+        "expires-at": Cl.uint(MAX_HEIGHT),
+        nonce: Cl.uint(0),
+        closer: Cl.none(),
+      })
+    );
+  });
+
+  it("cannot withdraw as the wrong actor", () => {
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      address1
+    );
+    const { result: fundResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      address2
+    );
+    expect(fundResult).toBeOk(
+      Cl.tuple({
+        token: Cl.none(),
+        "principal-1": Cl.principal(address1),
+        "principal-2": Cl.principal(address2),
+      })
+    );
+    const channelKey = (fundResult as ResponseOkCV).value;
+
+    // Create the signatures for a withdraw
+    const signature1 = generateWithdrawSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      500000,
+      2000000,
+      1,
+      address1
+    );
+    const signature2 = generateWithdrawSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      2000000,
+      500000,
+      1,
+      address1
+    );
+
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "withdraw",
+      [
+        Cl.uint(500000),
+        Cl.none(),
+        Cl.principal(address1),
+        Cl.uint(2000000),
+        Cl.uint(500000),
+        Cl.buffer(signature2),
+        Cl.buffer(signature1),
+        Cl.uint(1),
+      ],
+      address2
+    );
+
+    expect(result).toBeErr(Cl.uint(TxError.InvalidSenderSignature));
+
+    // Verify the balances
+    const stxBalances = simnet.getAssetsMap().get("STX")!;
+
+    const balance1 = stxBalances.get(address1);
+    expect(balance1).toBe(99999999000000n);
+
+    const balance2 = stxBalances.get(address2);
+    expect(balance2).toBe(99999998000000n);
+
+    const contractBalance = stxBalances.get(stackflowContract);
+    expect(contractBalance).toBe(3000000n);
+
+    // Verify the channel
+    const channel = simnet.getMapEntry(
+      stackflowContract,
+      "channels",
+      channelKey
+    );
+    expect(channel).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(1000000),
+        "balance-2": Cl.uint(2000000),
+        "expires-at": Cl.uint(MAX_HEIGHT),
+        nonce: Cl.uint(0),
+        closer: Cl.none(),
+      })
+    );
+  });
+
+  it("cannot withdraw with an old nonce", () => {
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      address1
+    );
+    const { result: fundResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      address2
+    );
+    expect(fundResult).toBeOk(
+      Cl.tuple({
+        token: Cl.none(),
+        "principal-1": Cl.principal(address1),
+        "principal-2": Cl.principal(address2),
+      })
+    );
+    const channelKey = (fundResult as ResponseOkCV).value;
+
+    // Create the signatures for a deposit
+    const depositSignature1 = generateDepositSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      1050000,
+      2000000,
+      1,
+      address1
+    );
+    const depositSignature2 = generateDepositSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      2000000,
+      1050000,
+      1,
+      address1
+    );
+
+    const { result: depositResult } = simnet.callPublicFn(
+      "stackflow",
+      "deposit",
+      [
+        Cl.uint(50000),
+        Cl.none(),
+        Cl.principal(address2),
+        Cl.uint(1050000),
+        Cl.uint(2000000),
+        Cl.buffer(depositSignature1),
+        Cl.buffer(depositSignature2),
+        Cl.uint(1),
+      ],
+      address1
+    );
+
+    expect(depositResult).toBeOk(
+      Cl.tuple({
+        "principal-1": Cl.principal(address1),
+        "principal-2": Cl.principal(address2),
+        token: Cl.none(),
+      })
+    );
+
+    // Create the signatures for a withdraw
+    const signature1 = generateWithdrawSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      500000,
+      2000000,
+      1,
+      address1
+    );
+    const signature2 = generateWithdrawSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      2000000,
+      500000,
+      1,
+      address1
+    );
+
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "withdraw",
+      [
+        Cl.uint(500000),
+        Cl.none(),
+        Cl.principal(address2),
+        Cl.uint(500000),
+        Cl.uint(2000000),
+        Cl.buffer(signature1),
+        Cl.buffer(signature2),
+        Cl.uint(1),
+      ],
+      address1
+    );
+
+    expect(result).toBeErr(Cl.uint(TxError.NonceTooLow));
+
+    // Verify the balances
+    const stxBalances = simnet.getAssetsMap().get("STX")!;
+
+    const balance1 = stxBalances.get(address1);
+    expect(balance1).toBe(99999998950000n);
+
+    const balance2 = stxBalances.get(address2);
+    expect(balance2).toBe(99999998000000n);
+
+    const contractBalance = stxBalances.get(stackflowContract);
+    expect(contractBalance).toBe(3050000n);
+
+    // Verify the channel
+    const channel = simnet.getMapEntry(
+      stackflowContract,
+      "channels",
+      channelKey
+    );
+    expect(channel).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(1050000),
+        "balance-2": Cl.uint(2000000),
+        "expires-at": Cl.uint(MAX_HEIGHT),
+        nonce: Cl.uint(1),
+        closer: Cl.none(),
+      })
+    );
+  });
 });
 
 describe("get-channel-balances", () => {
