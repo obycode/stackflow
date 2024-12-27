@@ -2885,10 +2885,10 @@ describe("withdraw", () => {
     const stxBalances = simnet.getAssetsMap().get("STX")!;
 
     const balance1 = stxBalances.get(address1);
-    expect(balance1).toBe(99999999000000n);
+    expect(balance1).toBe(99999999500000n);
 
     const balance2 = stxBalances.get(address2);
-    expect(balance2).toBe(99999998500000n);
+    expect(balance2).toBe(99999998000000n);
 
     const contractBalance = stxBalances.get(stackflowContract);
     expect(contractBalance).toBe(2500000n);
@@ -2902,7 +2902,7 @@ describe("withdraw", () => {
     expect(channel).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(500000),
-        "balance-2": Cl.uint(2500000),
+        "balance-2": Cl.uint(2000000),
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(1),
         closer: Cl.none(),

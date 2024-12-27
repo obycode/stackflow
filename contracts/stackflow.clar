@@ -420,7 +420,7 @@
     (asserts!
       (is-eq
         (+ my-balance their-balance)
-        (+ (get balance-1 channel) (get balance-2 channel) amount)
+        (- (+ (get balance-1 channel) (get balance-2 channel)) amount)
       )
       ERR_INVALID_TOTAL_BALANCE
     )

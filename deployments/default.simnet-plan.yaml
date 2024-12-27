@@ -260,6 +260,15 @@ plan:
       transactions: []
       epoch: "2.1"
     - id: 69
+      transactions: []
+      epoch: "2.1"
+    - id: 70
+      transactions: []
+      epoch: "2.1"
+    - id: 71
+      transactions: []
+      epoch: "2.1"
+    - id: 72
       transactions:
         - emulated-contract-publish:
             contract-name: stackflow
@@ -271,15 +280,6 @@ plan:
             emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
             path: contracts/test-token.clar
             clarity-version: 3
-      epoch: "3.0"
-    - id: 70
-      transactions: []
-      epoch: "3.0"
-    - id: 71
-      transactions: []
-      epoch: "3.0"
-    - id: 72
-      transactions: []
       epoch: "3.0"
     - id: 73
       transactions: []
@@ -471,5 +471,23 @@ plan:
       transactions: []
       epoch: "3.0"
     - id: 136
+      transactions: []
+      epoch: "3.0"
+    - id: 137
+      transactions: []
+      epoch: "3.0"
+    - id: 138
+      transactions: []
+      epoch: "3.0"
+    - id: 139
+      transactions: []
+      epoch: "3.0"
+    - id: 140
+      transactions: []
+      epoch: "3.0"
+    - id: 141
+      transactions: []
+      epoch: "3.0"
+    - id: 142
       transactions: []
       epoch: "3.0"
