@@ -7,6 +7,7 @@ cache_dir = './.cache'
 
 [[project.requirements]]
 contract_id = 'SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE.sip-010-trait-ft-standard'
+
 [contracts.stackflow]
 path = 'contracts/stackflow.clar'
 clarity_version = 3
@@ -16,6 +17,7 @@ epoch = 3.0
 path = 'contracts/test-token.clar'
 clarity_version = 3
 epoch = 3.0
+
 [repl.analysis]
 passes = []
 

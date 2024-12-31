@@ -58,6 +58,8 @@ enum TxError {
   AlreadyFunded = 115,
   InvalidWithdrawal = 116,
   UnapprovedToken = 117,
+  IncorrectNonce = 118,
+  NotExpired = 119,
 }
 
 const structuredDataPrefix = Buffer.from([0x53, 0x49, 0x50, 0x30, 0x31, 0x38]);
@@ -2042,13 +2044,21 @@ describe("dispute-closure", () => {
     );
     expect(disputeResult).toBeOk(Cl.bool(false));
 
-    // Verify that the channel has been deleted
+    // Verify that the channel has been reset
     const channel = simnet.getMapEntry(
       stackflowContract,
       "channels",
       channelKey
     );
-    expect(channel).toBeNone();
+    expect(channel).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(0),
+        "balance-2": Cl.uint(0),
+        "expires-at": Cl.uint(MAX_HEIGHT),
+        nonce: Cl.uint(1),
+        closer: Cl.none(),
+      })
+    );
 
     // Verify the balances have changed
     const stxBalances = simnet.getAssetsMap().get("STX")!;
@@ -2131,13 +2141,21 @@ describe("dispute-closure", () => {
     );
     expect(disputeResult).toBeOk(Cl.bool(false));
 
-    // Verify that the channel has been deleted
+    // Verify that the channel has been reset
     const channel = simnet.getMapEntry(
       stackflowContract,
       "channels",
       channelKey
     );
-    expect(channel).toBeNone();
+    expect(channel).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(0),
+        "balance-2": Cl.uint(0),
+        "expires-at": Cl.uint(MAX_HEIGHT),
+        nonce: Cl.uint(1),
+        closer: Cl.none(),
+      })
+    );
 
     // Verify the balances have changed
     const stxBalances = simnet.getAssetsMap().get("STX")!;
@@ -2221,6 +2239,385 @@ describe("dispute-closure", () => {
       address1
     );
     expect(disputeResult).toBeErr(Cl.uint(TxError.SelfDispute));
+
+    // Verify that the map entry is unchanged
+    const channel = simnet.getMapEntry(
+      stackflowContract,
+      "channels",
+      channelKey
+    );
+    expect(channel).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(1000000),
+        "balance-2": Cl.uint(2000000),
+        "expires-at": Cl.uint(cancel_height + WAITING_PERIOD),
+        nonce: Cl.uint(0),
+        closer: Cl.some(Cl.principal(address1)),
+      })
+    );
+
+    // Verify the balances have not changed
+    const stxBalances = simnet.getAssetsMap().get("STX")!;
+
+    const balance1 = stxBalances.get(address1);
+    expect(balance1).toBe(99999999000000n);
+
+    const balance2 = stxBalances.get(address2);
+    expect(balance2).toBe(99999998000000n);
+
+    const contractBalance = stxBalances.get(stackflowContract);
+    expect(contractBalance).toBe(3000000n);
+  });
+});
+
+describe("finalize", () => {
+  it("finalizing a non-existent channel gives an error", () => {
+    // Setup a channel
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
+      address1
+    );
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
+      address2
+    );
+
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "finalize",
+      [Cl.none(), Cl.principal(address1)],
+      address3
+    );
+    expect(result).toBeErr(Cl.uint(TxError.NoSuchChannel));
+  });
+
+  it("finalizing a channel that is not closing gives an error", () => {
+    // Setup the channel and save the channel key
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
+      address1
+    );
+    const { result: fundResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
+      address2
+    );
+    expect(fundResult.type).toBe(ClarityType.ResponseOk);
+    const channelKey = (fundResult as ResponseOkCV).value;
+
+    // Account 2 tries to finalize a closure
+    const { result: disputeResult } = simnet.callPublicFn(
+      "stackflow",
+      "finalize",
+      [Cl.none(), Cl.principal(address1)],
+      address2
+    );
+    expect(disputeResult).toBeErr(Cl.uint(TxError.NoCloseInProgress));
+
+    // Verify that the map entry is unchanged
+    const channel = simnet.getMapEntry(
+      stackflowContract,
+      "channels",
+      channelKey
+    );
+    expect(channel).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(1000000),
+        "balance-2": Cl.uint(2000000),
+        "expires-at": Cl.uint(MAX_HEIGHT),
+        nonce: Cl.uint(0),
+        closer: Cl.none(),
+      })
+    );
+
+    // Verify the balances have not changed
+    const stxBalances = simnet.getAssetsMap().get("STX")!;
+
+    const balance1 = stxBalances.get(address1);
+    expect(balance1).toBe(99999999000000n);
+
+    const balance2 = stxBalances.get(address2);
+    expect(balance2).toBe(99999998000000n);
+
+    const contractBalance = stxBalances.get(stackflowContract);
+    expect(contractBalance).toBe(3000000n);
+  });
+
+  it("account 1 can finalize account 1's cancel", () => {
+    // Setup the channel and save the channel key
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
+      address1
+    );
+    const { result: fundResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
+      address2
+    );
+    expect(fundResult.type).toBe(ClarityType.ResponseOk);
+    const channelKey = (fundResult as ResponseOkCV).value;
+
+    const cancel_height = simnet.burnBlockHeight;
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "force-cancel",
+      [Cl.none(), Cl.principal(address2)],
+      address1
+    );
+    expect(result).toBeOk(Cl.uint(cancel_height + WAITING_PERIOD));
+
+    // Increment the burn block height beyond the waiting period
+    simnet.mineEmptyBurnBlocks(WAITING_PERIOD + 1);
+
+    // Account 1 finalizes the closure
+    const { result: disputeResult } = simnet.callPublicFn(
+      "stackflow",
+      "finalize",
+      [Cl.none(), Cl.principal(address2)],
+      address1
+    );
+    expect(disputeResult).toBeOk(Cl.bool(false));
+
+    // Verify that the channel has been reset
+    const channel = simnet.getMapEntry(
+      stackflowContract,
+      "channels",
+      channelKey
+    );
+    expect(channel).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(0),
+        "balance-2": Cl.uint(0),
+        "expires-at": Cl.uint(MAX_HEIGHT),
+        nonce: Cl.uint(0),
+        closer: Cl.none(),
+      })
+    );
+
+    // Verify the balances have changed
+    const stxBalances = simnet.getAssetsMap().get("STX")!;
+
+    const balance1 = stxBalances.get(address1);
+    expect(balance1).toBe(100000000000000n);
+
+    const balance2 = stxBalances.get(address2);
+    expect(balance2).toBe(100000000000000n);
+
+    const contractBalance = stxBalances.get(stackflowContract);
+    expect(contractBalance).toBe(0n);
+  });
+
+  it("account 1 can finalize account 2's cancel", () => {
+    // Setup the channel and save the channel key
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
+      address1
+    );
+    const { result: fundResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
+      address2
+    );
+    expect(fundResult.type).toBe(ClarityType.ResponseOk);
+    const channelKey = (fundResult as ResponseOkCV).value;
+
+    const cancel_height = simnet.burnBlockHeight;
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "force-cancel",
+      [Cl.none(), Cl.principal(address1)],
+      address2
+    );
+    expect(result).toBeOk(Cl.uint(cancel_height + WAITING_PERIOD));
+
+    // Increment the burn block height
+    simnet.mineEmptyBurnBlocks(WAITING_PERIOD + 1);
+
+    // Account 1 finalizes the closure
+    const { result: disputeResult } = simnet.callPublicFn(
+      "stackflow",
+      "finalize",
+      [Cl.none(), Cl.principal(address2)],
+      address1
+    );
+    expect(disputeResult).toBeOk(Cl.bool(false));
+
+    // Verify that the channel has been reset
+    const channel = simnet.getMapEntry(
+      stackflowContract,
+      "channels",
+      channelKey
+    );
+    expect(channel).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(0),
+        "balance-2": Cl.uint(0),
+        "expires-at": Cl.uint(MAX_HEIGHT),
+        nonce: Cl.uint(0),
+        closer: Cl.none(),
+      })
+    );
+
+    // Verify the balances have changed
+    const stxBalances = simnet.getAssetsMap().get("STX")!;
+
+    const balance1 = stxBalances.get(address1);
+    expect(balance1).toBe(100000000000000n);
+
+    const balance2 = stxBalances.get(address2);
+    expect(balance2).toBe(100000000000000n);
+
+    const contractBalance = stxBalances.get(stackflowContract);
+    expect(contractBalance).toBe(0n);
+  });
+
+  it("account 1 can finalize account 1's force-close", () => {
+    // Setup the channel
+    const { result: fundResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
+      address1
+    );
+    expect(fundResult.type).toBe(ClarityType.ResponseOk);
+    const channelKey = (fundResult as ResponseOkCV).value;
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
+      address2
+    );
+
+    // Create the signatures
+    const signature1 = generateTransferSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      1600000,
+      1400000,
+      1
+    );
+    const signature2 = generateTransferSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      1400000,
+      1600000,
+      1
+    );
+
+    let heightBefore = simnet.burnBlockHeight;
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "force-close",
+      [
+        Cl.none(),
+        Cl.principal(address2),
+        Cl.uint(1600000),
+        Cl.uint(1400000),
+        Cl.buffer(signature1),
+        Cl.buffer(signature2),
+        Cl.uint(1),
+        Cl.uint(ChannelAction.Transfer),
+        Cl.none(),
+      ],
+      address1
+    );
+    expect(result).toBeOk(Cl.uint(heightBefore + WAITING_PERIOD));
+
+    // Increment the burn block height
+    simnet.mineEmptyBurnBlocks(WAITING_PERIOD + 1);
+
+    // Account 1 finalizes the closure
+    const { result: disputeResult } = simnet.callPublicFn(
+      "stackflow",
+      "finalize",
+      [Cl.none(), Cl.principal(address2)],
+      address1
+    );
+    expect(disputeResult).toBeOk(Cl.bool(false));
+
+    // Verify that the channel has been reset
+    const channel = simnet.getMapEntry(
+      stackflowContract,
+      "channels",
+      channelKey
+    );
+    expect(channel).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(0),
+        "balance-2": Cl.uint(0),
+        "expires-at": Cl.uint(MAX_HEIGHT),
+        nonce: Cl.uint(1),
+        closer: Cl.none(),
+      })
+    );
+
+    // Verify the balances have changed
+    const stxBalances = simnet.getAssetsMap().get("STX")!;
+
+    const balance1 = stxBalances.get(address1);
+    expect(balance1).toBe(100000000600000n);
+
+    const balance2 = stxBalances.get(address2);
+    expect(balance2).toBe(99999999400000n);
+
+    const contractBalance = stxBalances.get(stackflowContract);
+    expect(contractBalance).toBe(0n);
+  });
+
+  it("channel cannot be finalized before waiting period has passed", () => {
+    // Setup the channel and save the channel key
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
+      address1
+    );
+    const { result: fundResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
+      address2
+    );
+    expect(fundResult.type).toBe(ClarityType.ResponseOk);
+    const channelKey = (fundResult as ResponseOkCV).value;
+
+    const cancel_height = simnet.burnBlockHeight;
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "force-cancel",
+      [Cl.none(), Cl.principal(address2)],
+      address1
+    );
+    expect(result).toBeOk(Cl.uint(cancel_height + WAITING_PERIOD));
+
+    // Increment the burn block height
+    simnet.mineEmptyBurnBlocks(WAITING_PERIOD - 1);
+
+    // Account 1 tries to finalize the closure early
+    const { result: disputeResult } = simnet.callPublicFn(
+      "stackflow",
+      "finalize",
+      [Cl.none(), Cl.principal(address2)],
+      address1
+    );
+    expect(disputeResult).toBeErr(Cl.uint(TxError.NotExpired));
 
     // Verify that the map entry is unchanged
     const channel = simnet.getMapEntry(
@@ -3441,7 +3838,7 @@ describe("get-channel", () => {
       [Cl.none(), Cl.principal(address2)],
       address1
     );
-    expect(result).toBeOk(
+    expect(result).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(0),

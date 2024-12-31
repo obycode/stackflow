@@ -50,6 +50,7 @@
 (define-constant ERR_INVALID_WITHDRAWAL (err u116))
 (define-constant ERR_UNAPPROVED_TOKEN (err u117))
 (define-constant ERR_INCORRECT_NONCE (err u118))
+(define-constant ERR_NOT_EXPIRED (err u119))
 
 ;;; List of allowed SIP-010 tokens as set by the owner of the contract.
 ;;; This is required since SIP-010 tokens are not guaranteed not to have side-
@@ -115,8 +116,8 @@
         (closer (get closer channel))
       )
 
-      ;; If there was an existing channel, the nonce must match
-      (asserts! (is-eq (get nonce channel) nonce) ERR_INCORRECT_NONCE)
+      ;; If there was an existing channel, the new nonce must be equal or greater
+      (asserts! (>= (get nonce channel) nonce) ERR_INCORRECT_NONCE)
 
       ;; A forced closure must not be in progress
       (asserts! (is-none closer) ERR_CLOSE_IN_PROGRESS)
@@ -162,6 +163,9 @@
       (input (sha256 (concat structured-data-header data-hash)))
       (sender tx-sender)
     )
+    ;; The nonce must be greater than the channel's saved nonce
+    (asserts! (> nonce channel-nonce) ERR_NONCE_TOO_LOW)
+
     ;; If the total balance of the channel is not equal to the sum of the
     ;; balances provided, the channel close is invalid.
     (asserts!
@@ -176,8 +180,8 @@
     (asserts! (verify-signature input my-signature tx-sender) ERR_INVALID_SENDER_SIGNATURE)
     (asserts! (verify-signature input their-signature with) ERR_INVALID_OTHER_SIGNATURE)
 
-    ;; Remove the channel from the map.
-    (map-delete channels channel-key)
+    ;; Reset the channel in the map.
+    (reset-channel channel-key nonce)
 
     ;; Emit an event
     (print {
@@ -339,8 +343,8 @@
       (asserts! (verify-signature input my-signature tx-sender) ERR_INVALID_SENDER_SIGNATURE)
       (asserts! (verify-signature input their-signature with) ERR_INVALID_OTHER_SIGNATURE)
 
-      ;; Remove the channel from the map.
-      (map-delete channels channel-key)
+      ;; Reset the channel in the map.
+      (reset-channel channel-key nonce)
 
       ;; Emit an event
       (print {
@@ -354,6 +358,43 @@
 
       ;; Pay out the balances.
       (payout token tx-sender with my-balance their-balance)
+    )
+  )
+)
+
+;;; Close the channel after a forced cancel or closure, once the required
+;;; number of blocks have passed.
+(define-public (finalize  (token (optional <sip-010>)) (with principal))
+  (let
+    (
+      (channel-key (try! (get-channel-key (contract-of-optional token) tx-sender with)))
+      (channel (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
+      (closer (get closer channel))
+      (expires-at (get expires-at channel))
+    )
+    ;; A forced closure must be in progress
+    (asserts! (is-some closer) ERR_NO_CLOSE_IN_PROGRESS)
+
+    ;; The waiting period must have passed
+    (asserts! (> burn-block-height expires-at) ERR_NOT_EXPIRED)
+
+    ;; Reset the channel in the map.
+    (reset-channel channel-key (get nonce channel))
+
+    ;; Emit an event
+    (print {
+      event: "finalize",
+      channel-key: channel-key,
+      channel: channel,
+      sender: tx-sender,
+    })
+
+    (payout
+      token
+      (get principal-1 channel-key)
+      (get principal-2 channel-key)
+      (get balance-1 channel)
+      (get balance-2 channel)
     )
   )
 )
@@ -495,12 +536,9 @@
 ;;; Get the current balances of the channel between `tx-sender` and `with` for
 ;;; token `token` (`none` indicates STX).
 (define-read-only (get-channel (token (optional principal)) (with principal))
-  (let
-    (
-      (channel-key (try! (get-channel-key token tx-sender with)))
-      (channel (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
-    )
-    (ok channel)
+  (match (get-channel-key token tx-sender with)
+    channel-key (map-get? channels channel-key)
+    e none
   )
 )
 
@@ -723,5 +761,17 @@
       (unwrap! (as-contract (stx-transfer? balance-2 tx-sender principal-2)) ERR_WITHDRAWAL_FAILED)
       (ok false)
     )
+  )
+)
+
+;;; Reset the channel so that it is closed but retains the last nonce.
+(define-private (reset-channel
+    (channel-key { token: (optional principal), principal-1: principal, principal-2: principal })
+    (nonce uint)
+  )
+  (map-set
+    channels
+    channel-key
+    { balance-1: u0, balance-2: u0, expires-at: MAX_HEIGHT, nonce: nonce, closer: none }
   )
 )
