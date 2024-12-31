@@ -49,6 +49,7 @@
 (define-constant ERR_ALREADY_FUNDED (err u115))
 (define-constant ERR_INVALID_WITHDRAWAL (err u116))
 (define-constant ERR_UNAPPROVED_TOKEN (err u117))
+(define-constant ERR_INCORRECT_NONCE (err u118))
 
 ;;; List of allowed SIP-010 tokens as set by the owner of the contract.
 ;;; This is required since SIP-010 tokens are not guaranteed not to have side-
@@ -90,7 +91,7 @@
 ;;; `with` for FT `token` (`none` indicates STX). Create the channel if one
 ;;; does not already exist.
 ;;; Returns the channel key on success.
-(define-public (fund-channel (token (optional <sip-010>)) (amount uint) (with principal))
+(define-public (fund-channel (token (optional <sip-010>)) (amount uint) (with principal) (nonce uint))
   (begin
     ;; If a SIP-010 token is specified, it must be in the allowed list
     (match token
@@ -107,12 +108,16 @@
             existing-channel
             ch
             ch
-            { balance-1: u0, balance-2: u0, expires-at: MAX_HEIGHT, nonce: u0, closer: none }
+            { balance-1: u0, balance-2: u0, expires-at: MAX_HEIGHT, nonce: nonce, closer: none }
           )
         )
         (updated-channel (try! (increase-sender-balance channel-key channel token amount)))
         (closer (get closer channel))
       )
+
+      ;; If there was an existing channel, the nonce must match
+      (asserts! (is-eq (get nonce channel) nonce) ERR_INCORRECT_NONCE)
+
       ;; A forced closure must not be in progress
       (asserts! (is-none closer) ERR_CLOSE_IN_PROGRESS)
 
@@ -122,11 +127,14 @@
       (asserts! (not (is-funded tx-sender channel-key channel)) ERR_ALREADY_FUNDED)
 
       (map-set channels channel-key updated-channel)
+
+      ;; Emit an event
       (print {
         event: "channel-funded",
         channel-key: channel-key,
         sender: tx-sender,
         amount: amount,
+        channel: updated-channel,
       })
       (ok channel-key)
     )
@@ -184,8 +192,8 @@
   (let
     (
       (channel-key (try! (get-channel-key (contract-of-optional token) tx-sender with)))
-      (balances (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
-      (closer (get closer balances))
+      (channel (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
+      (closer (get closer channel))
       (expires-at (+ burn-block-height WAITING_PERIOD))
     )
     ;; A forced closure must not be in progress
@@ -195,7 +203,7 @@
     (map-set
       channels
       channel-key
-      (merge balances { expires-at: expires-at, closer: (some tx-sender) })
+      (merge channel { expires-at: expires-at, closer: (some tx-sender) })
     )
 
     (ok expires-at)
@@ -220,19 +228,22 @@
   (let
     (
       (channel-key (try! (get-channel-key (contract-of-optional token) tx-sender with)))
-      (balances (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
-      (channel-nonce (get nonce balances))
-      (closer (get closer balances))
+      (channel (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
+      (channel-nonce (get nonce channel))
+      (closer (get closer channel))
     )
     ;; Exit early if a forced closure is already in progress.
     (asserts! (is-none closer) ERR_CLOSE_IN_PROGRESS)
+
+    ;; Exit early if the nonce is less than the channel's nonce
+    (asserts! (> nonce channel-nonce) ERR_NONCE_TOO_LOW)
 
     ;; If the total balance of the channel is not equal to the sum of the
     ;; balances provided, the channel close is invalid.
     (asserts!
       (is-eq
         (+ my-balance their-balance)
-        (+ (get balance-1 balances) (get balance-2 balances))
+        (+ (get balance-1 channel) (get balance-2 channel))
       )
       ERR_INVALID_TOTAL_BALANCE
     )
@@ -247,7 +258,7 @@
           { balance-1: my-balance, balance-2: their-balance }
           { balance-1: their-balance, balance-2: my-balance }
         ))
-        (complete-balances (merge new-balances { expires-at: expires-at, closer: (some tx-sender), nonce: nonce }))
+        (new-channel (merge new-balances { expires-at: expires-at, closer: (some tx-sender), nonce: nonce }))
       )
 
       ;; Verify the signatures of the two parties.
@@ -258,7 +269,7 @@
       (map-set
         channels
         channel-key
-        complete-balances
+        new-channel
       )
 
       (ok expires-at)
@@ -284,24 +295,20 @@
   (let
     (
       (channel-key (try! (get-channel-key (contract-of-optional token) tx-sender with)))
-      (balances (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
-      (expires-at (get expires-at balances))
-      (close-nonce (get nonce balances))
-      (closer (unwrap! (get closer balances) ERR_NO_CLOSE_IN_PROGRESS))
+      (channel (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
+      (expires-at (get expires-at channel))
+      (channel-nonce (get nonce channel))
+      (closer (unwrap! (get closer channel) ERR_NO_CLOSE_IN_PROGRESS))
     )
     (asserts! (not (is-eq tx-sender closer)) ERR_SELF_DISPUTE)
     (asserts! (< burn-block-height expires-at) ERR_CHANNEL_EXPIRED)
-    (asserts! (> nonce close-nonce) ERR_NONCE_TOO_LOW)
+    (asserts! (> nonce channel-nonce) ERR_NONCE_TOO_LOW)
 
     (let
       (
         (data (make-channel-data channel-key my-balance their-balance nonce action actor))
         (data-hash (sha256 (unwrap! (to-consensus-buff? data) ERR_CONSENSUS_BUFF)))
         (input (sha256 (concat structured-data-header data-hash)))
-        (new-balances (if (is-eq tx-sender (get principal-1 channel-key))
-          { balance-1: my-balance, balance-2: their-balance }
-          { balance-1: their-balance, balance-2: my-balance }
-        ))
       )
 
       ;; Verify the signatures of the two parties.
@@ -453,13 +460,13 @@
 
 ;;; Get the current balances of the channel between `tx-sender` and `with` for
 ;;; token `token` (`none` indicates STX).
-(define-read-only (get-channel-balances (token (optional principal)) (with principal))
+(define-read-only (get-channel (token (optional principal)) (with principal))
   (let
     (
       (channel-key (try! (get-channel-key token tx-sender with)))
-      (balances (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
+      (channel (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
     )
-    (ok balances)
+    (ok channel)
   )
 )
 
@@ -510,7 +517,7 @@
 ;;; balances.
 (define-private (increase-sender-balance
     (channel-key { token: (optional principal), principal-1: principal, principal-2: principal })
-    (balances { balance-1: uint, balance-2: uint, expires-at: uint, nonce: uint, closer: (optional principal) })
+    (channel { balance-1: uint, balance-2: uint, expires-at: uint, nonce: uint, closer: (optional principal) })
     (token (optional <sip-010>))
     (amount uint)
   )
@@ -522,8 +529,8 @@
     )
     (ok
       (if (is-eq tx-sender (get principal-1 channel-key))
-        (merge balances { balance-1: (+ (get balance-1 balances) amount) })
-        (merge balances { balance-2: (+ (get balance-2 balances) amount) })
+        (merge channel { balance-1: (+ (get balance-1 channel) amount) })
+        (merge channel { balance-2: (+ (get balance-2 channel) amount) })
       )
     )
   )
@@ -553,11 +560,11 @@
 (define-private (is-funded
     (account principal)
     (channel-key { token: (optional principal), principal-1: principal, principal-2: principal })
-    (balances { balance-1: uint, balance-2: uint, expires-at: uint, nonce: uint, closer: (optional principal) })
+    (channel { balance-1: uint, balance-2: uint, expires-at: uint, nonce: uint, closer: (optional principal) })
   )
   (or
-    (and (is-eq account (get principal-1 channel-key)) (> (get balance-1 balances) u0))
-    (and (is-eq account (get principal-2 channel-key)) (> (get balance-2 balances) u0))
+    (and (is-eq account (get principal-1 channel-key)) (> (get balance-1 channel) u0))
+    (and (is-eq account (get principal-2 channel-key)) (> (get balance-2 channel) u0))
   )
 )
 

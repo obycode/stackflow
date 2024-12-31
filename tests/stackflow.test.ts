@@ -298,7 +298,7 @@ describe("fund-channel", () => {
     const { result } = simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     expect(result).toBeOk(
@@ -343,13 +343,13 @@ describe("fund-channel", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result } = simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(result).toBeOk(
@@ -394,7 +394,7 @@ describe("fund-channel", () => {
     const { result } = simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     expect(result).toBeOk(
@@ -409,7 +409,7 @@ describe("fund-channel", () => {
     const { result: badResult } = simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     expect(badResult).toBeErr(Cl.uint(TxError.AlreadyFunded));
@@ -447,13 +447,13 @@ describe("fund-channel", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result } = simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(result).toBeOk(
@@ -484,7 +484,7 @@ describe("fund-channel", () => {
     const { result: badResult } = simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(3000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(3000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(badResult).toBeErr(Cl.uint(TxError.AlreadyFunded));
@@ -540,6 +540,7 @@ describe("fund-channel", () => {
         Cl.some(Cl.principal(`${deployer}.test-token`)),
         Cl.uint(1000000),
         Cl.principal(address2),
+        Cl.uint(0),
       ],
       address1
     );
@@ -576,6 +577,7 @@ describe("fund-channel", () => {
         Cl.some(Cl.principal(`${deployer}.test-token`)),
         Cl.uint(1000000),
         Cl.principal(address2),
+        Cl.uint(0),
       ],
       address1
     );
@@ -647,6 +649,7 @@ describe("fund-channel", () => {
         Cl.some(Cl.principal(`${deployer}.test-token`)),
         Cl.uint(1000000),
         Cl.principal(address2),
+        Cl.uint(0),
       ],
       address1
     );
@@ -657,6 +660,7 @@ describe("fund-channel", () => {
         Cl.some(Cl.principal(`${deployer}.test-token`)),
         Cl.uint(2000000),
         Cl.principal(address1),
+        Cl.uint(0),
       ],
       address2
     );
@@ -728,6 +732,7 @@ describe("fund-channel", () => {
         Cl.some(Cl.principal(`${deployer}.test-token`)),
         Cl.uint(1000000),
         Cl.principal(address2),
+        Cl.uint(0),
       ],
       address1
     );
@@ -747,6 +752,7 @@ describe("fund-channel", () => {
         Cl.some(Cl.principal(`${deployer}.test-token`)),
         Cl.uint(2000000),
         Cl.principal(address2),
+        Cl.uint(0),
       ],
       address1
     );
@@ -811,6 +817,7 @@ describe("fund-channel", () => {
         Cl.some(Cl.principal(`${deployer}.test-token`)),
         Cl.uint(1000000),
         Cl.principal(address2),
+        Cl.uint(0),
       ],
       address1
     );
@@ -821,6 +828,7 @@ describe("fund-channel", () => {
         Cl.some(Cl.principal(`${deployer}.test-token`)),
         Cl.uint(2000000),
         Cl.principal(address1),
+        Cl.uint(0),
       ],
       address2
     );
@@ -856,6 +864,7 @@ describe("fund-channel", () => {
         Cl.some(Cl.principal(`${deployer}.test-token`)),
         Cl.uint(3000000),
         Cl.principal(address1),
+        Cl.uint(0),
       ],
       address2
     );
@@ -897,13 +906,13 @@ describe("close-channel", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
 
@@ -958,13 +967,13 @@ describe("close-channel", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
 
@@ -1019,13 +1028,13 @@ describe("close-channel", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
 
@@ -1080,13 +1089,13 @@ describe("close-channel", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
 
@@ -1141,13 +1150,13 @@ describe("close-channel", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
 
@@ -1205,13 +1214,13 @@ describe("close-channel", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
 
@@ -1269,13 +1278,13 @@ describe("close-channel", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
 
@@ -1335,7 +1344,7 @@ describe("force-cancel", () => {
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
@@ -1343,7 +1352,7 @@ describe("force-cancel", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
 
@@ -1390,13 +1399,13 @@ describe("force-cancel", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
@@ -1444,13 +1453,13 @@ describe("force-cancel", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
 
@@ -1470,7 +1479,7 @@ describe("force-close", () => {
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
@@ -1478,7 +1487,7 @@ describe("force-close", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
 
@@ -1554,13 +1563,13 @@ describe("force-close", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
@@ -1638,13 +1647,13 @@ describe("force-close", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
 
@@ -1704,13 +1713,13 @@ describe("force-close", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
 
@@ -1770,13 +1779,13 @@ describe("force-close", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
 
@@ -1838,13 +1847,13 @@ describe("dispute-closure", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
 
@@ -1885,13 +1894,13 @@ describe("dispute-closure", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
@@ -1970,13 +1979,13 @@ describe("dispute-closure", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
@@ -2059,13 +2068,13 @@ describe("dispute-closure", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
@@ -2148,13 +2157,13 @@ describe("dispute-closure", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
@@ -2248,13 +2257,13 @@ describe("deposit", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(fundResult).toBeOk(
@@ -2345,13 +2354,13 @@ describe("deposit", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(fundResult).toBeOk(
@@ -2441,13 +2450,13 @@ describe("deposit", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(fundResult).toBeOk(
@@ -2577,13 +2586,13 @@ describe("deposit", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
 
@@ -2610,13 +2619,13 @@ describe("deposit", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(fundResult).toBeOk(
@@ -2700,13 +2709,13 @@ describe("deposit", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(fundResult).toBeOk(
@@ -2817,13 +2826,13 @@ describe("withdraw", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(fundResult).toBeOk(
@@ -2914,13 +2923,13 @@ describe("withdraw", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(fundResult).toBeOk(
@@ -3011,13 +3020,13 @@ describe("withdraw", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(fundResult).toBeOk(
@@ -3102,13 +3111,13 @@ describe("withdraw", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(fundResult).toBeOk(
@@ -3193,13 +3202,13 @@ describe("withdraw", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(fundResult).toBeOk(
@@ -3284,13 +3293,13 @@ describe("withdraw", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(2000000), Cl.principal(address1)],
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(fundResult).toBeOk(
@@ -3418,17 +3427,17 @@ describe("withdraw", () => {
   });
 });
 
-describe("get-channel-balances", () => {
-  it("returns the channel balances", () => {
+describe("get-channel", () => {
+  it("returns the channel info", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result } = simnet.callReadOnlyFn(
       "stackflow",
-      "get-channel-balances",
+      "get-channel",
       [Cl.none(), Cl.principal(address2)],
       address1
     );
@@ -3616,7 +3625,7 @@ describe("execute-withdraw", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(1000000), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
 
@@ -3642,7 +3651,7 @@ describe("execute-withdraw", () => {
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
-      [Cl.none(), Cl.uint(100), Cl.principal(address2)],
+      [Cl.none(), Cl.uint(100), Cl.principal(address2), Cl.uint(0)],
       address1
     );
 
