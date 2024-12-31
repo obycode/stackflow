@@ -130,11 +130,11 @@
 
       ;; Emit an event
       (print {
-        event: "channel-funded",
+        event: "fund-channel",
         channel-key: channel-key,
+        channel: updated-channel,
         sender: tx-sender,
         amount: amount,
-        channel: updated-channel,
       })
       (ok channel-key)
     )
@@ -179,6 +179,14 @@
     ;; Remove the channel from the map.
     (map-delete channels channel-key)
 
+    ;; Emit an event
+    (print {
+      event: "close-channel",
+      channel-key: channel-key,
+      channel: channel,
+      sender: tx-sender,
+    })
+
     ;; Pay out the balances.
     (payout token tx-sender with my-balance their-balance)
   )
@@ -205,6 +213,14 @@
       channel-key
       (merge channel { expires-at: expires-at, closer: (some tx-sender) })
     )
+
+    ;; Emit an event
+    (print {
+      event: "force-cancel",
+      channel-key: channel-key,
+      channel: channel,
+      sender: tx-sender,
+    })
 
     (ok expires-at)
   )
@@ -272,6 +288,14 @@
         new-channel
       )
 
+      ;; Emit an event
+      (print {
+        event: "force-close",
+        channel-key: channel-key,
+        channel: new-channel,
+        sender: tx-sender,
+      })
+
       (ok expires-at)
     )
   )
@@ -317,6 +341,16 @@
 
       ;; Remove the channel from the map.
       (map-delete channels channel-key)
+
+      ;; Emit an event
+      (print {
+        event: "dispute-closure",
+        channel-key: channel-key,
+        channel: channel,
+        sender: tx-sender,
+        sender-balance: my-balance,
+        other-balance: their-balance,
+      })
 
       ;; Pay out the balances.
       (payout token tx-sender with my-balance their-balance)
@@ -380,9 +414,9 @@
     (print {
       event: "deposit",
       channel-key: channel-key,
+      channel: updated-channel,
       sender: tx-sender,
       amount: amount,
-      channel: updated-channel,
     })
     (ok channel-key)
   )
@@ -447,9 +481,9 @@
     (print {
       event: "deposit",
       channel-key: channel-key,
+      channel: updated-channel,
       sender: tx-sender,
       amount: amount,
-      channel: updated-channel,
     })
     (ok channel-key)
   )
