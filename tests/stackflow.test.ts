@@ -106,7 +106,8 @@ function generateChannelSignature(
   theirBalance: number,
   nonce: number,
   action: ChannelAction,
-  actor: string | null = null
+  actor: string | null = null,
+  secret: string | null = null
 ): Buffer {
   const meFirst = myPrincipal < theirPrincipal;
   const principal1 = meFirst ? myPrincipal : theirPrincipal;
@@ -119,6 +120,11 @@ function generateChannelSignature(
       ? Cl.none()
       : Cl.some(Cl.contractPrincipal(token[0], token[1]));
   const actorCV = actor === null ? Cl.none() : Cl.some(Cl.principal(actor));
+  const secretCV =
+    secret === null
+      ? Cl.none()
+      : Cl.some(Cl.buffer(sha256(Buffer.from(secret, "hex"))));
+  console.log("secretCV", cvToString(secretCV));
 
   const data = Cl.tuple({
     token: tokenCV,
@@ -129,6 +135,7 @@ function generateChannelSignature(
     nonce: Cl.uint(nonce),
     action: Cl.uint(action),
     actor: actorCV,
+    "hashed-secret": secretCV,
   });
   return signStructuredData(privateKey, data);
 }
@@ -161,7 +168,8 @@ function generateTransferSignature(
   theirPrincipal: string,
   myBalance: number,
   theirBalance: number,
-  nonce: number
+  nonce: number,
+  secret: string | null = null
 ): Buffer {
   return generateChannelSignature(
     privateKey,
@@ -171,7 +179,9 @@ function generateTransferSignature(
     myBalance,
     theirBalance,
     nonce,
-    ChannelAction.Transfer
+    ChannelAction.Transfer,
+    null,
+    secret
   );
 }
 
@@ -1527,6 +1537,7 @@ describe("force-close", () => {
         Cl.uint(1),
         Cl.uint(ChannelAction.Transfer),
         Cl.none(),
+        Cl.none(),
       ],
       address1
     );
@@ -1611,6 +1622,7 @@ describe("force-close", () => {
         Cl.uint(1),
         Cl.uint(ChannelAction.Transfer),
         Cl.none(),
+        Cl.none(),
       ],
       address2
     );
@@ -1692,6 +1704,7 @@ describe("force-close", () => {
         Cl.uint(1),
         Cl.uint(ChannelAction.Transfer),
         Cl.none(),
+        Cl.none(),
       ],
       address1
     );
@@ -1757,6 +1770,7 @@ describe("force-close", () => {
         Cl.buffer(signature1),
         Cl.uint(1),
         Cl.uint(ChannelAction.Transfer),
+        Cl.none(),
         Cl.none(),
       ],
       address2
@@ -1824,6 +1838,7 @@ describe("force-close", () => {
         Cl.uint(1),
         Cl.uint(ChannelAction.Transfer),
         Cl.none(),
+        Cl.none(),
       ],
       address1
     );
@@ -1885,6 +1900,7 @@ describe("dispute-closure", () => {
         Cl.uint(1),
         Cl.uint(ChannelAction.Transfer),
         Cl.none(),
+        Cl.none(),
       ],
       address3
     );
@@ -1941,6 +1957,7 @@ describe("dispute-closure", () => {
         Cl.buffer(signature1),
         Cl.uint(1),
         Cl.uint(ChannelAction.Transfer),
+        Cl.none(),
         Cl.none(),
       ],
       address2
@@ -2039,6 +2056,7 @@ describe("dispute-closure", () => {
         Cl.uint(1),
         Cl.uint(ChannelAction.Transfer),
         Cl.none(),
+        Cl.none(),
       ],
       address2
     );
@@ -2135,6 +2153,7 @@ describe("dispute-closure", () => {
         Cl.buffer(signature2),
         Cl.uint(1),
         Cl.uint(ChannelAction.Transfer),
+        Cl.none(),
         Cl.none(),
       ],
       address1
@@ -2234,6 +2253,7 @@ describe("dispute-closure", () => {
         Cl.buffer(signature2),
         Cl.uint(1),
         Cl.uint(ChannelAction.Transfer),
+        Cl.none(),
         Cl.none(),
       ],
       address1
@@ -2534,6 +2554,7 @@ describe("finalize", () => {
         Cl.buffer(signature2),
         Cl.uint(1),
         Cl.uint(ChannelAction.Transfer),
+        Cl.none(),
         Cl.none(),
       ],
       address1
@@ -4087,6 +4108,7 @@ describe("make-channel-data", () => {
         Cl.uint(4),
         Cl.uint(ChannelAction.Transfer),
         Cl.none(),
+        Cl.none(),
       ],
       address1
     );
@@ -4099,6 +4121,7 @@ describe("make-channel-data", () => {
       nonce: Cl.uint(4),
       action: Cl.uint(ChannelAction.Transfer),
       actor: Cl.none(),
+      "hashed-secret": Cl.none(),
     });
   });
 
@@ -4117,6 +4140,7 @@ describe("make-channel-data", () => {
         Cl.uint(7),
         Cl.uint(ChannelAction.Close),
         Cl.none(),
+        Cl.none(),
       ],
       address2
     );
@@ -4129,6 +4153,7 @@ describe("make-channel-data", () => {
       nonce: Cl.uint(7),
       action: Cl.uint(ChannelAction.Close),
       actor: Cl.none(),
+      "hashed-secret": Cl.none(),
     });
   });
 });
@@ -4196,5 +4221,180 @@ describe("update-channel-tuple", () => {
       nonce: Cl.uint(4),
       closer: Cl.some(Cl.principal(address1)),
     });
+  });
+});
+
+describe("transfers with secrets", () => {
+  it("can transfer and force-close with a secret", () => {
+    // Setup the channel
+    const { result: fundResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
+      address1
+    );
+    expect(fundResult.type).toBe(ClarityType.ResponseOk);
+    const channelKey = (fundResult as ResponseOkCV).value;
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
+      address2
+    );
+
+    // Create the signatures
+    const signature1 = generateTransferSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      1600000,
+      1400000,
+      1,
+      "1234567890abcdef"
+    );
+    const signature2 = generateTransferSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      1400000,
+      1600000,
+      1,
+      "1234567890abcdef"
+    );
+
+    let heightBefore = simnet.burnBlockHeight;
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "force-close",
+      [
+        Cl.none(),
+        Cl.principal(address2),
+        Cl.uint(1600000),
+        Cl.uint(1400000),
+        Cl.buffer(signature1),
+        Cl.buffer(signature2),
+        Cl.uint(1),
+        Cl.uint(ChannelAction.Transfer),
+        Cl.none(),
+        Cl.some(Cl.bufferFromHex("1234567890abcdef")),
+      ],
+      address1
+    );
+    expect(result).toBeOk(Cl.uint(heightBefore + WAITING_PERIOD));
+
+    // Verify that the waiting period has been set in the map
+    const channel = simnet.getMapEntry(
+      stackflowContract,
+      "channels",
+      channelKey
+    );
+    expect(channel).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(1600000),
+        "balance-2": Cl.uint(1400000),
+        "expires-at": Cl.uint(heightBefore + WAITING_PERIOD),
+        nonce: Cl.uint(1),
+        closer: Cl.some(Cl.principal(address1)),
+      })
+    );
+
+    // Verify the balances have not changed yet
+    const stxBalances = simnet.getAssetsMap().get("STX")!;
+    const balance1 = stxBalances.get(address1);
+    expect(balance1).toBe(99999999000000n);
+
+    const balance2 = stxBalances.get(address2);
+    expect(balance2).toBe(99999998000000n);
+
+    const contractBalance = stxBalances.get(stackflowContract);
+    expect(contractBalance).toBe(3000000n);
+  });
+
+  it("force-close with incorrect secret fails", () => {
+    // Setup the channel
+    const { result: fundResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
+      address1
+    );
+    expect(fundResult.type).toBe(ClarityType.ResponseOk);
+    const channelKey = (fundResult as ResponseOkCV).value;
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
+      address2
+    );
+
+    // Create the signatures
+    const signature1 = generateTransferSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      1600000,
+      1400000,
+      1,
+      "1234567890abcdef"
+    );
+    const signature2 = generateTransferSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      1400000,
+      1600000,
+      1,
+      "1234567890abcdef"
+    );
+
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "force-close",
+      [
+        Cl.none(),
+        Cl.principal(address2),
+        Cl.uint(1600000),
+        Cl.uint(1400000),
+        Cl.buffer(signature1),
+        Cl.buffer(signature2),
+        Cl.uint(1),
+        Cl.uint(ChannelAction.Transfer),
+        Cl.none(),
+        Cl.some(Cl.bufferFromHex("1234567890abcdee")),
+      ],
+      address1
+    );
+    expect(result).toBeErr(Cl.uint(TxError.InvalidSenderSignature));
+
+    // Verify that the map has not changed
+    const channel = simnet.getMapEntry(
+      stackflowContract,
+      "channels",
+      channelKey
+    );
+    expect(channel).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(1000000),
+        "balance-2": Cl.uint(2000000),
+        "expires-at": Cl.uint(MAX_HEIGHT),
+        nonce: Cl.uint(0),
+        closer: Cl.none(),
+      })
+    );
+
+    // Verify the balances have not changed yet
+    const stxBalances = simnet.getAssetsMap().get("STX")!;
+    const balance1 = stxBalances.get(address1);
+    expect(balance1).toBe(99999999000000n);
+
+    const balance2 = stxBalances.get(address2);
+    expect(balance2).toBe(99999998000000n);
+
+    const contractBalance = stxBalances.get(stackflowContract);
+    expect(contractBalance).toBe(3000000n);
   });
 });

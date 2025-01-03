@@ -158,7 +158,7 @@
       (channel (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
       (channel-nonce (get nonce channel))
       (closer (get closer channel))
-      (data (make-channel-data channel-key my-balance their-balance nonce ACTION_CLOSE none))
+      (data (make-channel-data channel-key my-balance their-balance nonce ACTION_CLOSE none none))
       (data-hash (sha256 (unwrap! (to-consensus-buff? data) ERR_CONSENSUS_BUFF)))
       (input (sha256 (concat structured-data-header data-hash)))
       (sender tx-sender)
@@ -244,6 +244,7 @@
     (nonce uint)
     (action uint)
     (actor (optional principal))
+    (secret (optional (buff 32)))
   )
   (let
     (
@@ -271,7 +272,7 @@
     (let
       (
         (expires-at (+ burn-block-height WAITING_PERIOD))
-        (data (make-channel-data channel-key my-balance their-balance nonce action actor))
+        (data (make-channel-data channel-key my-balance their-balance nonce action actor secret))
         (data-hash (sha256 (unwrap! (to-consensus-buff? data) ERR_CONSENSUS_BUFF)))
         (input (sha256 (concat structured-data-header data-hash)))
         (new-balances (if (is-eq tx-sender (get principal-1 channel-key))
@@ -319,6 +320,7 @@
     (nonce uint)
     (action uint)
     (actor (optional principal))
+    (secret (optional (buff 32)))
   )
   (let
     (
@@ -334,7 +336,7 @@
 
     (let
       (
-        (data (make-channel-data channel-key my-balance their-balance nonce action actor))
+        (data (make-channel-data channel-key my-balance their-balance nonce action actor secret))
         (data-hash (sha256 (unwrap! (to-consensus-buff? data) ERR_CONSENSUS_BUFF)))
         (input (sha256 (concat structured-data-header data-hash)))
       )
@@ -420,7 +422,7 @@
       (channel-nonce (get nonce channel))
       (closer (get closer channel))
       (updated-channel (update-channel-tuple channel-key channel my-balance their-balance nonce))
-      (data (make-channel-data channel-key my-balance their-balance nonce ACTION_DEPOSIT (some tx-sender)))
+      (data (make-channel-data channel-key my-balance their-balance nonce ACTION_DEPOSIT (some tx-sender) none))
       (data-hash (sha256 (unwrap! (to-consensus-buff? data) ERR_CONSENSUS_BUFF)))
       (input (sha256 (concat structured-data-header data-hash)))
     )
@@ -484,7 +486,7 @@
       (channel-nonce (get nonce channel))
       (closer (get closer channel))
       (updated-channel (update-channel-tuple channel-key channel my-balance their-balance nonce))
-      (data (make-channel-data channel-key my-balance their-balance nonce ACTION_WITHDRAWAL (some tx-sender)))
+      (data (make-channel-data channel-key my-balance their-balance nonce ACTION_WITHDRAWAL (some tx-sender) none))
       (data-hash (sha256 (unwrap! (to-consensus-buff? data) ERR_CONSENSUS_BUFF)))
       (input (sha256 (concat structured-data-header data-hash)))
     )
@@ -702,6 +704,7 @@
     (nonce uint)
     (action uint)
     (actor (optional principal))
+    (secret (optional (buff 32)))
   )
   (let
     (
@@ -709,8 +712,17 @@
         { balance-1: my-balance, balance-2: their-balance }
         { balance-1: their-balance, balance-2: my-balance }
       ))
+      (hashed-secret (match secret s (some (sha256 s)) none))
     )
-    (merge (merge channel-key balances) { nonce: nonce, action: action, actor: actor })
+    (merge
+      (merge channel-key balances)
+      {
+        nonce: nonce,
+        action: action,
+        actor: actor,
+        hashed-secret: hashed-secret,
+      }
+    )
   )
 )
 
