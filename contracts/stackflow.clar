@@ -695,6 +695,8 @@
 ;;; - balance-2: the balance of the second principal in the channel
 ;;; - nonce: the nonce for this channel data
 ;;; - action: the action being performed (e.g., "close")
+;;; - actor: the principal performing the action
+;;; - hashed-secret: the optional hashed secret for the channel operation
 ;;; This function assumes that the channel has already been validated to
 ;;; include these two principals.
 (define-private (make-channel-data

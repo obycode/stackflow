@@ -15,21 +15,23 @@ nonce to track their ordering.
 The channel can be closed at any time by either participant by calling
 `close-channel`, and passing in signed messages from each participant in which
 they have agreed upon the desire to close the channel and on the final balances.
-Alternatively, the channel can be closed by calling `force-close-channel` with
-the latest signed messages from both participants. In this case, either party
-has 288 Bitcoin blocks (~2 days) to rebut the submitted balances by submitting a
-newer set of signed messages.
+Alternatively, the channel can be closed by calling `force-close` with the
+latest signed messages from both participants. In this case, either party has
+144 Bitcoin blocks (~1 day) to rebut the submitted balances by submitting a
+newer set of signed messages. If the closure is successfully disputed with valid
+signatures and a higher nonce, those balances are immediately paid out and the
+channel is closed.
 
 Channels can be chained together to enable payments between users who do not
 have a direct channel open between them. This is done by routing the payment
 through intermediaries who have channels open with both the sender and receiver.
-Off-chain, tools can find the most efficient route to route the payment.
+Off-chain, tools can find the most efficient path to route the payment.
 Intermediary nodes can charge a fee for routing payments. In the case of chained
 channels, the signed messages passed around include a requirement for a secret
 to unlock the funds. This ensures that if any hop in the chain fails to send the
-tokens as promised, the whole transaction can be reverted, ensuring that the
-sender and receiver can ensure they payment goes through or they get their
-tokens back, even with untrusted intermediaries.
+tokens as promised, the whole transaction can be reverted, allowing the sender
+and receiver to be sure that the payment goes through completely or they get
+their tokens back, even with untrusted intermediaries.
 
 Example:
 
@@ -56,7 +58,7 @@ for example using Dijkstra's algorithm. If a path is not possible, then a new
 channel must be opened. Once a path is defined, **A** builds the transfer
 message.
 
-### Channel Balance
+### Transfer Message
 
 In the transfer message, first we have a channel balance component in which
 **A** is confirming a new set of balances for the channel. This structure may
@@ -70,9 +72,15 @@ be confirmed.
    principal-2: principal,
    balance-1: uint,
    balance-2: uint,
-   secret-hash: (optional (buff 64))
+   nonce: uint,
+   action: uint,
+   actor: (optional principal),
+   hashed-secret: (optional (buff 32))
 }
 ```
+
+Along with this tuple, the sender sends its signature, signing over this value.
+The receiver should first validate the signature before taking any other action.
 
 ### Next Hops
 
@@ -81,47 +89,33 @@ order to get the channel balance confirmed. For the final hop in the chain, the
 target receiver of the payment will have no next hop, since at that point, the
 payment is complete. For all other hops in the chain, the receiver of the
 message uses the next hop to determine how to build its transfer message,
-defining which principal to send to, `receiver`, how much to send, `amount`, an
-encrypted secret, `secret`, and an array of encrypted information about the hops
-in the transaction chain, `next_hops`.
+defining which principal to send to, `receiver`, how much to send, `amount`, how
+much should be leftover to keep for itself as a fee, `fee`, an encrypted secret,
+`secret`.
 
-```js
-{
-   receiver: principal,
-   amount: uint,
-   secret: buffer,
-   next_hops: buffer[8],
-}
+```ts
+type Hop = {
+  receiver: string;
+  amount: bigint;
+  fee: bigint;
+  secret: Uint8Array;
+};
 ```
 
-`secret` is encrypted iteratively, such that it must be decrypted by each hop
-and passed onto the next. For example, with a path of **A** → **B** → **C** →
-**D**, **A** would generate a secret, `secret`, and then send the following to
-the first hop, **B**:
-
-```js
-encrypt(encrypt(encrypt(secret, pk_D), pk_C), pk_B);
-```
-
-Each layer decrypts the secret, then sends the result on to the next hop. When
-the secret finally reaches the destination, **D**, **A**'s secret will be fully
-decrypted.
-
-`next_hops` is an array of 8 buffers that may hold encrypted next hop
-information for one step in this transaction, or they may just contain random
-data. This is done so that no node in the chain is able to learn anything about
-the length of the chain, preserving privacy. Each hop in the chain attempts to
-decrypt each buffer until it finds the one encrypted with its public key.
-
-```js
-{
-   receiver: principal,
-   amount: uint,
-}
-```
+The initial sender constructs an array of 8 of these objects, encrypting each
+with the public key of the intended target. If less than 8 hops are needed, then
+random data is filled into the remaining slots. The sender then sends this
+array, along with its signature to the first hop in the chain, along with the
+index for that hop. That first hop decrypts the value at the specified hop and
+uses the information within to send a signature and the array to the next hop,
+along with the index for that next hop.
 
 For the final hop in the chain, **D** in our example, the `receiver` is set to
-**D** and the amount is set to `0`.
+**D** itself and the amount is set to `0`. This is the signal to **D** that it
+is the final destination for this payment, so it can reply back to the previous
+hop with the decrypted secret. Each hop validates, then passes this decrypted
+secret back to its predecessor, eventually reaching the source and validating
+the completed payment.
 
 ## Closing a channel
 
@@ -135,11 +129,11 @@ In the unfortunate scenario where one party becomes unresponsive, the other
 party needs a way to retrieve their funds from the channel unilaterally. This
 user has two options:
 
-1. `force-close` allows the user to close the channel and refund the initial
+1. `force-cancel` allows the user to close the channel and refund the initial
    balances to both parties. This option requires no signatures, but it does
    require a waiting period, allowing the other party to dispute the closure by
    submitting signatures validating a transfer on this channel.
-2. `stateful-close` allows the user to close the channel and return the balances
+2. `force-close` allows the user to close the channel and return the balances
    recorded in the latest transfer on this channel. Arguments to this function
    include signatures from the latest transfer, along with the agreed upon
    balances at that transfer. This function also requires a waiting period,
@@ -150,9 +144,9 @@ user has two options:
 During the waiting period for both of these closures, the other party may call
 `dispute-closure`, passing in balances and signatures from the latest transfer.
 If the signatures are confirmed, and the nonce is higher in the case of a
-`stateful-close`, then the channel is immediately closed, transferring with the
+`force-close`, then the channel is immediately closed, transferring with the
 balances specified to both parties.
 
 If the closure is not disputed by the time the waiting period is over, the the
-user may call `finalize-closure` to complete the closure and transfer the
-appropriate balances to both parties.
+user may call `finalize` to complete the closure and transfer the appropriate
+balances to both parties.
