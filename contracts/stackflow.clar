@@ -67,6 +67,9 @@
   { balance-1: uint, balance-2: uint, expires-at: uint, nonce: uint, closer: (optional principal) }
 )
 
+;; Mapping of principals to agents registered to act on their behalf
+(define-map agents principal principal)
+
 ;; Public Functions
 ;;
 
@@ -86,6 +89,16 @@
     (asserts! (is-eq contract-caller contract-deployer) ERR_UNAUTHORIZED)
     (ok (map-set allowed-sip-010s token false))
   )
+)
+
+;;; Register an agent to act on your behalf
+(define-public (register-agent (agent principal))
+  (ok (map-set agents tx-sender agent))
+)
+
+;;; Deregister agent
+(define-public (deregister-agent)
+  (ok (map-delete agents tx-sender))
 )
 
 ;;; Deposit `amount` funds into an unfunded channel between `tx-sender` and
@@ -158,7 +171,7 @@
       (channel (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
       (channel-nonce (get nonce channel))
       (closer (get closer channel))
-      (data (make-channel-data channel-key my-balance their-balance nonce ACTION_CLOSE none none))
+      (data (make-channel-data tx-sender channel-key my-balance their-balance nonce ACTION_CLOSE none none))
       (data-hash (sha256 (unwrap! (to-consensus-buff? data) ERR_CONSENSUS_BUFF)))
       (input (sha256 (concat structured-data-header data-hash)))
       (sender tx-sender)
@@ -272,7 +285,7 @@
     (let
       (
         (expires-at (+ burn-block-height WAITING_PERIOD))
-        (data (make-channel-data channel-key my-balance their-balance nonce action actor secret))
+        (data (make-channel-data tx-sender channel-key my-balance their-balance nonce action actor secret))
         (data-hash (sha256 (unwrap! (to-consensus-buff? data) ERR_CONSENSUS_BUFF)))
         (input (sha256 (concat structured-data-header data-hash)))
         (new-balances (if (is-eq tx-sender (get principal-1 channel-key))
@@ -322,44 +335,55 @@
     (actor (optional principal))
     (secret (optional (buff 32)))
   )
+  (dispute-closure-inner
+    tx-sender
+    token
+    with
+    my-balance
+    their-balance
+    my-signature
+    their-signature
+    nonce
+    action
+    actor
+    secret
+  )
+)
+
+;;; Dispute the closing of a channel that has been closed early by submitting a
+;;; dispute within the waiting period. If the dispute is valid, the channel
+;;; will be closed and the new balances will be paid out to the appropriate
+;;; parties.
+(define-public (agent-dispute-closure
+    (for principal)
+    (token (optional <sip-010>))
+    (with principal)
+    (my-balance uint)
+    (their-balance uint)
+    (my-signature (buff 65))
+    (their-signature (buff 65))
+    (nonce uint)
+    (action uint)
+    (actor (optional principal))
+    (secret (optional (buff 32)))
+  )
   (let
     (
-      (channel-key (try! (get-channel-key (contract-of-optional token) tx-sender with)))
-      (channel (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
-      (expires-at (get expires-at channel))
-      (channel-nonce (get nonce channel))
-      (closer (unwrap! (get closer channel) ERR_NO_CLOSE_IN_PROGRESS))
+      (agent (unwrap! (map-get? agents for) ERR_UNAUTHORIZED))
     )
-    (asserts! (not (is-eq tx-sender closer)) ERR_SELF_DISPUTE)
-    (asserts! (< burn-block-height expires-at) ERR_CHANNEL_EXPIRED)
-    (asserts! (> nonce channel-nonce) ERR_NONCE_TOO_LOW)
-
-    (let
-      (
-        (data (make-channel-data channel-key my-balance their-balance nonce action actor secret))
-        (data-hash (sha256 (unwrap! (to-consensus-buff? data) ERR_CONSENSUS_BUFF)))
-        (input (sha256 (concat structured-data-header data-hash)))
-      )
-
-      ;; Verify the signatures of the two parties.
-      (asserts! (verify-signature input my-signature tx-sender) ERR_INVALID_SENDER_SIGNATURE)
-      (asserts! (verify-signature input their-signature with) ERR_INVALID_OTHER_SIGNATURE)
-
-      ;; Reset the channel in the map.
-      (reset-channel channel-key nonce)
-
-      ;; Emit an event
-      (print {
-        event: "dispute-closure",
-        channel-key: channel-key,
-        channel: channel,
-        sender: tx-sender,
-        sender-balance: my-balance,
-        other-balance: their-balance,
-      })
-
-      ;; Pay out the balances.
-      (payout token tx-sender with my-balance their-balance)
+    (asserts! (is-eq tx-sender agent) ERR_UNAUTHORIZED)
+    (dispute-closure-inner
+      for
+      token
+      with
+      my-balance
+      their-balance
+      my-signature
+      their-signature
+      nonce
+      action
+      actor
+      secret
     )
   )
 )
@@ -422,7 +446,7 @@
       (channel-nonce (get nonce channel))
       (closer (get closer channel))
       (updated-channel (update-channel-tuple channel-key channel my-balance their-balance nonce))
-      (data (make-channel-data channel-key my-balance their-balance nonce ACTION_DEPOSIT (some tx-sender) none))
+      (data (make-channel-data tx-sender channel-key my-balance their-balance nonce ACTION_DEPOSIT (some tx-sender) none))
       (data-hash (sha256 (unwrap! (to-consensus-buff? data) ERR_CONSENSUS_BUFF)))
       (input (sha256 (concat structured-data-header data-hash)))
     )
@@ -486,7 +510,7 @@
       (channel-nonce (get nonce channel))
       (closer (get closer channel))
       (updated-channel (update-channel-tuple channel-key channel my-balance their-balance nonce))
-      (data (make-channel-data channel-key my-balance their-balance nonce ACTION_WITHDRAWAL (some tx-sender) none))
+      (data (make-channel-data tx-sender channel-key my-balance their-balance nonce ACTION_WITHDRAWAL (some tx-sender) none))
       (data-hash (sha256 (unwrap! (to-consensus-buff? data) ERR_CONSENSUS_BUFF)))
       (input (sha256 (concat structured-data-header data-hash)))
     )
@@ -630,6 +654,62 @@
   )
 )
 
+;;; Inner function called by `dispute-closure` and `agent-dispute-closure`.
+(define-private (dispute-closure-inner
+    (for principal)
+    (token (optional <sip-010>))
+    (with principal)
+    (my-balance uint)
+    (their-balance uint)
+    (my-signature (buff 65))
+    (their-signature (buff 65))
+    (nonce uint)
+    (action uint)
+    (actor (optional principal))
+    (secret (optional (buff 32)))
+  )
+  (let
+    (
+      (channel-key (try! (get-channel-key (contract-of-optional token) for with)))
+      (channel (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
+      (expires-at (get expires-at channel))
+      (channel-nonce (get nonce channel))
+      (closer (unwrap! (get closer channel) ERR_NO_CLOSE_IN_PROGRESS))
+    )
+    (asserts! (not (is-eq for closer)) ERR_SELF_DISPUTE)
+    (asserts! (< burn-block-height expires-at) ERR_CHANNEL_EXPIRED)
+    (asserts! (> nonce channel-nonce) ERR_NONCE_TOO_LOW)
+
+    (let
+      (
+        (data (make-channel-data for channel-key my-balance their-balance nonce action actor secret))
+        (data-hash (sha256 (unwrap! (to-consensus-buff? data) ERR_CONSENSUS_BUFF)))
+        (input (sha256 (concat structured-data-header data-hash)))
+      )
+
+      ;; Verify the signatures of the two parties.
+      (asserts! (verify-signature input my-signature for) ERR_INVALID_SENDER_SIGNATURE)
+      (asserts! (verify-signature input their-signature with) ERR_INVALID_OTHER_SIGNATURE)
+
+      ;; Reset the channel in the map.
+      (reset-channel channel-key nonce)
+
+      ;; Emit an event
+      (print {
+        event: "dispute-closure",
+        channel-key: channel-key,
+        channel: channel,
+        sender: for,
+        sender-balance: my-balance,
+        other-balance: their-balance,
+      })
+
+      ;; Pay out the balances.
+      (payout token for with my-balance their-balance)
+    )
+  )
+)
+
 ;;; Check if the balance of `account` in the channel is greater than 0.
 (define-private (is-funded
     (account principal)
@@ -700,6 +780,7 @@
 ;;; This function assumes that the channel has already been validated to
 ;;; include these two principals.
 (define-private (make-channel-data
+    (for principal)
     (channel-key { token: (optional principal), principal-1: principal, principal-2: principal })
     (my-balance uint)
     (their-balance uint)
@@ -710,7 +791,7 @@
   )
   (let
     (
-      (balances (if (is-eq tx-sender (get principal-1 channel-key))
+      (balances (if (is-eq for (get principal-1 channel-key))
         { balance-1: my-balance, balance-2: their-balance }
         { balance-1: their-balance, balance-2: my-balance }
       ))
