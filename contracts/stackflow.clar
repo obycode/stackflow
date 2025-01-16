@@ -546,7 +546,7 @@
       updated-channel
     )
     (print {
-      event: "deposit",
+      event: "withdraw",
       channel-key: channel-key,
       channel: updated-channel,
       sender: tx-sender,
