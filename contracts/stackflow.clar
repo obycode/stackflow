@@ -175,6 +175,13 @@
       (data-hash (sha256 (unwrap! (to-consensus-buff? data) ERR_CONSENSUS_BUFF)))
       (input (sha256 (concat structured-data-header data-hash)))
       (sender tx-sender)
+      (updated-channel {
+        balance-1: (get balance-1 data),
+        balance-2: (get balance-2 data),
+        expires-at: MAX_HEIGHT,
+        nonce: nonce,
+        closer: none
+      })
     )
     ;; The nonce must be greater than the channel's saved nonce
     (asserts! (> nonce channel-nonce) ERR_NONCE_TOO_LOW)
@@ -200,7 +207,7 @@
     (print {
       event: "close-channel",
       channel-key: channel-key,
-      channel: channel,
+      channel: updated-channel,
       sender: tx-sender,
     })
 
@@ -484,6 +491,8 @@
       channel: updated-channel,
       sender: tx-sender,
       amount: amount,
+      my-signature: my-signature,
+      their-signature: their-signature,
     })
     (ok channel-key)
   )
@@ -551,6 +560,8 @@
       channel: updated-channel,
       sender: tx-sender,
       amount: amount,
+      my-signature: my-signature,
+      their-signature: their-signature,
     })
     (ok channel-key)
   )
@@ -685,6 +696,13 @@
         (data (make-channel-data for channel-key my-balance their-balance nonce action actor secret))
         (data-hash (sha256 (unwrap! (to-consensus-buff? data) ERR_CONSENSUS_BUFF)))
         (input (sha256 (concat structured-data-header data-hash)))
+        (updated-channel {
+          balance-1: (get balance-1 data),
+          balance-2: (get balance-2 data),
+          expires-at: MAX_HEIGHT,
+          nonce: nonce,
+          closer: none
+        })
       )
 
       ;; Verify the signatures of the two parties.
@@ -698,10 +716,8 @@
       (print {
         event: "dispute-closure",
         channel-key: channel-key,
-        channel: channel,
+        channel: updated-channel,
         sender: for,
-        sender-balance: my-balance,
-        other-balance: their-balance,
       })
 
       ;; Pay out the balances.
