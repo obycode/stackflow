@@ -3,7 +3,6 @@ import {
   ClarityType,
   ClarityValue,
   createStacksPrivateKey,
-  cvToString,
   ResponseOkCV,
   serializeCV,
   signWithKey,
@@ -58,8 +57,7 @@ enum TxError {
   AlreadyFunded = 115,
   InvalidWithdrawal = 116,
   UnapprovedToken = 117,
-  IncorrectNonce = 118,
-  NotExpired = 119,
+  NotExpired = 118,
 }
 
 const structuredDataPrefix = Buffer.from([0x53, 0x49, 0x50, 0x30, 0x31, 0x38]);
@@ -85,15 +83,17 @@ const domainHash = structuredDataHash(
   })
 );
 
+function structuredDataHashWithPrefix(structuredData: ClarityValue): Buffer {
+  const messageHash = structuredDataHash(structuredData);
+  return sha256(Buffer.concat([structuredDataPrefix, domainHash, messageHash]));
+}
+
 function signStructuredData(
   privateKey: StacksPrivateKey,
   structuredData: ClarityValue
 ): Buffer {
-  const messageHash = structuredDataHash(structuredData);
-  const input = sha256(
-    Buffer.concat([structuredDataPrefix, domainHash, messageHash])
-  );
-  const data = signWithKey(privateKey, input.toString("hex")).data;
+  const hash = structuredDataHashWithPrefix(structuredData);
+  const data = signWithKey(privateKey, hash.toString("hex")).data;
   return Buffer.from(data.slice(2) + data.slice(0, 2), "hex");
 }
 
@@ -270,7 +270,7 @@ describe("manage allowed SIP tokens", () => {
 
     simnet.callPublicFn(
       "stackflow",
-      "remove-allowed-sip-010",
+      "disallow-sip-010",
       [Cl.principal(`${deployer}.foo`)],
       deployer
     );
@@ -288,7 +288,7 @@ describe("manage allowed SIP tokens", () => {
   it("removing a token that was never added is still unallowed", () => {
     simnet.callPublicFn(
       "stackflow",
-      "remove-allowed-sip-010",
+      "disallow-sip-010",
       [Cl.principal(`${deployer}.foo`)],
       deployer
     );
@@ -4421,37 +4421,6 @@ describe("get-channel", () => {
   });
 });
 
-describe("verify-signed-structured-data", () => {
-  it("verifies the signed structured data", () => {
-    const data = Cl.tuple({
-      foo: Cl.uint(123),
-      bar: Cl.stringAscii("hello world"),
-    });
-    const dataHash = structuredDataHash(data);
-    const signature = signStructuredData(address1PK, data);
-    const { result } = simnet.callReadOnlyFn(
-      "stackflow",
-      "verify-signed-structured-data",
-      [Cl.buffer(dataHash), Cl.buffer(signature), Cl.principal(address1)],
-      address1
-    );
-    expect(result).toBeBool(true);
-  });
-
-  it("fails to verify the signed structured data", () => {
-    const data = Cl.stringAscii("hello world");
-    const dataHash = structuredDataHash(data);
-    const signature = signStructuredData(address1PK, Cl.stringAscii("foo bar"));
-    const { result } = simnet.callReadOnlyFn(
-      "stackflow",
-      "verify-signed-structured-data",
-      [Cl.buffer(dataHash), Cl.buffer(signature), Cl.principal(address1)],
-      address1
-    );
-    expect(result).toBeBool(false);
-  });
-});
-
 describe("contract-of-optional", () => {
   it("returns the contract principal", () => {
     const { result } = simnet.callPrivateFn(
@@ -4642,140 +4611,6 @@ describe("execute-withdraw", () => {
   });
 });
 
-describe("make-channel-data", () => {
-  it("ensures the channel data is built correctly", () => {
-    const { result } = simnet.callPrivateFn(
-      "stackflow",
-      "make-channel-data",
-      [
-        Cl.principal(address1),
-        Cl.tuple({
-          token: Cl.none(),
-          "principal-1": Cl.principal(address1),
-          "principal-2": Cl.principal(address2),
-        }),
-        Cl.uint(100),
-        Cl.uint(0),
-        Cl.uint(4),
-        Cl.uint(ChannelAction.Transfer),
-        Cl.none(),
-        Cl.none(),
-      ],
-      address1
-    );
-    expect(result).toBeTuple({
-      token: Cl.none(),
-      "principal-1": Cl.principal(address1),
-      "principal-2": Cl.principal(address2),
-      "balance-1": Cl.uint(100),
-      "balance-2": Cl.uint(0),
-      nonce: Cl.uint(4),
-      action: Cl.uint(ChannelAction.Transfer),
-      actor: Cl.none(),
-      "hashed-secret": Cl.none(),
-    });
-  });
-
-  it("ensures the channel data is built correctly from principal-2", () => {
-    const { result } = simnet.callPrivateFn(
-      "stackflow",
-      "make-channel-data",
-      [
-        Cl.principal(address2),
-        Cl.tuple({
-          token: Cl.none(),
-          "principal-1": Cl.principal(address1),
-          "principal-2": Cl.principal(address2),
-        }),
-        Cl.uint(120),
-        Cl.uint(80),
-        Cl.uint(7),
-        Cl.uint(ChannelAction.Close),
-        Cl.none(),
-        Cl.none(),
-      ],
-      address2
-    );
-    expect(result).toBeTuple({
-      token: Cl.none(),
-      "principal-1": Cl.principal(address1),
-      "principal-2": Cl.principal(address2),
-      "balance-1": Cl.uint(80),
-      "balance-2": Cl.uint(120),
-      nonce: Cl.uint(7),
-      action: Cl.uint(ChannelAction.Close),
-      actor: Cl.none(),
-      "hashed-secret": Cl.none(),
-    });
-  });
-});
-
-describe("update-channel-tuple", () => {
-  it("updates channel correctly from account-1", () => {
-    const { result } = simnet.callPrivateFn(
-      "stackflow",
-      "update-channel-tuple",
-      [
-        Cl.tuple({
-          token: Cl.none(),
-          "principal-1": Cl.principal(address1),
-          "principal-2": Cl.principal(address2),
-        }),
-        Cl.tuple({
-          "balance-1": Cl.uint(123),
-          "balance-2": Cl.uint(456),
-          "expires-at": Cl.uint(789),
-          nonce: Cl.uint(0),
-          closer: Cl.none(),
-        }),
-        Cl.uint(999),
-        Cl.uint(888),
-        Cl.uint(4),
-      ],
-      address1
-    );
-    expect(result).toBeTuple({
-      "balance-1": Cl.uint(999),
-      "balance-2": Cl.uint(888),
-      "expires-at": Cl.uint(789),
-      nonce: Cl.uint(4),
-      closer: Cl.none(),
-    });
-  });
-
-  it("updates channel correctly from account-2", () => {
-    const { result } = simnet.callPrivateFn(
-      "stackflow",
-      "update-channel-tuple",
-      [
-        Cl.tuple({
-          token: Cl.none(),
-          "principal-1": Cl.principal(address1),
-          "principal-2": Cl.principal(address2),
-        }),
-        Cl.tuple({
-          "balance-1": Cl.uint(123),
-          "balance-2": Cl.uint(456),
-          "expires-at": Cl.uint(789),
-          nonce: Cl.uint(0),
-          closer: Cl.some(Cl.principal(address1)),
-        }),
-        Cl.uint(999),
-        Cl.uint(888),
-        Cl.uint(4),
-      ],
-      address2
-    );
-    expect(result).toBeTuple({
-      "balance-1": Cl.uint(888),
-      "balance-2": Cl.uint(999),
-      "expires-at": Cl.uint(789),
-      nonce: Cl.uint(4),
-      closer: Cl.some(Cl.principal(address1)),
-    });
-  });
-});
-
 describe("transfers with secrets", () => {
   it("can transfer and force-close with a secret", () => {
     // Setup the channel
@@ -4948,5 +4783,77 @@ describe("transfers with secrets", () => {
 
     const contractBalance = stxBalances.get(stackflowContract);
     expect(contractBalance).toBe(3000000n);
+  });
+});
+
+describe("make-structured-data-hash", () => {
+  it("makes the structured data hash for a transfer", () => {
+    const { result } = simnet.callPrivateFn(
+      "stackflow",
+      "make-structured-data-hash",
+      [
+        Cl.tuple({
+          token: Cl.none(),
+          "principal-1": Cl.principal(address1),
+          "principal-2": Cl.principal(address2),
+        }),
+        Cl.uint(10000),
+        Cl.uint(20000),
+        Cl.uint(1),
+        Cl.uint(ChannelAction.Transfer),
+        Cl.none(),
+        Cl.none(),
+      ],
+      address1
+    );
+
+    const data = Cl.tuple({
+      token: Cl.none(),
+      "principal-1": Cl.principal(address1),
+      "principal-2": Cl.principal(address2),
+      "balance-1": Cl.uint(10000),
+      "balance-2": Cl.uint(20000),
+      nonce: Cl.uint(1),
+      action: Cl.uint(ChannelAction.Transfer),
+      actor: Cl.none(),
+      "hashed-secret": Cl.none(),
+    });
+    const expectedHash = structuredDataHashWithPrefix(data);
+    expect(result).toBeOk(Cl.buffer(expectedHash));
+  });
+
+  it("makes the structured data hash for a close", () => {
+    const { result } = simnet.callPrivateFn(
+      "stackflow",
+      "make-structured-data-hash",
+      [
+        Cl.tuple({
+          token: Cl.none(),
+          "principal-1": Cl.principal(address1),
+          "principal-2": Cl.principal(address2),
+        }),
+        Cl.uint(12345),
+        Cl.uint(98765),
+        Cl.uint(2),
+        Cl.uint(ChannelAction.Close),
+        Cl.none(),
+        Cl.none(),
+      ],
+      address1
+    );
+
+    const data = Cl.tuple({
+      token: Cl.none(),
+      "principal-1": Cl.principal(address1),
+      "principal-2": Cl.principal(address2),
+      "balance-1": Cl.uint(12345),
+      "balance-2": Cl.uint(98765),
+      nonce: Cl.uint(2),
+      action: Cl.uint(ChannelAction.Close),
+      actor: Cl.none(),
+      "hashed-secret": Cl.none(),
+    });
+    const expectedHash = structuredDataHashWithPrefix(data);
+    expect(result).toBeOk(Cl.buffer(expectedHash));
   });
 });

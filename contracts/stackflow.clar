@@ -1,11 +1,11 @@
 
 ;; title: stackflow
-;; version: 0.1.0
-;; summary: Stackflow is a payment channel network built on Stacks that enables
-;;   off-chain, non-custodial, high-speed payments between users and is
-;;   designed to be simple, secure, and efficient. It supports payments in STX
-;;   or approved SIP-010 fungible tokens.
-
+;; author: brice.btc
+;; version: 0.2.0
+;; summary: Stackflow is a payment channel network built on Stacks, enabling
+;;   off-chain, non-custodial, and high-speed payments between users. Designed
+;;   to be simple, secure, and efficient, it supports transactions in STX and
+;;   approved SIP-010 fungible tokens.
 
 (use-trait sip-010 'SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE.sip-010-trait-ft-standard.sip-010-trait)
 
@@ -49,8 +49,7 @@
 (define-constant ERR_ALREADY_FUNDED (err u115))
 (define-constant ERR_INVALID_WITHDRAWAL (err u116))
 (define-constant ERR_UNAPPROVED_TOKEN (err u117))
-(define-constant ERR_INCORRECT_NONCE (err u118))
-(define-constant ERR_NOT_EXPIRED (err u119))
+(define-constant ERR_NOT_EXPIRED (err u118))
 
 ;;; List of allowed SIP-010 tokens as set by the owner of the contract.
 ;;; This is required since SIP-010 tokens are not guaranteed not to have side-
@@ -73,8 +72,8 @@
 ;; Public Functions
 ;;
 
-;;; As the owner of this contract, add a SIP-010 token to the list of allowed
-;;; tokens.
+;;; As the owner of this contract, mark a SIP-010 token as allowed.
+;;; Returns `(ok true)`
 (define-public (add-allowed-sip-010 (token principal))
   (begin
     (asserts! (is-eq contract-caller contract-deployer) ERR_UNAUTHORIZED)
@@ -82,21 +81,25 @@
   )
 )
 
-;;; As the owner of this contract, remove a SIP-010 token from the list of
-;;; allowed tokens.
-(define-public (remove-allowed-sip-010 (token principal))
+;;; As the owner of this contract, mark a SIP-010 token as disallowed.
+;;; Returns `(ok true)`
+(define-public (disallow-sip-010 (token principal))
   (begin
     (asserts! (is-eq contract-caller contract-deployer) ERR_UNAUTHORIZED)
     (ok (map-set allowed-sip-010s token false))
   )
 )
 
-;;; Register an agent to act on your behalf
+;;; Register an agent to act on your behalf.
+;;; Returns `(ok true)`
 (define-public (register-agent (agent principal))
   (ok (map-set agents tx-sender agent))
 )
 
 ;;; Deregister agent
+;;; Returns:
+;;; - `(ok true)` if an agent had been registered
+;;; - `(ok false)` if there was no agent registered
 (define-public (deregister-agent)
   (ok (map-delete agents tx-sender))
 )
@@ -104,7 +107,15 @@
 ;;; Deposit `amount` funds into an unfunded channel between `tx-sender` and
 ;;; `with` for FT `token` (`none` indicates STX). Create the channel if one
 ;;; does not already exist.
-;;; Returns the channel key on success.
+;;; Returns:
+;;; - The channel key on success
+;;;   ```
+;;;   { token: (optional principal), principal-1: principal, principal-2: principal }
+;;;   ```
+;;; - `ERR_UNAPPROVED_TOKEN` if the token is not in the allowed list
+;;; - `ERR_NONCE_TOO_LOW` if the nonce is less than the channel's saved nonce
+;;; - `ERR_CLOSE_IN_PROGRESS` if a forced closure is in progress
+;;; - `ERR_ALREADY_FUNDED` if the channel has already been funded
 (define-public (fund-channel (token (optional <sip-010>)) (amount uint) (with principal) (nonce uint))
   (begin
     ;; If a SIP-010 token is specified, it must be in the allowed list
@@ -130,7 +141,7 @@
       )
 
       ;; If there was an existing channel, the new nonce must be equal or greater
-      (asserts! (>= (get nonce channel) nonce) ERR_INCORRECT_NONCE)
+      (asserts! (>= (get nonce channel) nonce) ERR_NONCE_TOO_LOW)
 
       ;; A forced closure must not be in progress
       (asserts! (is-none closer) ERR_CLOSE_IN_PROGRESS)
@@ -156,6 +167,14 @@
 )
 
 ;;; Cooperatively close the channel, with authorization from both parties.
+;;; Returns:
+;;; - `(ok true)` on success
+;;; - `ERR_NO_SUCH_CHANNEL` if the channel does not exist
+;;; - `ERR_NONCE_TOO_LOW` if the nonce is less than the channel's saved nonce
+;;; - `ERR_INVALID_TOTAL_BALANCE` if the total balance of the channel is not
+;;;   equal to the sum of the balances provided
+;;; - `ERR_INVALID_SENDER_SIGNATURE` if the sender's signature is invalid
+;;; - `ERR_INVALID_OTHER_SIGNATURE` if the other party's signature is invalid
 (define-public (close-channel
     (token (optional <sip-010>))
     (with principal)
@@ -170,19 +189,18 @@
       (channel-key (try! (get-channel-key (contract-of-optional token) tx-sender with)))
       (channel (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
       (channel-nonce (get nonce channel))
-      (closer (get closer channel))
-      (data (make-channel-data tx-sender channel-key my-balance their-balance nonce ACTION_CLOSE none none))
-      (data-hash (sha256 (unwrap! (to-consensus-buff? data) ERR_CONSENSUS_BUFF)))
-      (input (sha256 (concat structured-data-header data-hash)))
-      (sender tx-sender)
+      (principal-1 (get principal-1 channel-key))
+      (balance-1 (if (is-eq tx-sender principal-1) my-balance their-balance))
+      (balance-2 (if (is-eq tx-sender principal-1) their-balance my-balance))
       (updated-channel {
-        balance-1: (get balance-1 data),
-        balance-2: (get balance-2 data),
+        balance-1: balance-1,
+        balance-2: balance-2,
         expires-at: MAX_HEIGHT,
         nonce: nonce,
         closer: none
       })
     )
+
     ;; The nonce must be greater than the channel's saved nonce
     (asserts! (> nonce channel-nonce) ERR_NONCE_TOO_LOW)
 
@@ -197,8 +215,21 @@
     )
 
     ;; Verify the signatures of the two parties.
-    (asserts! (verify-signature input my-signature tx-sender) ERR_INVALID_SENDER_SIGNATURE)
-    (asserts! (verify-signature input their-signature with) ERR_INVALID_OTHER_SIGNATURE)
+    (try!
+      (verify-signatures
+        my-signature
+        tx-sender
+        their-signature
+        with
+        channel-key
+        balance-1
+        balance-2
+        nonce
+        ACTION_CLOSE
+        none
+        none
+      )
+    )
 
     ;; Reset the channel in the map.
     (reset-channel channel-key nonce)
@@ -220,6 +251,11 @@
 ;;; This initiates a waiting period, giving the other party the opportunity to
 ;;; dispute the closing of the channel, by calling `dispute-closure` and
 ;;; providing signatures proving a transfer.
+;;; Returns:
+;;; - `(ok expires-at)` on success, where `expires-at` is the block height at
+;;;   which the channel can be finalized if it has not been disputed.
+;;; - `ERR_NO_SUCH_CHANNEL` if the channel does not exist
+;;; - `ERR_CLOSE_IN_PROGRESS` if a forced closure is already in progress
 (define-public (force-cancel (token (optional <sip-010>)) (with principal))
   (let
     (
@@ -254,6 +290,16 @@
 ;;; This initiates a waiting period, giving the other party the opportunity to
 ;;; dispute the closing of the channel, by calling `dispute-closure` and
 ;;; providing signatures with a later nonce.
+;;; Returns:
+;;; - `(ok expires-at)` on success, where `expires-at` is the block height at
+;;;   which the channel can be finalized if it has not been disputed.
+;;; - `ERR_NO_SUCH_CHANNEL` if the channel does not exist
+;;; - `ERR_CLOSE_IN_PROGRESS` if a forced closure is already in progress
+;;; - `ERR_NONCE_TOO_LOW` if the nonce is less than the channel's saved nonce
+;;; - `ERR_INVALID_TOTAL_BALANCE` if the total balance of the channel is not
+;;;   equal to the sum of the balances provided
+;;; - `ERR_INVALID_SENDER_SIGNATURE` if the sender's signature is invalid
+;;; - `ERR_INVALID_OTHER_SIGNATURE` if the other party's signature is invalid
 (define-public (force-close
     (token (optional <sip-010>))
     (with principal)
@@ -292,19 +338,34 @@
     (let
       (
         (expires-at (+ burn-block-height WAITING_PERIOD))
-        (data (make-channel-data tx-sender channel-key my-balance their-balance nonce action actor secret))
-        (data-hash (sha256 (unwrap! (to-consensus-buff? data) ERR_CONSENSUS_BUFF)))
-        (input (sha256 (concat structured-data-header data-hash)))
-        (new-balances (if (is-eq tx-sender (get principal-1 channel-key))
-          { balance-1: my-balance, balance-2: their-balance }
-          { balance-1: their-balance, balance-2: my-balance }
-        ))
-        (new-channel (merge new-balances { expires-at: expires-at, closer: (some tx-sender), nonce: nonce }))
+        (principal-1 (get principal-1 channel-key))
+        (balance-1 (if (is-eq tx-sender principal-1) my-balance their-balance))
+        (balance-2 (if (is-eq tx-sender principal-1) their-balance my-balance))
+        (new-channel {
+          balance-1: balance-1,
+          balance-2: balance-2,
+          expires-at: expires-at,
+          closer: (some tx-sender),
+          nonce: nonce
+        })
       )
 
       ;; Verify the signatures of the two parties.
-      (asserts! (verify-signature input my-signature tx-sender) ERR_INVALID_SENDER_SIGNATURE)
-      (asserts! (verify-signature input their-signature with) ERR_INVALID_OTHER_SIGNATURE)
+      (try!
+        (verify-signatures
+          my-signature
+          tx-sender
+          their-signature
+          with
+          channel-key
+          balance-1
+          balance-2
+          nonce
+          action
+          actor
+          secret
+        )
+      )
 
       ;; Set the waiting period for this channel.
       (map-set
@@ -330,6 +391,19 @@
 ;;; dispute within the waiting period. If the dispute is valid, the channel
 ;;; will be closed and the new balances will be paid out to the appropriate
 ;;; parties.
+;;; Returns:
+;;; - `(ok false)` on success if the channel's token was STX
+;;; - `(ok true)` on success if the channel's token was a SIP-010 token
+;;; - `ERR_NO_SUCH_CHANNEL` if the channel does not exist
+;;; - `ERR_NO_CLOSE_IN_PROGRESS` if a forced closure is not in progress
+;;; - `ERR_SELF_DISPUTE` if the sender is disputing their own force closure
+;;; - `ERR_CHANNEL_EXPIRED` if the channel has already expired
+;;; - `ERR_NONCE_TOO_LOW` if the nonce is less than the channel's saved nonce
+;;; - `ERR_INVALID_TOTAL_BALANCE` if the total balance of the channel is not
+;;;   equal to the sum of the balances provided
+;;; - `ERR_INVALID_SENDER_SIGNATURE` if the sender's signature is invalid
+;;; - `ERR_INVALID_OTHER_SIGNATURE` if the other party's signature is invalid
+;;; - `ERR_WITHDRAWAL_FAILED` if the withdrawal fails
 (define-public (dispute-closure
     (token (optional <sip-010>))
     (with principal)
@@ -357,10 +431,24 @@
   )
 )
 
-;;; Dispute the closing of a channel that has been closed early by submitting a
-;;; dispute within the waiting period. If the dispute is valid, the channel
-;;; will be closed and the new balances will be paid out to the appropriate
-;;; parties.
+;;; As an agent of `for`, dispute the closing of a channel that has been closed
+;;; early by submitting a dispute within the waiting period. If the dispute is
+;;; valid, the channel will be closed and the new balances will be paid out to
+;;; the appropriate parties.
+;;; Returns:
+;;; - `(ok false)` on success if the channel's token was STX
+;;; - `(ok true)` on success if the channel's token was a SIP-010 token
+;;; - `ERR_UNAUTHORIZED` if the sender is not an agent of `for`
+;;; - `ERR_NO_SUCH_CHANNEL` if the channel does not exist
+;;; - `ERR_NO_CLOSE_IN_PROGRESS` if a forced closure is not in progress
+;;; - `ERR_SELF_DISPUTE` if the sender is disputing their own force closure
+;;; - `ERR_CHANNEL_EXPIRED` if the channel has already expired
+;;; - `ERR_NONCE_TOO_LOW` if the nonce is less than the channel's saved nonce
+;;; - `ERR_INVALID_TOTAL_BALANCE` if the total balance of the channel is not
+;;;   equal to the sum of the balances provided
+;;; - `ERR_INVALID_SENDER_SIGNATURE` if the sender's signature is invalid
+;;; - `ERR_INVALID_OTHER_SIGNATURE` if the other party's signature is invalid
+;;; - `ERR_WITHDRAWAL_FAILED` if the withdrawal fails
 (define-public (agent-dispute-closure
     (for principal)
     (token (optional <sip-010>))
@@ -397,6 +485,13 @@
 
 ;;; Close the channel after a forced cancel or closure, once the required
 ;;; number of blocks have passed.
+;;; Returns:
+;;; - `(ok false)` on success if the channel's token was STX
+;;; - `(ok true)` on success if the channel's token was a SIP-010 token
+;;; - `ERR_NO_SUCH_CHANNEL` if the channel does not exist
+;;; - `ERR_NO_CLOSE_IN_PROGRESS` if a forced closure is not in progress
+;;; - `ERR_NOT_EXPIRED` if the waiting period has not passed
+;;; - `ERR_WITHDRAWAL_FAILED` if the withdrawal fails
 (define-public (finalize  (token (optional <sip-010>)) (with principal))
   (let
     (
@@ -435,7 +530,16 @@
 ;;; Deposit `amount` additional funds into an existing channel between
 ;;; `tx-sender` and `with` for FT `token` (`none` indicates STX). Signatures
 ;;; must confirm the deposit and the new balances.
-;;; Returns the channel key on success.
+;;; Returns:
+;;; -`(ok channel-key)` on success
+;;; - `ERR_NO_SUCH_CHANNEL` if the channel does not exist
+;;; - `ERR_CLOSE_IN_PROGRESS` if a forced closure is in progress
+;;; - `ERR_NONCE_TOO_LOW` if the nonce is less than the channel's saved nonce
+;;; - `ERR_INVALID_TOTAL_BALANCE` if the total balance of the channel is not
+;;;   equal to the sum of the balances provided and the deposit amount
+;;; - `ERR_INVALID_SENDER_SIGNATURE` if the sender's signature is invalid
+;;; - `ERR_INVALID_OTHER_SIGNATURE` if the other party's signature is invalid
+;;; - `ERR_DEPOSIT_FAILED` if the deposit fails
 (define-public (deposit
     (amount uint)
     (token (optional <sip-010>))
@@ -452,10 +556,19 @@
       (channel (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
       (channel-nonce (get nonce channel))
       (closer (get closer channel))
-      (updated-channel (update-channel-tuple channel-key channel my-balance their-balance nonce))
-      (data (make-channel-data tx-sender channel-key my-balance their-balance nonce ACTION_DEPOSIT (some tx-sender) none))
-      (data-hash (sha256 (unwrap! (to-consensus-buff? data) ERR_CONSENSUS_BUFF)))
-      (input (sha256 (concat structured-data-header data-hash)))
+      (principal-1 (get principal-1 channel-key))
+      (balance-1 (if (is-eq tx-sender principal-1) my-balance their-balance))
+      (balance-2 (if (is-eq tx-sender principal-1) their-balance my-balance))
+      (updated-channel
+        (merge
+          channel
+          {
+            balance-1: balance-1,
+            balance-2: balance-2,
+            nonce: nonce
+          }
+        )
+      )
     )
     ;; A forced closure must not be in progress
     (asserts! (is-none closer) ERR_CLOSE_IN_PROGRESS)
@@ -474,8 +587,21 @@
     )
 
     ;; Verify the signatures of the two parties.
-    (asserts! (verify-signature input my-signature tx-sender) ERR_INVALID_SENDER_SIGNATURE)
-    (asserts! (verify-signature input their-signature with) ERR_INVALID_OTHER_SIGNATURE)
+    (try!
+      (verify-signatures
+        my-signature
+        tx-sender
+        their-signature
+        with
+        channel-key
+        balance-1
+        balance-2
+        nonce
+        ACTION_DEPOSIT
+        (some tx-sender)
+        none
+      )
+    )
 
     ;; Perform the deposit
     (try! (increase-sender-balance channel-key channel token amount))
@@ -501,7 +627,16 @@
 ;;; Withdrawal `amount` funds from an existing channel between `tx-sender` and
 ;;; `with` for FT `token` (`none` indicates STX). Signatures must confirm the
 ;;; withdrawal and the new balances.
-;;; Returns the channel key on success.
+;;; Returns:
+;;; -`(ok channel-key)` on success
+;;; - `ERR_NO_SUCH_CHANNEL` if the channel does not exist
+;;; - `ERR_CLOSE_IN_PROGRESS` if a forced closure is in progress
+;;; - `ERR_NONCE_TOO_LOW` if the nonce is less than the channel's saved nonce
+;;; - `ERR_INVALID_TOTAL_BALANCE` if the total balance of the channel is not
+;;;   equal to the sum of the balances provided and the deposit amount
+;;; - `ERR_INVALID_SENDER_SIGNATURE` if the sender's signature is invalid
+;;; - `ERR_INVALID_OTHER_SIGNATURE` if the other party's signature is invalid
+;;; - `ERR_WITHDRAWAL_FAILED` if the deposit fails
 (define-public (withdraw
     (amount uint)
     (token (optional <sip-010>))
@@ -518,11 +653,21 @@
       (channel (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
       (channel-nonce (get nonce channel))
       (closer (get closer channel))
-      (updated-channel (update-channel-tuple channel-key channel my-balance their-balance nonce))
-      (data (make-channel-data tx-sender channel-key my-balance their-balance nonce ACTION_WITHDRAWAL (some tx-sender) none))
-      (data-hash (sha256 (unwrap! (to-consensus-buff? data) ERR_CONSENSUS_BUFF)))
-      (input (sha256 (concat structured-data-header data-hash)))
+      (principal-1 (get principal-1 channel-key))
+      (balance-1 (if (is-eq tx-sender principal-1) my-balance their-balance))
+      (balance-2 (if (is-eq tx-sender principal-1) their-balance my-balance))
+      (updated-channel
+        (merge
+          channel
+          {
+            balance-1: balance-1,
+            balance-2: balance-2,
+            nonce: nonce
+          }
+        )
+      )
     )
+
     ;; A forced closure must not be in progress
     (asserts! (is-none closer) ERR_CLOSE_IN_PROGRESS)
 
@@ -530,7 +675,10 @@
     (asserts! (> nonce channel-nonce) ERR_NONCE_TOO_LOW)
 
     ;; Withdrawal amount cannot be greater than the total channel balance
-    (asserts! (> (+ (get balance-1 channel) (get balance-2 channel)) amount) ERR_INVALID_WITHDRAWAL)
+    (asserts!
+      (> (+ (get balance-1 channel) (get balance-2 channel)) amount)
+      ERR_INVALID_WITHDRAWAL
+    )
 
     ;; If the new balance of the channel is not equal to the sum of the
     ;; prior balances minus the withdraw amount, the withdrawal is invalid.
@@ -543,8 +691,21 @@
     )
 
     ;; Verify the signatures of the two parties.
-    (asserts! (verify-signature input my-signature tx-sender) ERR_INVALID_SENDER_SIGNATURE)
-    (asserts! (verify-signature input their-signature with) ERR_INVALID_OTHER_SIGNATURE)
+    (try!
+      (verify-signatures
+        my-signature
+        tx-sender
+        their-signature
+        with
+        channel-key
+        balance-1
+        balance-2
+        nonce
+        ACTION_WITHDRAWAL
+        (some tx-sender)
+        none
+      )
+    )
 
     ;; Perform the withdraw
     (try! (execute-withdraw token amount))
@@ -572,6 +733,18 @@
 
 ;;; Get the current balances of the channel between `tx-sender` and `with` for
 ;;; token `token` (`none` indicates STX).
+;;; Returns:
+;;; - The channel data tuple on success, with type
+;;;   ```
+;;;   (some {
+;;;     balance-1: uint,
+;;;     balance-2: uint,
+;;;     expires-at: uint,
+;;;     nonce: uint,
+;;;     closer: (optional principal)
+;;;   })
+;;;   ```
+;;; - `none` if the channel does not exist
 (define-read-only (get-channel (token (optional principal)) (with principal))
   (match (get-channel-key token tx-sender with)
     channel-key (map-get? channels channel-key)
@@ -579,14 +752,74 @@
   )
 )
 
-(define-read-only (verify-signature (hash (buff 32)) (signature (buff 65)) (signer principal))
-	(is-eq (principal-of? (unwrap! (secp256k1-recover? hash signature) false)) (ok signer))
+;;; Validates that `signature` is a valid signature from `signer for the
+;;; structured data constructed from the other arguments.
+;;; Returns:
+;;; - `true` if the signature is valid.
+;;; - `false` if the signature is invalid.
+(define-read-only (verify-signature
+    (signature (buff 65))
+    (signer principal)
+    (channel-key { token: (optional principal), principal-1: principal, principal-2: principal })
+    (balance-1 uint)
+    (balance-2 uint)
+    (nonce uint)
+    (action uint)
+    (actor (optional principal))
+    (secret (optional (buff 32)))
+  )
+  (let ((hash (unwrap! (make-structured-data-hash
+      channel-key
+      balance-1
+      balance-2
+      nonce
+      action
+      actor
+      secret
+    ) false)))
+    (verify-hash-signature hash signature signer)
+  )
 )
 
-(define-read-only (verify-signed-structured-data (structured-data-hash (buff 32)) (signature (buff 65)) (signer principal))
-	(verify-signature (sha256 (concat structured-data-header structured-data-hash)) signature signer)
+;;; Validates that `signature-1` and `signature-2` are valid signature from
+;;; `signer-1` and `signer-2`, respectively, for the structured data
+;;; constructed from the other arguments.
+;;; Returns:
+;;; - `(ok true)` if both signatures are valid.
+;;; - `ERR_INVALID_SENDER_SIGNATURE` if the first signature is invalid.
+;;; - `ERR_INVALID_OTHER_SIGNATURE` if the second signature is invalid.
+(define-read-only (verify-signatures
+    (signature-1 (buff 65))
+    (signer-1 principal)
+    (signature-2 (buff 65))
+    (signer-2 principal)
+    (channel-key { token: (optional principal), principal-1: principal, principal-2: principal })
+    (balance-1 uint)
+    (balance-2 uint)
+    (nonce uint)
+    (action uint)
+    (actor (optional principal))
+    (secret (optional (buff 32)))
+  )
+  (let ((hash (try! (make-structured-data-hash
+      channel-key
+      balance-1
+      balance-2
+      nonce
+      action
+      actor
+      secret
+    ))))
+    (asserts! (verify-hash-signature hash signature-1 signer-1) ERR_INVALID_SENDER_SIGNATURE)
+    (asserts! (verify-hash-signature hash signature-2 signer-2) ERR_INVALID_OTHER_SIGNATURE)
+    (ok true)
+  )
 )
 
+;;; Check if `token` is in the allowed list of SIP-010 tokens.
+;;; Returns:
+;;; - `true` if the token is allowed
+;;; - `false` if the token is not allowed
 (define-read-only (is-allowed-token (token principal))
   (match (map-get? allowed-sip-010s token)
     allowed allowed
@@ -686,19 +919,29 @@
       (expires-at (get expires-at channel))
       (channel-nonce (get nonce channel))
       (closer (unwrap! (get closer channel) ERR_NO_CLOSE_IN_PROGRESS))
+      (principal-1 (get principal-1 channel-key))
+      (balance-1 (if (is-eq for principal-1) my-balance their-balance))
+      (balance-2 (if (is-eq for principal-1) their-balance my-balance))
     )
     (asserts! (not (is-eq for closer)) ERR_SELF_DISPUTE)
     (asserts! (< burn-block-height expires-at) ERR_CHANNEL_EXPIRED)
     (asserts! (> nonce channel-nonce) ERR_NONCE_TOO_LOW)
 
+    ;; If the total balance of the channel is not equal to the sum of the
+    ;; balances provided, the channel close is invalid.
+    (asserts!
+      (is-eq
+        (+ my-balance their-balance)
+        (+ (get balance-1 channel) (get balance-2 channel))
+      )
+      ERR_INVALID_TOTAL_BALANCE
+    )
+
     (let
       (
-        (data (make-channel-data for channel-key my-balance their-balance nonce action actor secret))
-        (data-hash (sha256 (unwrap! (to-consensus-buff? data) ERR_CONSENSUS_BUFF)))
-        (input (sha256 (concat structured-data-header data-hash)))
         (updated-channel {
-          balance-1: (get balance-1 data),
-          balance-2: (get balance-2 data),
+          balance-1: balance-1,
+          balance-2: balance-2,
           expires-at: MAX_HEIGHT,
           nonce: nonce,
           closer: none
@@ -706,8 +949,21 @@
       )
 
       ;; Verify the signatures of the two parties.
-      (asserts! (verify-signature input my-signature for) ERR_INVALID_SENDER_SIGNATURE)
-      (asserts! (verify-signature input their-signature with) ERR_INVALID_OTHER_SIGNATURE)
+      (try!
+        (verify-signatures
+          my-signature
+          for
+          their-signature
+          with
+          channel-key
+          balance-1
+          balance-2
+          nonce
+          action
+          actor
+          secret
+        )
+      )
 
       ;; Reset the channel in the map.
       (reset-channel channel-key nonce)
@@ -735,118 +991,6 @@
   (or
     (and (is-eq account (get principal-1 channel-key)) (> (get balance-1 channel) u0))
     (and (is-eq account (get principal-2 channel-key)) (> (get balance-2 channel) u0))
-  )
-)
-
-;;; Remove a principal from a list of principals.
-;;; Note that this method seems strange, but it is more cost efficient than the
-;;; alternatives (h/t unknown original creator of this technique).
-(define-read-only (remove-principal-from-list (l (list 256 principal)) (to-remove principal))
-  (map unwrap-panic_ (filter is-some_ (map cmp l 
-    (list to-remove to-remove to-remove to-remove to-remove to-remove to-remove to-remove
-          to-remove to-remove to-remove to-remove to-remove to-remove to-remove to-remove
-          to-remove to-remove to-remove to-remove to-remove to-remove to-remove to-remove
-          to-remove to-remove to-remove to-remove to-remove to-remove to-remove to-remove
-          to-remove to-remove to-remove to-remove to-remove to-remove to-remove to-remove
-          to-remove to-remove to-remove to-remove to-remove to-remove to-remove to-remove
-          to-remove to-remove to-remove to-remove to-remove to-remove to-remove to-remove
-          to-remove to-remove to-remove to-remove to-remove to-remove to-remove to-remove
-          to-remove to-remove to-remove to-remove to-remove to-remove to-remove to-remove
-          to-remove to-remove to-remove to-remove to-remove to-remove to-remove to-remove
-          to-remove to-remove to-remove to-remove to-remove to-remove to-remove to-remove
-          to-remove to-remove to-remove to-remove to-remove to-remove to-remove to-remove
-          to-remove to-remove to-remove to-remove to-remove to-remove to-remove to-remove
-          to-remove to-remove to-remove to-remove to-remove to-remove to-remove to-remove
-          to-remove to-remove to-remove to-remove to-remove to-remove to-remove to-remove
-          to-remove to-remove to-remove to-remove to-remove to-remove to-remove to-remove
-          to-remove to-remove to-remove to-remove to-remove to-remove to-remove to-remove
-          to-remove to-remove to-remove to-remove to-remove to-remove to-remove to-remove
-          to-remove to-remove to-remove to-remove to-remove to-remove to-remove to-remove
-          to-remove to-remove to-remove to-remove to-remove to-remove to-remove to-remove
-          to-remove to-remove to-remove to-remove to-remove to-remove to-remove to-remove
-          to-remove to-remove to-remove to-remove to-remove to-remove to-remove to-remove
-          to-remove to-remove to-remove to-remove to-remove to-remove to-remove to-remove
-          to-remove to-remove to-remove to-remove to-remove to-remove to-remove to-remove
-          to-remove to-remove to-remove to-remove to-remove to-remove to-remove to-remove
-          to-remove to-remove to-remove to-remove to-remove to-remove to-remove to-remove
-          to-remove to-remove to-remove to-remove to-remove to-remove to-remove to-remove
-          to-remove to-remove to-remove to-remove to-remove to-remove to-remove to-remove
-          to-remove to-remove to-remove to-remove to-remove to-remove to-remove to-remove
-          to-remove to-remove to-remove to-remove to-remove to-remove to-remove to-remove
-          to-remove to-remove to-remove to-remove to-remove to-remove to-remove to-remove
-          to-remove to-remove to-remove to-remove to-remove to-remove to-remove to-remove
-    )
-  )))
-)
-(define-private (unwrap-panic_ (x (optional principal))) (unwrap-panic x))
-(define-private (cmp (x principal) (y principal)) (if (is-eq x y) none (some x)))
-(define-private (is-some_ (i (optional principal))) (is-some i))
-
-;;; Build up the structured data for a channel operation.
-;;; The structured data is a map with the following keys:
-;;; - token: the token used in the channel
-;;; - principal-1: the first principal in the channel
-;;; - principal-2: the second principal in the channel
-;;; - balance-1: the balance of the first principal in the channel
-;;; - balance-2: the balance of the second principal in the channel
-;;; - nonce: the nonce for this channel data
-;;; - action: the action being performed (e.g., "close")
-;;; - actor: the principal performing the action
-;;; - hashed-secret: the optional hashed secret for the channel operation
-;;; This function assumes that the channel has already been validated to
-;;; include these two principals.
-(define-private (make-channel-data
-    (for principal)
-    (channel-key { token: (optional principal), principal-1: principal, principal-2: principal })
-    (my-balance uint)
-    (their-balance uint)
-    (nonce uint)
-    (action uint)
-    (actor (optional principal))
-    (secret (optional (buff 32)))
-  )
-  (let
-    (
-      (balances (if (is-eq for (get principal-1 channel-key))
-        { balance-1: my-balance, balance-2: their-balance }
-        { balance-1: their-balance, balance-2: my-balance }
-      ))
-      (hashed-secret (match secret s (some (sha256 s)) none))
-    )
-    (merge
-      (merge channel-key balances)
-      {
-        nonce: nonce,
-        action: action,
-        actor: actor,
-        hashed-secret: hashed-secret,
-      }
-    )
-  )
-)
-
-;;; Build up the channel tuple from its parts.
-;;; This function updates the following keys of the tuple:
-;;; - balance-1: the balance of the first principal in the channel
-;;; - balance-2: the balance of the second principal in the channel
-;;; - nonce: the nonce for this channel data
-;;; This function assumes that the channel has already been validated to
-;;; include these two principals.
-(define-private (update-channel-tuple
-    (channel-key { token: (optional principal), principal-1: principal, principal-2: principal })
-    (existing { balance-1: uint, balance-2: uint, expires-at: uint, nonce: uint, closer: (optional principal) })
-    (my-balance uint)
-    (their-balance uint)
-    (nonce uint)
-  )
-  (let
-    (
-      (balances (if (is-eq tx-sender (get principal-1 channel-key))
-        { balance-1: my-balance, balance-2: their-balance }
-        { balance-1: their-balance, balance-2: my-balance }
-      ))
-    )
-    (merge (merge existing balances) { nonce: nonce })
   )
 )
 
@@ -885,4 +1029,42 @@
     channel-key
     { balance-1: u0, balance-2: u0, expires-at: MAX_HEIGHT, nonce: nonce, closer: none }
   )
+)
+
+(define-private (make-structured-data-hash
+    (channel-key { token: (optional principal), principal-1: principal, principal-2: principal })
+    (balance-1 uint)
+    (balance-2 uint)
+    (nonce uint)
+    (action uint)
+    (actor (optional principal))
+    (secret (optional (buff 32)))
+  )
+  (let
+    (
+      (structured-data (merge
+        channel-key
+        {
+          balance-1: balance-1,
+          balance-2: balance-2,
+          nonce: nonce,
+          action: action,
+          actor: actor,
+          hashed-secret: (match secret s (some (sha256 s)) none),
+        }
+      ))
+      (data-hash (sha256 (unwrap! (to-consensus-buff? structured-data) ERR_CONSENSUS_BUFF)))
+    )
+    (ok (sha256 (concat structured-data-header data-hash)))
+  )
+)
+
+;;; Verify a signature for a hash.
+;;; Returns `true` if the signature is valid, `false` otherwise.
+(define-private (verify-hash-signature
+    (hash (buff 32))
+    (signature (buff 65))
+    (signer principal)
+  )
+  (is-eq (principal-of? (unwrap! (secp256k1-recover? hash signature) false)) (ok signer))
 )
