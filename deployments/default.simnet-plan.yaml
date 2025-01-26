@@ -58,6 +58,11 @@ plan:
     - id: 1
       transactions:
         - emulated-contract-publish:
+            contract-name: sip-010-trait-ft-standard
+            emulated-sender: ST126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT59ZTE2J
+            path: "./.cache/requirements/ST126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT59ZTE2J.sip-010-trait-ft-standard.clar"
+            clarity-version: 3
+        - emulated-contract-publish:
             contract-name: stackflow
             emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
             path: contracts/stackflow.clar

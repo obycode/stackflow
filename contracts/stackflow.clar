@@ -1,6 +1,6 @@
 ;; title: stackflow
 ;; author: brice.btc
-;; version: 0.2.1
+;; version: 0.2.2
 ;; summary: Stackflow is a payment channel network built on Stacks, enabling
 ;;   off-chain, non-custodial, and high-speed payments between users. Designed
 ;;   to be simple, secure, and efficient, it supports transactions in STX and
@@ -17,7 +17,7 @@
 (define-constant message-domain-hash (sha256 (unwrap-panic (to-consensus-buff?
 	{
 		name: "StackFlow",
-		version: "0.2.1",
+		version: "0.2.2",
 		chain-id: chain-id
 	}
 ))))
@@ -751,6 +751,39 @@
   )
 )
 
+;;; Generate a hash of the structured data for a channel.
+;;; Returns:
+;;; - (ok (buff 32)) with the hash of the structured data on success
+;;; - `ERR_CONSENSUS_BUFF` if the structured data cannot be converted to a
+;;;   consensus buff
+(define-read-only (make-structured-data-hash
+    (channel-key { token: (optional principal), principal-1: principal, principal-2: principal })
+    (balance-1 uint)
+    (balance-2 uint)
+    (nonce uint)
+    (action uint)
+    (actor (optional principal))
+    (hashed-secret (optional (buff 32)))
+  )
+  (let
+    (
+      (structured-data (merge
+        channel-key
+        {
+          balance-1: balance-1,
+          balance-2: balance-2,
+          nonce: nonce,
+          action: action,
+          actor: actor,
+          hashed-secret: hashed-secret,
+        }
+      ))
+      (data-hash (sha256 (unwrap! (to-consensus-buff? structured-data) ERR_CONSENSUS_BUFF)))
+    )
+    (ok (sha256 (concat structured-data-header data-hash)))
+  )
+)
+
 ;;; Validates that `signature` is a valid signature from `signer for the
 ;;; structured data constructed from the other arguments.
 ;;; Returns:
@@ -1029,34 +1062,6 @@
     channels
     channel-key
     { balance-1: u0, balance-2: u0, expires-at: MAX_HEIGHT, nonce: nonce, closer: none }
-  )
-)
-
-(define-private (make-structured-data-hash
-    (channel-key { token: (optional principal), principal-1: principal, principal-2: principal })
-    (balance-1 uint)
-    (balance-2 uint)
-    (nonce uint)
-    (action uint)
-    (actor (optional principal))
-    (hashed-secret (optional (buff 32)))
-  )
-  (let
-    (
-      (structured-data (merge
-        channel-key
-        {
-          balance-1: balance-1,
-          balance-2: balance-2,
-          nonce: nonce,
-          action: action,
-          actor: actor,
-          hashed-secret: hashed-secret,
-        }
-      ))
-      (data-hash (sha256 (unwrap! (to-consensus-buff? structured-data) ERR_CONSENSUS_BUFF)))
-    )
-    (ok (sha256 (concat structured-data-header data-hash)))
   )
 )
 
