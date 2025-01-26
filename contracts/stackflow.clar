@@ -1,7 +1,6 @@
-
 ;; title: stackflow
 ;; author: brice.btc
-;; version: 0.2.0
+;; version: 0.2.1
 ;; summary: Stackflow is a payment channel network built on Stacks, enabling
 ;;   off-chain, non-custodial, and high-speed payments between users. Designed
 ;;   to be simple, secure, and efficient, it supports transactions in STX and
@@ -18,7 +17,7 @@
 (define-constant message-domain-hash (sha256 (unwrap-panic (to-consensus-buff?
 	{
 		name: "StackFlow",
-		version: "0.1.0",
+		version: "0.2.1",
 		chain-id: chain-id
 	}
 ))))
@@ -766,7 +765,7 @@
     (nonce uint)
     (action uint)
     (actor (optional principal))
-    (secret (optional (buff 32)))
+    (hashed-secret (optional (buff 32)))
   )
   (let ((hash (unwrap! (make-structured-data-hash
       channel-key
@@ -775,7 +774,7 @@
       nonce
       action
       actor
-      secret
+      hashed-secret
     ) false)))
     (verify-hash-signature hash signature signer)
   )
@@ -801,14 +800,16 @@
     (actor (optional principal))
     (secret (optional (buff 32)))
   )
-  (let ((hash (try! (make-structured-data-hash
+  (let (
+    (hashed-secret (match secret s (some (sha256 s)) none))
+    (hash (try! (make-structured-data-hash
       channel-key
       balance-1
       balance-2
       nonce
       action
       actor
-      secret
+      hashed-secret
     ))))
     (asserts! (verify-hash-signature hash signature-1 signer-1) ERR_INVALID_SENDER_SIGNATURE)
     (asserts! (verify-hash-signature hash signature-2 signer-2) ERR_INVALID_OTHER_SIGNATURE)
@@ -1038,7 +1039,7 @@
     (nonce uint)
     (action uint)
     (actor (optional principal))
-    (secret (optional (buff 32)))
+    (hashed-secret (optional (buff 32)))
   )
   (let
     (
@@ -1050,7 +1051,7 @@
           nonce: nonce,
           action: action,
           actor: actor,
-          hashed-secret: (match secret s (some (sha256 s)) none),
+          hashed-secret: hashed-secret,
         }
       ))
       (data-hash (sha256 (unwrap! (to-consensus-buff? structured-data) ERR_CONSENSUS_BUFF)))
