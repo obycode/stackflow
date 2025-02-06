@@ -3,6 +3,11 @@ non-custodial, high-speed payments between users and is designed to be simple,
 secure, and efficient. It supports payments in STX or approved SIP-010 fungible
 tokens.
 
+> [!NOTE]
+> Official contract is published by `stackflow.btc` on mainnet at
+> `SP126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT6AD08RV.stackflow-0-2-2` and on testnet at
+> `ST126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT59ZTE2J.stackflow-0-2-2`.
+
 A Stacks address can open a channel with any other Stacks address with a
 contract call to the Stackflow contract. This call sends tokens to the contract
 for escrow. The tokens are locked in the contract and can only be withdrawn by
