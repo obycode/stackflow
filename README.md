@@ -1,12 +1,19 @@
 Stackflow is a payment channel network built on Stacks that enables off-chain,
 non-custodial, high-speed payments between users and is designed to be simple,
-secure, and efficient. It supports payments in STX or approved SIP-010 fungible
-tokens.
+secure, and efficient. It supports payments in STX or SIP-010 fungible tokens.
 
 > [!NOTE]
-> Official contract is published by `stackflow.btc` on mainnet at
+> The Stackflow trait is published by `stackflow.btc` on mainnet at
+> `SP126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT6AD08RV.stackflow-token` and on testnet at
+> `ST126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT59ZTE2J.stackflow-token`.
+
+> [!NOTE]
+> The official Stackflow contract for STX is published by
+> `stackflow.btc` on mainnet at
 > `SP126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT6AD08RV.stackflow-0-3-0` and on testnet at
-> `ST126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT59ZTE2J.stackflow-0-3-0`.
+> `ST126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT59ZTE2J.stackflow-0-3-0`. Contracts for
+> other tokens should copy this contract exactly to ensure that all Stackflow
+> frontends will support it.
 
 A Stacks address can open a channel with any other Stacks address with a
 contract call to the Stackflow contract. This call sends tokens to the contract
