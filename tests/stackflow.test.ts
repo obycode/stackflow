@@ -58,6 +58,8 @@ enum TxError {
   InvalidWithdrawal = 116,
   UnapprovedToken = 117,
   NotExpired = 118,
+  NotInitialized = 119,
+  AlreadyInitialized = 120,
 }
 
 const structuredDataPrefix = Buffer.from([0x53, 0x49, 0x50, 0x30, 0x31, 0x38]);
@@ -78,7 +80,7 @@ function structuredDataHash(structuredData: ClarityValue): Buffer {
 const domainHash = structuredDataHash(
   Cl.tuple({
     name: Cl.stringAscii("StackFlow"),
-    version: Cl.stringAscii("0.2.3"),
+    version: Cl.stringAscii("0.3.0"),
     "chain-id": Cl.uint(chainIds.testnet),
   })
 );
@@ -230,77 +232,52 @@ function generateWithdrawSignature(
   );
 }
 
-describe("manage allowed SIP tokens", () => {
-  it("unadded token is not allowed", () => {
-    const { result } = simnet.callReadOnlyFn(
+describe("init", () => {
+  it("can initialize the contract for STX", () => {
+    const { result } = simnet.callPublicFn(
       "stackflow",
-      "is-allowed-token",
-      [Cl.principal(`${deployer}.foo`)],
+      "init",
+      [Cl.none()],
       deployer
     );
-
-    expect(result).toBeBool(false);
+    expect(result).toBeOk(Cl.bool(true));
   });
 
-  it("adding a token makes it allowed", () => {
-    simnet.callPublicFn(
+  it("can initialize the contract for a SIP-010 token", () => {
+    const { result } = simnet.callPublicFn(
       "stackflow",
-      "add-allowed-sip-010",
-      [Cl.principal(`${deployer}.foo`)],
+      "init",
+      [Cl.some(Cl.principal(`${deployer}.test-token`))],
       deployer
     );
-
-    const { result } = simnet.callReadOnlyFn(
-      "stackflow",
-      "is-allowed-token",
-      [Cl.principal(`${deployer}.foo`)],
-      deployer
-    );
-
-    expect(result).toBeBool(true);
+    expect(result).toBeOk(Cl.bool(true));
   });
 
-  it("removing a token makes it unallowed", () => {
-    simnet.callPublicFn(
+  it("cannot initialize the contract twice", () => {
+    const { result: initResult } = simnet.callPublicFn(
       "stackflow",
-      "add-allowed-sip-010",
-      [Cl.principal(`${deployer}.foo`)],
+      "init",
+      [Cl.none()],
       deployer
     );
-
-    simnet.callPublicFn(
+    expect(initResult).toBeOk(Cl.bool(true));
+    const { result } = simnet.callPublicFn(
       "stackflow",
-      "disallow-sip-010",
-      [Cl.principal(`${deployer}.foo`)],
+      "init",
+      [Cl.none()],
       deployer
     );
-
-    const { result } = simnet.callReadOnlyFn(
-      "stackflow",
-      "is-allowed-token",
-      [Cl.principal(`${deployer}.foo`)],
-      deployer
-    );
-
-    expect(result).toBeBool(false);
+    expect(result).toBeErr(Cl.uint(TxError.AlreadyInitialized));
   });
 
-  it("removing a token that was never added is still unallowed", () => {
-    simnet.callPublicFn(
+  it("cannot fund a channel before initializing the contract", () => {
+    const { result } = simnet.callPublicFn(
       "stackflow",
-      "disallow-sip-010",
-      [Cl.principal(`${deployer}.foo`)],
-      deployer
+      "fund-channel",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
+      address1
     );
-
-    const { result } = simnet.callReadOnlyFn(
-      "stackflow",
-      "is-allowed-token",
-      [Cl.principal(`${deployer}.foo`)],
-      deployer
-    );
-
-    expect(result).toBeBool(false);
+    expect(result).toBeErr(Cl.uint(TxError.NotInitialized));
   });
 });
 
@@ -380,6 +357,9 @@ describe("deregister-agent", () => {
 
 describe("fund-channel", () => {
   it("can fund a channel", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     const { result } = simnet.callPublicFn(
       "stackflow",
       "fund-channel",
@@ -425,6 +405,9 @@ describe("fund-channel", () => {
   });
 
   it("can fund a channel that has been funded by the other party", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
@@ -476,6 +459,9 @@ describe("fund-channel", () => {
   });
 
   it("cannot fund a channel that has already been funded", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     const { result } = simnet.callPublicFn(
       "stackflow",
       "fund-channel",
@@ -529,6 +515,9 @@ describe("fund-channel", () => {
   });
 
   it("second account cannot fund a channel that has already been funded", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
@@ -604,6 +593,9 @@ describe("fund-channel", () => {
   });
 
   it("cannot fund channel with unapproved token", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Give address1 and address2 some test tokens
     simnet.callPublicFn(
       "test-token",
@@ -647,11 +639,11 @@ describe("fund-channel", () => {
       deployer
     );
 
-    // Set the test-token as approved
+    // Initialize the contract for test-token
     simnet.callPublicFn(
       "stackflow",
-      "add-allowed-sip-010",
-      [Cl.principal(`${deployer}.test-token`)],
+      "init",
+      [Cl.some(Cl.principal(`${deployer}.test-token`))],
       deployer
     );
 
@@ -719,11 +711,11 @@ describe("fund-channel", () => {
       deployer
     );
 
-    // Set the test-token as approved
+    // Initialize the contract for test-token
     simnet.callPublicFn(
       "stackflow",
-      "add-allowed-sip-010",
-      [Cl.principal(`${deployer}.test-token`)],
+      "init",
+      [Cl.some(Cl.principal(`${deployer}.test-token`))],
       deployer
     );
 
@@ -802,11 +794,11 @@ describe("fund-channel", () => {
       deployer
     );
 
-    // Set the test-token as approved
+    // Initialize the contract for test-token
     simnet.callPublicFn(
       "stackflow",
-      "add-allowed-sip-010",
-      [Cl.principal(`${deployer}.test-token`)],
+      "init",
+      [Cl.some(Cl.principal(`${deployer}.test-token`))],
       deployer
     );
 
@@ -887,11 +879,11 @@ describe("fund-channel", () => {
       deployer
     );
 
-    // Set the test-token as approved
+    // Initialize the contract for test-token
     simnet.callPublicFn(
       "stackflow",
-      "add-allowed-sip-010",
-      [Cl.principal(`${deployer}.test-token`)],
+      "init",
+      [Cl.some(Cl.principal(`${deployer}.test-token`))],
       deployer
     );
 
@@ -987,6 +979,9 @@ describe("fund-channel", () => {
 
 describe("close-channel", () => {
   it("account 1 can close account with no transfers", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Setup the channel
     simnet.callPublicFn(
       "stackflow",
@@ -1048,6 +1043,9 @@ describe("close-channel", () => {
   });
 
   it("account 1 can close account with a 0 balance", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Setup the channel
     simnet.callPublicFn(
       "stackflow",
@@ -1103,6 +1101,9 @@ describe("close-channel", () => {
   });
 
   it("account 2 can close account with no transfers", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Setup the channel
     simnet.callPublicFn(
       "stackflow",
@@ -1164,6 +1165,9 @@ describe("close-channel", () => {
   });
 
   it("account 1 can close account with transfers", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Setup the channel
     simnet.callPublicFn(
       "stackflow",
@@ -1225,6 +1229,9 @@ describe("close-channel", () => {
   });
 
   it("account 2 can close account with transfers", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Setup the channel
     simnet.callPublicFn(
       "stackflow",
@@ -1286,6 +1293,9 @@ describe("close-channel", () => {
   });
 
   it("account 1 fails with 2 bad signatures", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Setup the channel
     simnet.callPublicFn(
       "stackflow",
@@ -1350,6 +1360,9 @@ describe("close-channel", () => {
   });
 
   it("account 2 fails with bad other signature", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Setup the channel
     simnet.callPublicFn(
       "stackflow",
@@ -1414,6 +1427,9 @@ describe("close-channel", () => {
   });
 
   it("cannot close with bad total balance", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Setup the channel
     simnet.callPublicFn(
       "stackflow",
@@ -1480,6 +1496,9 @@ describe("close-channel", () => {
 
 describe("force-cancel", () => {
   it("account 1 can force cancel a channel", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Setup the channel and save the channel key
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
@@ -1535,6 +1554,9 @@ describe("force-cancel", () => {
   });
 
   it("account 2 can force cancel channel", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Setup the channel and save the channel key
     simnet.callPublicFn(
       "stackflow",
@@ -1589,6 +1611,9 @@ describe("force-cancel", () => {
   });
 
   it("canceling a non-existent channel gives an error", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Setup a channel
     simnet.callPublicFn(
       "stackflow",
@@ -1614,7 +1639,13 @@ describe("force-cancel", () => {
 });
 
 describe("force-close", () => {
+  // Initialize the contract for STX
+  simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
   it("account 1 can force-close", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Setup the channel
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
@@ -1700,6 +1731,9 @@ describe("force-close", () => {
   });
 
   it("account 2 can force-close", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Setup the channel
     simnet.callPublicFn(
       "stackflow",
@@ -1785,6 +1819,9 @@ describe("force-close", () => {
   });
 
   it("account 1 fails with 2 bad signatures", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Setup the channel
     simnet.callPublicFn(
       "stackflow",
@@ -1852,6 +1889,9 @@ describe("force-close", () => {
   });
 
   it("account 2 fails with bad other signature", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Setup the channel
     simnet.callPublicFn(
       "stackflow",
@@ -1919,6 +1959,9 @@ describe("force-close", () => {
   });
 
   it("cannot close with bad total balance", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Setup the channel
     simnet.callPublicFn(
       "stackflow",
@@ -1988,6 +2031,9 @@ describe("force-close", () => {
 
 describe("dispute-closure", () => {
   it("disputing a non-existent channel gives an error", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Setup a channel
     simnet.callPublicFn(
       "stackflow",
@@ -2036,6 +2082,9 @@ describe("dispute-closure", () => {
   });
 
   it("disputing a channel that is not closing gives an error", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Setup the channel and save the channel key
     simnet.callPublicFn(
       "stackflow",
@@ -2122,6 +2171,9 @@ describe("dispute-closure", () => {
   });
 
   it("account 2 can dispute account 1's closure", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Setup the channel and save the channel key
     simnet.callPublicFn(
       "stackflow",
@@ -2220,6 +2272,9 @@ describe("dispute-closure", () => {
   });
 
   it("account 1 can dispute account 2's closure", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Setup the channel and save the channel key
     simnet.callPublicFn(
       "stackflow",
@@ -2318,6 +2373,9 @@ describe("dispute-closure", () => {
   });
 
   it("account 1 cannot dispute its own closure", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Setup the channel and save the channel key
     simnet.callPublicFn(
       "stackflow",
@@ -2420,6 +2478,9 @@ describe("dispute-closure", () => {
 
 describe("agent-dispute-closure", () => {
   it("disputing a non-existent channel gives an error", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Register an agent
     simnet.callPublicFn(
       "stackflow",
@@ -2477,6 +2538,9 @@ describe("agent-dispute-closure", () => {
   });
 
   it("disputing a channel that is not closing gives an error", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Register an agent
     simnet.callPublicFn(
       "stackflow",
@@ -2572,6 +2636,9 @@ describe("agent-dispute-closure", () => {
   });
 
   it("account 2 can dispute account 1's closure", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Register an agent
     simnet.callPublicFn(
       "stackflow",
@@ -2679,6 +2746,9 @@ describe("agent-dispute-closure", () => {
   });
 
   it("account 1 can dispute account 2's closure", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Register an agent
     simnet.callPublicFn(
       "stackflow",
@@ -2786,6 +2856,9 @@ describe("agent-dispute-closure", () => {
   });
 
   it("account 1 cannot dispute its own closure", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Register an agent
     simnet.callPublicFn(
       "stackflow",
@@ -2897,6 +2970,9 @@ describe("agent-dispute-closure", () => {
 
 describe("finalize", () => {
   it("finalizing a non-existent channel gives an error", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Setup a channel
     simnet.callPublicFn(
       "stackflow",
@@ -2921,6 +2997,9 @@ describe("finalize", () => {
   });
 
   it("finalizing a channel that is not closing gives an error", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Setup the channel and save the channel key
     simnet.callPublicFn(
       "stackflow",
@@ -2976,6 +3055,9 @@ describe("finalize", () => {
   });
 
   it("account 1 can finalize account 1's cancel", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Setup the channel and save the channel key
     simnet.callPublicFn(
       "stackflow",
@@ -3043,6 +3125,9 @@ describe("finalize", () => {
   });
 
   it("account 1 can finalize account 2's cancel", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Setup the channel and save the channel key
     simnet.callPublicFn(
       "stackflow",
@@ -3110,6 +3195,9 @@ describe("finalize", () => {
   });
 
   it("account 1 can finalize account 1's force-close", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Setup the channel
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
@@ -3208,6 +3296,9 @@ describe("finalize", () => {
   });
 
   it("channel cannot be finalized before waiting period has passed", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Setup the channel and save the channel key
     simnet.callPublicFn(
       "stackflow",
@@ -3277,6 +3368,9 @@ describe("finalize", () => {
 
 describe("deposit", () => {
   it("can deposit to a valid channel from account1", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
@@ -3374,6 +3468,9 @@ describe("deposit", () => {
   });
 
   it("can deposit to a valid channel from account2", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
@@ -3470,6 +3567,9 @@ describe("deposit", () => {
   });
 
   it("can deposit after transfers", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
@@ -3566,6 +3666,9 @@ describe("deposit", () => {
   });
 
   it("cannot deposit into non-existant channel", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Create the signatures for a deposit
     const signature1 = generateDepositSignature(
       address1PK,
@@ -3639,6 +3742,9 @@ describe("deposit", () => {
   });
 
   it("can not deposit with bad signatures", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
@@ -3729,6 +3835,9 @@ describe("deposit", () => {
   });
 
   it("cannot deposit with an old nonce", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
@@ -3846,6 +3955,9 @@ describe("deposit", () => {
 
 describe("withdraw", () => {
   it("can withdraw from a valid channel from account1", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
@@ -3943,6 +4055,9 @@ describe("withdraw", () => {
   });
 
   it("can withdraw from a valid channel from account2", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
@@ -4040,6 +4155,9 @@ describe("withdraw", () => {
   });
 
   it("cannot withdraw with a bad sender signature", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
@@ -4131,6 +4249,9 @@ describe("withdraw", () => {
   });
 
   it("cannot withdraw with an invalid other signature", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
@@ -4222,6 +4343,9 @@ describe("withdraw", () => {
   });
 
   it("cannot withdraw as the wrong actor", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
@@ -4313,6 +4437,9 @@ describe("withdraw", () => {
   });
 
   it("cannot withdraw with an old nonce", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
@@ -4452,6 +4579,9 @@ describe("withdraw", () => {
 
 describe("get-channel", () => {
   it("returns the channel info", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
@@ -4614,6 +4744,9 @@ describe("execute-withdraw", () => {
   });
 
   it("passes when the contract has a sufficient balance", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
@@ -4640,6 +4773,9 @@ describe("execute-withdraw", () => {
   });
 
   it("fails when the contract has an insufficient balance", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     simnet.callPublicFn(
       "stackflow",
       "fund-channel",
@@ -4668,6 +4804,9 @@ describe("execute-withdraw", () => {
 
 describe("transfers with secrets", () => {
   it("can transfer and force-close with a secret", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Setup the channel
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
@@ -4755,6 +4894,9 @@ describe("transfers with secrets", () => {
   });
 
   it("force-close with incorrect secret fails", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
     // Setup the channel
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
