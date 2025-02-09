@@ -1,6 +1,6 @@
 ;; title: stackflow
 ;; author: brice.btc
-;; version: 0.2.3
+;; version: 0.3.0
 ;; summary: Stackflow is a payment channel network built on Stacks, enabling
 ;;   off-chain, non-custodial, and high-speed payments between users. Designed
 ;;   to be simple, secure, and efficient, it supports transactions in STX and
@@ -29,6 +29,7 @@
 ;; SOFTWARE.
 
 (use-trait sip-010 'SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE.sip-010-trait-ft-standard.sip-010-trait)
+(impl-trait .stackflow-token.stackflow-token)
 
 (define-constant contract-deployer tx-sender)
 (define-constant MAX_HEIGHT u340282366920938463463374607431768211455)
@@ -39,7 +40,7 @@
 (define-constant message-domain-hash (sha256 (unwrap-panic (to-consensus-buff?
 	{
 		name: "StackFlow",
-		version: "0.2.3",
+		version: "0.3.0",
 		chain-id: chain-id
 	}
 ))))
@@ -71,13 +72,15 @@
 (define-constant ERR_INVALID_WITHDRAWAL (err u116))
 (define-constant ERR_UNAPPROVED_TOKEN (err u117))
 (define-constant ERR_NOT_EXPIRED (err u118))
+(define-constant ERR_NOT_INITIALIZED (err u119))
+(define-constant ERR_ALREADY_INITIALIZED (err u120))
 
-;;; List of allowed SIP-010 tokens as set by the owner of the contract.
-;;; This is required since SIP-010 tokens are not guaranteed not to have side-
-;;; effects other than those defined in the SIP-010 standard. For example, an
-;;; untrusted token could transfer funds from the contract when called within
-;;; an `as-contract` expression.
-(define-map allowed-sip-010s principal bool)
+;;; Has this contract been initialized?
+(define-data-var initialized bool false)
+
+;;; The token supported by this instance of the Stackflow contract.
+;;; If `none`, only STX is supported.
+(define-data-var supported-token (optional principal) none)
 
 ;;; Map tracking the initial balances in channels between two principals for a
 ;;; given token.
@@ -93,21 +96,17 @@
 ;; Public Functions
 ;;
 
-;;; As the owner of this contract, mark a SIP-010 token as allowed.
-;;; Returns `(ok true)`
-(define-public (add-allowed-sip-010 (token principal))
+;;; Initialize the contract with the supported token.
+;;; Returns:
+;;; - `(ok true)` on success
+;;; - `ERR_ALREADY_INITIALIZED` if the contract has already been initialized
+;;; - `ERR_UNAUTHORIZED` if the sender is not the contract deployer
+(define-public (init (token (optional <sip-010>)))
   (begin
-    (asserts! (is-eq contract-caller contract-deployer) ERR_UNAUTHORIZED)
-    (ok (map-set allowed-sip-010s token true))
-  )
-)
-
-;;; As the owner of this contract, mark a SIP-010 token as disallowed.
-;;; Returns `(ok true)`
-(define-public (disallow-sip-010 (token principal))
-  (begin
-    (asserts! (is-eq contract-caller contract-deployer) ERR_UNAUTHORIZED)
-    (ok (map-set allowed-sip-010s token false))
+    (asserts! (not (var-get initialized)) ERR_ALREADY_INITIALIZED)
+    (asserts! (is-eq tx-sender contract-deployer) ERR_UNAUTHORIZED)
+    (var-set supported-token (contract-of-optional token))
+    (ok (var-set initialized true))
   )
 )
 
@@ -133,17 +132,14 @@
 ;;;   ```
 ;;;   { token: (optional principal), principal-1: principal, principal-2: principal }
 ;;;   ```
-;;; - `ERR_UNAPPROVED_TOKEN` if the token is not in the allowed list
+;;; - `ERR_NOT_INITIALIZED` if the contract has not been initialized
+;;; - `ERR_UNAPPROVED_TOKEN` if the token is not the correct token
 ;;; - `ERR_NONCE_TOO_LOW` if the nonce is less than the channel's saved nonce
 ;;; - `ERR_CLOSE_IN_PROGRESS` if a forced closure is in progress
 ;;; - `ERR_ALREADY_FUNDED` if the channel has already been funded
 (define-public (fund-channel (token (optional <sip-010>)) (amount uint) (with principal) (nonce uint))
   (begin
-    ;; If a SIP-010 token is specified, it must be in the allowed list
-    (match token
-      t (asserts! (is-allowed-token (contract-of t)) ERR_UNAPPROVED_TOKEN)
-      true
-    )
+    (try! (check-token token))
 
     (let
       (
@@ -872,17 +868,6 @@
   )
 )
 
-;;; Check if `token` is in the allowed list of SIP-010 tokens.
-;;; Returns:
-;;; - `true` if the token is allowed
-;;; - `false` if the token is not allowed
-(define-read-only (is-allowed-token (token principal))
-  (match (map-get? allowed-sip-010s token)
-    allowed allowed
-    false
-  )
-)
-
 ;; Private Functions
 ;;
 
@@ -1101,4 +1086,17 @@
     (signer principal)
   )
   (is-eq (principal-of? (unwrap! (secp256k1-recover? hash signature) false)) (ok signer))
+)
+
+;;; Check that the contract has been initialized and `token` is the supported token.
+(define-private (check-token (token (optional <sip-010>)))
+  (begin
+    ;; Ensure that the contract has been initialized
+    (asserts! (var-get initialized) ERR_NOT_INITIALIZED)
+
+    ;; Verify that this is the supported token
+    (asserts! (is-eq (contract-of-optional token) (var-get supported-token)) ERR_UNAPPROVED_TOKEN)
+
+    (ok true)
+  )
 )

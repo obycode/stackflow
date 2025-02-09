@@ -1,5 +1,5 @@
 {
-  "name": "surf-tests",
+  "name": "stackflow-tests",
   "version": "1.0.0",
   "description": "Run unit tests on this project.",
   "type": "module",
