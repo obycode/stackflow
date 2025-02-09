@@ -78,7 +78,7 @@ function structuredDataHash(structuredData: ClarityValue): Buffer {
 const domainHash = structuredDataHash(
   Cl.tuple({
     name: Cl.stringAscii("StackFlow"),
-    version: Cl.stringAscii("0.1.0"),
+    version: Cl.stringAscii("0.2.3"),
     "chain-id": Cl.uint(chainIds.testnet),
   })
 );
@@ -1028,6 +1028,61 @@ describe("close-channel", () => {
         Cl.none(),
         Cl.principal(address2),
         Cl.uint(1000000),
+        Cl.uint(2000000),
+        Cl.buffer(signature1),
+        Cl.buffer(signature2),
+        Cl.uint(1),
+      ],
+      address1
+    );
+    expect(result).toBeOk(Cl.bool(false));
+
+    // Verify the balances
+    const stxBalances = simnet.getAssetsMap().get("STX")!;
+
+    const balance1 = stxBalances.get(address1);
+    expect(balance1).toBe(100000000000000n);
+
+    const balance2 = stxBalances.get(address2);
+    expect(balance2).toBe(100000000000000n);
+  });
+
+  it("account 1 can close account with a 0 balance", () => {
+    // Setup the channel
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
+      address2
+    );
+
+    // Create the signatures
+    const signature1 = generateCloseChannelSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      0,
+      2000000,
+      1
+    );
+    const signature2 = generateCloseChannelSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      2000000,
+      0,
+      1
+    );
+
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "close-channel",
+      [
+        Cl.none(),
+        Cl.principal(address2),
+        Cl.uint(0),
         Cl.uint(2000000),
         Cl.buffer(signature1),
         Cl.buffer(signature2),
@@ -4788,7 +4843,7 @@ describe("transfers with secrets", () => {
 
 describe("make-structured-data-hash", () => {
   it("makes the structured data hash for a transfer", () => {
-    const { result } = simnet.callPrivateFn(
+    const { result } = simnet.callReadOnlyFn(
       "stackflow",
       "make-structured-data-hash",
       [
@@ -4823,7 +4878,7 @@ describe("make-structured-data-hash", () => {
   });
 
   it("makes the structured data hash for a close", () => {
-    const { result } = simnet.callPrivateFn(
+    const { result } = simnet.callReadOnlyFn(
       "stackflow",
       "make-structured-data-hash",
       [

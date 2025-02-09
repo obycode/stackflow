@@ -1,10 +1,32 @@
 ;; title: stackflow
 ;; author: brice.btc
-;; version: 0.2.2
+;; version: 0.2.3
 ;; summary: Stackflow is a payment channel network built on Stacks, enabling
 ;;   off-chain, non-custodial, and high-speed payments between users. Designed
 ;;   to be simple, secure, and efficient, it supports transactions in STX and
 ;;   approved SIP-010 fungible tokens.
+
+;; MIT License
+
+;; Copyright (c) 2024-2025 obycode, LLC
+
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
 
 (use-trait sip-010 'SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE.sip-010-trait-ft-standard.sip-010-trait)
 
@@ -17,7 +39,7 @@
 (define-constant message-domain-hash (sha256 (unwrap-panic (to-consensus-buff?
 	{
 		name: "StackFlow",
-		version: "0.2.2",
+		version: "0.2.3",
 		chain-id: chain-id
 	}
 ))))
@@ -1038,17 +1060,23 @@
     (balance-1 uint)
     (balance-2 uint)
   )
-  (match token
-    t
+  (begin
+    (try! (transfer token principal-1 balance-1))
+    (transfer token principal-2 balance-2)
+  )
+)
+
+;;; Transfer `amount` of `token` to `addr`. Handles both SIP-010 tokens and STX.
+(define-private (transfer (token (optional <sip-010>)) (addr principal) (amount uint))
+  (if (is-eq amount u0)
+    ;; Don't try to transfer 0, this will cause an error
+    (ok (is-some token))
     (begin
-      (unwrap! (as-contract (contract-call? t transfer balance-1 tx-sender principal-1 none)) ERR_WITHDRAWAL_FAILED)
-      (unwrap! (as-contract (contract-call? t transfer balance-2 tx-sender principal-2 none)) ERR_WITHDRAWAL_FAILED)
-      (ok true)
-    )
-    (begin
-      (unwrap! (as-contract (stx-transfer? balance-1 tx-sender principal-1)) ERR_WITHDRAWAL_FAILED)
-      (unwrap! (as-contract (stx-transfer? balance-2 tx-sender principal-2)) ERR_WITHDRAWAL_FAILED)
-      (ok false)
+      (match token
+        t (unwrap! (as-contract (contract-call? t transfer amount tx-sender addr none)) ERR_WITHDRAWAL_FAILED)
+        (unwrap! (as-contract (stx-transfer? amount tx-sender addr)) ERR_WITHDRAWAL_FAILED)
+      )
+      (ok (is-some token))
     )
   )
 )
