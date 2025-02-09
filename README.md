@@ -5,8 +5,8 @@ tokens.
 
 > [!NOTE]
 > Official contract is published by `stackflow.btc` on mainnet at
-> `SP126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT6AD08RV.stackflow-0-2-2` and on testnet at
-> `ST126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT59ZTE2J.stackflow-0-2-2`.
+> `SP126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT6AD08RV.stackflow-0-2-3` and on testnet at
+> `ST126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT59ZTE2J.stackflow-0-2-3`.
 
 A Stacks address can open a channel with any other Stacks address with a
 contract call to the Stackflow contract. This call sends tokens to the contract
