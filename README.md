@@ -4,14 +4,14 @@ secure, and efficient. It supports payments in STX or SIP-010 fungible tokens.
 
 > [!NOTE]
 > The Stackflow trait is published by `stackflow.btc` on mainnet at
-> `SP126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT6AD08RV.stackflow-token` and on testnet at
-> `ST126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT59ZTE2J.stackflow-token`.
+> `SP126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT6AD08RV.stackflow-token-0-4-0` and on testnet at
+> `ST126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT59ZTE2J.stackflow-token-0-4-0`.
 
 > [!NOTE]
 > The official Stackflow contract for STX is published by
 > `stackflow.btc` on mainnet at
-> `SP126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT6AD08RV.stackflow-0-3-0` and on testnet at
-> `ST126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT59ZTE2J.stackflow-0-3-0`. Contracts for
+> `SP126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT6AD08RV.stackflow-0-4-0` and on testnet at
+> `ST126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT59ZTE2J.stackflow-0-4-0`. Contracts for
 > other tokens should copy this contract exactly to ensure that all Stackflow
 > frontends will support it.
 

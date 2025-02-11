@@ -1,6 +1,6 @@
 ;; title: stackflow
 ;; author: brice.btc
-;; version: 0.3.0
+;; version: 0.4.0
 ;; summary: Stackflow is a payment channel network built on Stacks, enabling
 ;;   off-chain, non-custodial, and high-speed payments between users. Designed
 ;;   to be simple, secure, and efficient, it supports transactions in STX and
@@ -29,7 +29,7 @@
 ;; SOFTWARE.
 
 (use-trait sip-010 'SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE.sip-010-trait-ft-standard.sip-010-trait)
-(impl-trait .stackflow-token.stackflow-token)
+(impl-trait 'SP126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT6AD08RV.stackflow-token-0-4-0.stackflow-token)
 
 (define-constant contract-deployer tx-sender)
 (define-constant MAX_HEIGHT u340282366920938463463374607431768211455)
@@ -40,7 +40,7 @@
 (define-constant message-domain-hash (sha256 (unwrap-panic (to-consensus-buff?
 	{
 		name: "StackFlow",
-		version: "0.3.0",
+		version: "0.4.0",
 		chain-id: chain-id
 	}
 ))))
@@ -110,7 +110,14 @@
   )
 )
 
-;;; Register an agent to act on your behalf.
+;;; Register an agent to act on your behalf. Registering an agent allows you to
+;;; transfer the responsibility of maintaining an always-on server for managing
+;;; your payment channels. The agent can perform all reactive actions on your
+;;; behalf, including signing off on incoming transfers, deposit, withdraw, and
+;;; closure requests from the other party, and disputing closures initiated by
+;;; the other party.
+;;; WARNING: An agent, collaborating with the other party, could potentially
+;;; steal your funds. Only register agents you trust.
 ;;; Returns `(ok true)`
 (define-public (register-agent (agent principal))
   (ok (map-set agents tx-sender agent))
@@ -243,7 +250,7 @@
         balance-2
         nonce
         ACTION_CLOSE
-        none
+        tx-sender
         none
       )
     )
@@ -326,7 +333,7 @@
     (their-signature (buff 65))
     (nonce uint)
     (action uint)
-    (actor (optional principal))
+    (actor principal)
     (secret (optional (buff 32)))
   )
   (let
@@ -430,7 +437,7 @@
     (their-signature (buff 65))
     (nonce uint)
     (action uint)
-    (actor (optional principal))
+    (actor principal)
     (secret (optional (buff 32)))
   )
   (dispute-closure-inner
@@ -476,7 +483,7 @@
     (their-signature (buff 65))
     (nonce uint)
     (action uint)
-    (actor (optional principal))
+    (actor principal)
     (secret (optional (buff 32)))
   )
   (let
@@ -615,7 +622,7 @@
         balance-2
         nonce
         ACTION_DEPOSIT
-        (some tx-sender)
+        tx-sender
         none
       )
     )
@@ -719,7 +726,7 @@
         balance-2
         nonce
         ACTION_WITHDRAWAL
-        (some tx-sender)
+        tx-sender
         none
       )
     )
@@ -780,7 +787,7 @@
     (balance-2 uint)
     (nonce uint)
     (action uint)
-    (actor (optional principal))
+    (actor principal)
     (hashed-secret (optional (buff 32)))
   )
   (let
@@ -815,7 +822,7 @@
     (balance-2 uint)
     (nonce uint)
     (action uint)
-    (actor (optional principal))
+    (actor principal)
     (hashed-secret (optional (buff 32)))
   )
   (let ((hash (unwrap! (make-structured-data-hash
@@ -827,7 +834,7 @@
       actor
       hashed-secret
     ) false)))
-    (verify-hash-signature hash signature signer)
+    (verify-hash-signature hash signature signer actor)
   )
 )
 
@@ -848,7 +855,7 @@
     (balance-2 uint)
     (nonce uint)
     (action uint)
-    (actor (optional principal))
+    (actor principal)
     (secret (optional (buff 32)))
   )
   (let (
@@ -862,8 +869,8 @@
       actor
       hashed-secret
     ))))
-    (asserts! (verify-hash-signature hash signature-1 signer-1) ERR_INVALID_SENDER_SIGNATURE)
-    (asserts! (verify-hash-signature hash signature-2 signer-2) ERR_INVALID_OTHER_SIGNATURE)
+    (asserts! (verify-hash-signature hash signature-1 signer-1 actor) ERR_INVALID_SENDER_SIGNATURE)
+    (asserts! (verify-hash-signature hash signature-2 signer-2 actor) ERR_INVALID_OTHER_SIGNATURE)
     (ok true)
   )
 )
@@ -950,7 +957,7 @@
     (their-signature (buff 65))
     (nonce uint)
     (action uint)
-    (actor (optional principal))
+    (actor principal)
     (secret (optional (buff 32)))
   )
   (let
@@ -1084,8 +1091,19 @@
     (hash (buff 32))
     (signature (buff 65))
     (signer principal)
+    (actor principal)
   )
-  (is-eq (principal-of? (unwrap! (secp256k1-recover? hash signature) false)) (ok signer))
+  (or
+    (is-eq (principal-of? (unwrap! (secp256k1-recover? hash signature) false)) (ok signer))
+    ;; If the signer is not the actor, then the agent can sign for the signer.
+    (and
+      (not (is-eq signer actor))
+      (match (map-get? agents signer)
+        agent (is-eq (principal-of? (unwrap! (secp256k1-recover? hash signature) false)) (ok agent))
+        false
+      )
+    )
+  )
 )
 
 ;;; Check that the contract has been initialized and `token` is the supported token.

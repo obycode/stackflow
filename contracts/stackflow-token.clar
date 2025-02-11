@@ -1,6 +1,6 @@
 ;; title: stackflow-token
 ;; author: brice.btc
-;; version: 0.3.0
+;; version: 0.4.0
 ;; summary: This contract defines a trait that Stackflow contracts for SIP-010
 ;;   tokens must implement.
 
@@ -68,7 +68,7 @@
         (buff 65)            ;; their-signature
         uint                 ;; nonce
         uint                 ;; action
-        (optional principal) ;; actor
+        principal            ;; actor
         (optional (buff 32)) ;; secret
       )
       (response uint uint)
@@ -83,7 +83,7 @@
         (buff 65)            ;; their-signature
         uint                 ;; nonce
         uint                 ;; action
-        (optional principal) ;; actor
+        principal            ;; actor
         (optional (buff 32)) ;; secret
       )
       (response bool uint)

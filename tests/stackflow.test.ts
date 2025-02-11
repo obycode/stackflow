@@ -80,7 +80,7 @@ function structuredDataHash(structuredData: ClarityValue): Buffer {
 const domainHash = structuredDataHash(
   Cl.tuple({
     name: Cl.stringAscii("StackFlow"),
-    version: Cl.stringAscii("0.3.0"),
+    version: Cl.stringAscii("0.4.0"),
     "chain-id": Cl.uint(chainIds.testnet),
   })
 );
@@ -108,7 +108,7 @@ function generateChannelSignature(
   theirBalance: number,
   nonce: number,
   action: ChannelAction,
-  actor: string | null = null,
+  actor: string,
   secret: string | null = null
 ): Buffer {
   const meFirst = myPrincipal < theirPrincipal;
@@ -121,7 +121,6 @@ function generateChannelSignature(
     token === null
       ? Cl.none()
       : Cl.some(Cl.contractPrincipal(token[0], token[1]));
-  const actorCV = actor === null ? Cl.none() : Cl.some(Cl.principal(actor));
   const secretCV =
     secret === null
       ? Cl.none()
@@ -135,7 +134,7 @@ function generateChannelSignature(
     "balance-2": Cl.uint(balance2),
     nonce: Cl.uint(nonce),
     action: Cl.uint(action),
-    actor: actorCV,
+    actor: Cl.principal(actor),
     "hashed-secret": secretCV,
   });
   return signStructuredData(privateKey, data);
@@ -148,7 +147,8 @@ function generateCloseChannelSignature(
   theirPrincipal: string,
   myBalance: number,
   theirBalance: number,
-  nonce: number
+  nonce: number,
+  actor: string
 ): Buffer {
   return generateChannelSignature(
     privateKey,
@@ -158,7 +158,8 @@ function generateCloseChannelSignature(
     myBalance,
     theirBalance,
     nonce,
-    ChannelAction.Close
+    ChannelAction.Close,
+    actor
   );
 }
 
@@ -170,6 +171,7 @@ function generateTransferSignature(
   myBalance: number,
   theirBalance: number,
   nonce: number,
+  actor: string,
   secret: string | null = null
 ): Buffer {
   return generateChannelSignature(
@@ -181,7 +183,7 @@ function generateTransferSignature(
     theirBalance,
     nonce,
     ChannelAction.Transfer,
-    null,
+    actor,
     secret
   );
 }
@@ -1004,7 +1006,8 @@ describe("close-channel", () => {
       address2,
       1000000,
       2000000,
-      1
+      1,
+      address1
     );
     const signature2 = generateCloseChannelSignature(
       address2PK,
@@ -1013,7 +1016,8 @@ describe("close-channel", () => {
       address1,
       2000000,
       1000000,
-      1
+      1,
+      address1
     );
 
     const { result } = simnet.callPublicFn(
@@ -1062,7 +1066,8 @@ describe("close-channel", () => {
       address2,
       0,
       2000000,
-      1
+      1,
+      address1
     );
     const signature2 = generateCloseChannelSignature(
       address2PK,
@@ -1071,7 +1076,8 @@ describe("close-channel", () => {
       address1,
       2000000,
       0,
-      1
+      1,
+      address1
     );
 
     const { result } = simnet.callPublicFn(
@@ -1126,7 +1132,8 @@ describe("close-channel", () => {
       address2,
       1000000,
       2000000,
-      1
+      1,
+      address2
     );
     const signature2 = generateCloseChannelSignature(
       address2PK,
@@ -1135,7 +1142,8 @@ describe("close-channel", () => {
       address1,
       2000000,
       1000000,
-      1
+      1,
+      address2
     );
 
     const { result } = simnet.callPublicFn(
@@ -1190,7 +1198,8 @@ describe("close-channel", () => {
       address2,
       1600000,
       1400000,
-      1
+      1,
+      address1
     );
     const signature2 = generateCloseChannelSignature(
       address2PK,
@@ -1199,7 +1208,8 @@ describe("close-channel", () => {
       address1,
       1400000,
       1600000,
-      1
+      1,
+      address1
     );
 
     const { result } = simnet.callPublicFn(
@@ -1254,7 +1264,8 @@ describe("close-channel", () => {
       address2,
       1300000,
       1700000,
-      1
+      1,
+      address2
     );
     const signature2 = generateCloseChannelSignature(
       address2PK,
@@ -1263,7 +1274,8 @@ describe("close-channel", () => {
       address1,
       1700000,
       1300000,
-      1
+      1,
+      address2
     );
 
     const { result } = simnet.callPublicFn(
@@ -1318,7 +1330,8 @@ describe("close-channel", () => {
       address2,
       1000000,
       2000000,
-      1
+      1,
+      address1
     );
     const signature2 = generateCloseChannelSignature(
       address2PK,
@@ -1327,7 +1340,8 @@ describe("close-channel", () => {
       address1,
       2000000,
       1000000,
-      1
+      1,
+      address1
     );
 
     const { result } = simnet.callPublicFn(
@@ -1385,7 +1399,8 @@ describe("close-channel", () => {
       address2,
       1000000,
       2000000,
-      1
+      1,
+      address2
     );
     const signature2 = generateCloseChannelSignature(
       address2PK,
@@ -1394,7 +1409,8 @@ describe("close-channel", () => {
       address1,
       1700000,
       1300000,
-      1
+      1,
+      address2
     );
 
     const { result } = simnet.callPublicFn(
@@ -1452,7 +1468,8 @@ describe("close-channel", () => {
       address2,
       2000000,
       2000000,
-      1
+      1,
+      address1
     );
     const signature2 = generateCloseChannelSignature(
       address2PK,
@@ -1461,7 +1478,8 @@ describe("close-channel", () => {
       address1,
       2000000,
       2000000,
-      1
+      1,
+      address1
     );
 
     const { result } = simnet.callPublicFn(
@@ -1670,7 +1688,8 @@ describe("force-close", () => {
       address2,
       1600000,
       1400000,
-      1
+      1,
+      address2
     );
     const signature2 = generateTransferSignature(
       address2PK,
@@ -1679,7 +1698,8 @@ describe("force-close", () => {
       address1,
       1400000,
       1600000,
-      1
+      1,
+      address2
     );
 
     let heightBefore = simnet.burnBlockHeight;
@@ -1695,7 +1715,7 @@ describe("force-close", () => {
         Cl.buffer(signature2),
         Cl.uint(1),
         Cl.uint(ChannelAction.Transfer),
-        Cl.none(),
+        Cl.principal(address2),
         Cl.none(),
       ],
       address1
@@ -1758,7 +1778,8 @@ describe("force-close", () => {
       address2,
       1600000,
       1400000,
-      1
+      1,
+      address2
     );
     const signature2 = generateTransferSignature(
       address2PK,
@@ -1767,7 +1788,8 @@ describe("force-close", () => {
       address1,
       1400000,
       1600000,
-      1
+      1,
+      address2
     );
 
     let heightBefore = simnet.burnBlockHeight;
@@ -1783,7 +1805,7 @@ describe("force-close", () => {
         Cl.buffer(signature1),
         Cl.uint(1),
         Cl.uint(ChannelAction.Transfer),
-        Cl.none(),
+        Cl.principal(address2),
         Cl.none(),
       ],
       address2
@@ -1844,7 +1866,8 @@ describe("force-close", () => {
       address2,
       1000000,
       2000000,
-      1
+      1,
+      address2
     );
     const signature2 = generateTransferSignature(
       address2PK,
@@ -1853,7 +1876,8 @@ describe("force-close", () => {
       address1,
       2000000,
       1000000,
-      1
+      1,
+      address2
     );
 
     const { result } = simnet.callPublicFn(
@@ -1868,7 +1892,7 @@ describe("force-close", () => {
         Cl.buffer(signature2),
         Cl.uint(1),
         Cl.uint(ChannelAction.Transfer),
-        Cl.none(),
+        Cl.principal(address2),
         Cl.none(),
       ],
       address1
@@ -1914,7 +1938,8 @@ describe("force-close", () => {
       address2,
       1000000,
       2000000,
-      1
+      1,
+      address2
     );
     const signature2 = generateTransferSignature(
       address2PK,
@@ -1923,7 +1948,8 @@ describe("force-close", () => {
       address1,
       1700000,
       1300000,
-      1
+      1,
+      address2
     );
 
     const { result } = simnet.callPublicFn(
@@ -1938,7 +1964,7 @@ describe("force-close", () => {
         Cl.buffer(signature1),
         Cl.uint(1),
         Cl.uint(ChannelAction.Transfer),
-        Cl.none(),
+        Cl.principal(address2),
         Cl.none(),
       ],
       address2
@@ -1984,7 +2010,8 @@ describe("force-close", () => {
       address2,
       2000000,
       2000000,
-      1
+      1,
+      address2
     );
     const signature2 = generateTransferSignature(
       address2PK,
@@ -1993,7 +2020,8 @@ describe("force-close", () => {
       address1,
       2000000,
       2000000,
-      1
+      1,
+      address2
     );
 
     const { result } = simnet.callPublicFn(
@@ -2008,7 +2036,7 @@ describe("force-close", () => {
         Cl.buffer(signature2),
         Cl.uint(1),
         Cl.uint(ChannelAction.Transfer),
-        Cl.none(),
+        Cl.principal(address2),
         Cl.none(),
       ],
       address1
@@ -2049,17 +2077,26 @@ describe("dispute-closure", () => {
     );
 
     // Create the signatures for a transfer
-    const data = Cl.tuple({
-      token: Cl.none(),
-      "principal-1": Cl.principal(address1),
-      "principal-2": Cl.principal(address3),
-      "balance-1": Cl.uint(1300000),
-      "balance-2": Cl.uint(1700000),
-      nonce: Cl.uint(1),
-      action: Cl.uint(ChannelAction.Transfer),
-    });
-    const signature1 = signStructuredData(address1PK, data);
-    const signature3 = signStructuredData(address3PK, data);
+    const signature1 = generateTransferSignature(
+      address1PK,
+      null,
+      address1,
+      address3,
+      1300000,
+      1700000,
+      1,
+      address2
+    );
+    const signature3 = generateTransferSignature(
+      address3PK,
+      null,
+      address3,
+      address1,
+      1700000,
+      1300000,
+      1,
+      address2
+    );
 
     const { result } = simnet.callPublicFn(
       "stackflow",
@@ -2073,7 +2110,7 @@ describe("dispute-closure", () => {
         Cl.buffer(signature1),
         Cl.uint(1),
         Cl.uint(ChannelAction.Transfer),
-        Cl.none(),
+        Cl.principal(address2),
         Cl.none(),
       ],
       address3
@@ -2109,7 +2146,8 @@ describe("dispute-closure", () => {
       address2,
       1300000,
       1700000,
-      1
+      1,
+      address2
     );
     const signature2 = generateTransferSignature(
       address2PK,
@@ -2118,7 +2156,8 @@ describe("dispute-closure", () => {
       address1,
       1700000,
       1300000,
-      1
+      1,
+      address2
     );
 
     // Account 2 disputes the closure
@@ -2134,7 +2173,7 @@ describe("dispute-closure", () => {
         Cl.buffer(signature1),
         Cl.uint(1),
         Cl.uint(ChannelAction.Transfer),
-        Cl.none(),
+        Cl.principal(address2),
         Cl.none(),
       ],
       address2
@@ -2210,7 +2249,8 @@ describe("dispute-closure", () => {
       address2,
       1300000,
       1700000,
-      1
+      1,
+      address2
     );
     const signature2 = generateTransferSignature(
       address2PK,
@@ -2219,7 +2259,8 @@ describe("dispute-closure", () => {
       address1,
       1700000,
       1300000,
-      1
+      1,
+      address2
     );
 
     // Account 2 disputes the closure
@@ -2235,7 +2276,7 @@ describe("dispute-closure", () => {
         Cl.buffer(signature1),
         Cl.uint(1),
         Cl.uint(ChannelAction.Transfer),
-        Cl.none(),
+        Cl.principal(address2),
         Cl.none(),
       ],
       address2
@@ -2311,7 +2352,8 @@ describe("dispute-closure", () => {
       address2,
       1300000,
       1700000,
-      1
+      1,
+      address2
     );
     const signature2 = generateTransferSignature(
       address2PK,
@@ -2320,7 +2362,8 @@ describe("dispute-closure", () => {
       address1,
       1700000,
       1300000,
-      1
+      1,
+      address2
     );
 
     // Account 1 disputes the closure
@@ -2336,7 +2379,7 @@ describe("dispute-closure", () => {
         Cl.buffer(signature2),
         Cl.uint(1),
         Cl.uint(ChannelAction.Transfer),
-        Cl.none(),
+        Cl.principal(address2),
         Cl.none(),
       ],
       address1
@@ -2412,7 +2455,8 @@ describe("dispute-closure", () => {
       address2,
       1300000,
       1700000,
-      1
+      1,
+      address1
     );
     const signature2 = generateTransferSignature(
       address2PK,
@@ -2421,7 +2465,8 @@ describe("dispute-closure", () => {
       address1,
       1700000,
       1300000,
-      1
+      1,
+      address1
     );
 
     simnet.mineEmptyBurnBlock();
@@ -2439,7 +2484,7 @@ describe("dispute-closure", () => {
         Cl.buffer(signature2),
         Cl.uint(1),
         Cl.uint(ChannelAction.Transfer),
-        Cl.none(),
+        Cl.principal(address2),
         Cl.none(),
       ],
       address1
@@ -2474,6 +2519,117 @@ describe("dispute-closure", () => {
     const contractBalance = stxBalances.get(stackflowContract);
     expect(contractBalance).toBe(3000000n);
   });
+
+  it("account 2 can dispute account 1's closure with an agent-signed transfer", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
+    // Register an agent for address 1
+    simnet.callPublicFn(
+      "stackflow",
+      "register-agent",
+      [Cl.principal(address3)],
+      address1
+    );
+
+    // Setup the channel and save the channel key
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
+      address1
+    );
+    const { result: fundResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-channel",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
+      address2
+    );
+    expect(fundResult.type).toBe(ClarityType.ResponseOk);
+    const channelKey = (fundResult as ResponseOkCV).value;
+
+    const cancel_height = simnet.burnBlockHeight;
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "force-cancel",
+      [Cl.none(), Cl.principal(address2)],
+      address1
+    );
+    expect(result).toBeOk(Cl.uint(cancel_height + WAITING_PERIOD));
+
+    // Increment the burn block height
+    simnet.mineEmptyBurnBlock();
+
+    // Create the signatures for a transfer
+    const signature1 = generateTransferSignature(
+      address3PK,
+      null,
+      address1,
+      address2,
+      1300000,
+      1700000,
+      1,
+      address2
+    );
+    const signature2 = generateTransferSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      1700000,
+      1300000,
+      1,
+      address2
+    );
+
+    // Account 2 disputes the closure
+    const { result: disputeResult } = simnet.callPublicFn(
+      "stackflow",
+      "dispute-closure",
+      [
+        Cl.none(),
+        Cl.principal(address1),
+        Cl.uint(1700000),
+        Cl.uint(1300000),
+        Cl.buffer(signature2),
+        Cl.buffer(signature1),
+        Cl.uint(1),
+        Cl.uint(ChannelAction.Transfer),
+        Cl.principal(address2),
+        Cl.none(),
+      ],
+      address2
+    );
+    expect(disputeResult).toBeOk(Cl.bool(false));
+
+    // Verify that the channel has been reset
+    const channel = simnet.getMapEntry(
+      stackflowContract,
+      "channels",
+      channelKey
+    );
+    expect(channel).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(0),
+        "balance-2": Cl.uint(0),
+        "expires-at": Cl.uint(MAX_HEIGHT),
+        nonce: Cl.uint(1),
+        closer: Cl.none(),
+      })
+    );
+
+    // Verify the balances have changed
+    const stxBalances = simnet.getAssetsMap().get("STX")!;
+
+    const balance1 = stxBalances.get(address1);
+    expect(balance1).toBe(100000000300000n);
+
+    const balance2 = stxBalances.get(address2);
+    expect(balance2).toBe(99999999700000n);
+
+    const contractBalance = stxBalances.get(stackflowContract);
+    expect(contractBalance).toBe(0n);
+  });
 });
 
 describe("agent-dispute-closure", () => {
@@ -2504,17 +2660,26 @@ describe("agent-dispute-closure", () => {
     );
 
     // Create the signatures for a transfer
-    const data = Cl.tuple({
-      token: Cl.none(),
-      "principal-1": Cl.principal(address1),
-      "principal-2": Cl.principal(address3),
-      "balance-1": Cl.uint(1300000),
-      "balance-2": Cl.uint(1700000),
-      nonce: Cl.uint(1),
-      action: Cl.uint(ChannelAction.Transfer),
-    });
-    const signature1 = signStructuredData(address1PK, data);
-    const signature3 = signStructuredData(address3PK, data);
+    const signature1 = generateTransferSignature(
+      address1PK,
+      null,
+      address1,
+      address3,
+      1300000,
+      1700000,
+      1,
+      address3
+    );
+    const signature3 = generateTransferSignature(
+      address2PK,
+      null,
+      address3,
+      address1,
+      1700000,
+      1300000,
+      1,
+      address3
+    );
 
     const { result } = simnet.callPublicFn(
       "stackflow",
@@ -2529,7 +2694,7 @@ describe("agent-dispute-closure", () => {
         Cl.buffer(signature1),
         Cl.uint(1),
         Cl.uint(ChannelAction.Transfer),
-        Cl.none(),
+        Cl.principal(address3),
         Cl.none(),
       ],
       address3
@@ -2573,7 +2738,8 @@ describe("agent-dispute-closure", () => {
       address2,
       1300000,
       1700000,
-      1
+      1,
+      address2
     );
     const signature2 = generateTransferSignature(
       address2PK,
@@ -2582,7 +2748,8 @@ describe("agent-dispute-closure", () => {
       address1,
       1700000,
       1300000,
-      1
+      1,
+      address2
     );
 
     // Account 2 disputes the closure
@@ -2599,7 +2766,7 @@ describe("agent-dispute-closure", () => {
         Cl.buffer(signature1),
         Cl.uint(1),
         Cl.uint(ChannelAction.Transfer),
-        Cl.none(),
+        Cl.principal(address2),
         Cl.none(),
       ],
       address3
@@ -2683,7 +2850,8 @@ describe("agent-dispute-closure", () => {
       address2,
       1300000,
       1700000,
-      1
+      1,
+      address2
     );
     const signature2 = generateTransferSignature(
       address2PK,
@@ -2692,7 +2860,8 @@ describe("agent-dispute-closure", () => {
       address1,
       1700000,
       1300000,
-      1
+      1,
+      address2
     );
 
     // Account 2 disputes the closure
@@ -2709,7 +2878,7 @@ describe("agent-dispute-closure", () => {
         Cl.buffer(signature1),
         Cl.uint(1),
         Cl.uint(ChannelAction.Transfer),
-        Cl.none(),
+        Cl.principal(address2),
         Cl.none(),
       ],
       address3
@@ -2793,7 +2962,8 @@ describe("agent-dispute-closure", () => {
       address2,
       1300000,
       1700000,
-      1
+      1,
+      address2
     );
     const signature2 = generateTransferSignature(
       address2PK,
@@ -2802,7 +2972,8 @@ describe("agent-dispute-closure", () => {
       address1,
       1700000,
       1300000,
-      1
+      1,
+      address2
     );
 
     // Account 1 disputes the closure
@@ -2819,7 +2990,7 @@ describe("agent-dispute-closure", () => {
         Cl.buffer(signature2),
         Cl.uint(1),
         Cl.uint(ChannelAction.Transfer),
-        Cl.none(),
+        Cl.principal(address2),
         Cl.none(),
       ],
       address3
@@ -2903,7 +3074,8 @@ describe("agent-dispute-closure", () => {
       address2,
       1300000,
       1700000,
-      1
+      1,
+      address2
     );
     const signature2 = generateTransferSignature(
       address2PK,
@@ -2912,7 +3084,8 @@ describe("agent-dispute-closure", () => {
       address1,
       1700000,
       1300000,
-      1
+      1,
+      address2
     );
 
     simnet.mineEmptyBurnBlock();
@@ -2931,7 +3104,7 @@ describe("agent-dispute-closure", () => {
         Cl.buffer(signature2),
         Cl.uint(1),
         Cl.uint(ChannelAction.Transfer),
-        Cl.none(),
+        Cl.principal(address2),
         Cl.none(),
       ],
       address3
@@ -3222,7 +3395,8 @@ describe("finalize", () => {
       address2,
       1600000,
       1400000,
-      1
+      1,
+      address2
     );
     const signature2 = generateTransferSignature(
       address2PK,
@@ -3231,7 +3405,8 @@ describe("finalize", () => {
       address1,
       1400000,
       1600000,
-      1
+      1,
+      address2
     );
 
     let heightBefore = simnet.burnBlockHeight;
@@ -3247,7 +3422,7 @@ describe("finalize", () => {
         Cl.buffer(signature2),
         Cl.uint(1),
         Cl.uint(ChannelAction.Transfer),
-        Cl.none(),
+        Cl.principal(address2),
         Cl.none(),
       ],
       address1
@@ -4832,6 +5007,7 @@ describe("transfers with secrets", () => {
       1600000,
       1400000,
       1,
+      address2,
       "1234567890abcdef"
     );
     const signature2 = generateTransferSignature(
@@ -4842,6 +5018,7 @@ describe("transfers with secrets", () => {
       1400000,
       1600000,
       1,
+      address2,
       "1234567890abcdef"
     );
 
@@ -4858,7 +5035,7 @@ describe("transfers with secrets", () => {
         Cl.buffer(signature2),
         Cl.uint(1),
         Cl.uint(ChannelAction.Transfer),
-        Cl.none(),
+        Cl.principal(address2),
         Cl.some(Cl.bufferFromHex("1234567890abcdef")),
       ],
       address1
@@ -4922,6 +5099,7 @@ describe("transfers with secrets", () => {
       1600000,
       1400000,
       1,
+      address2,
       "1234567890abcdef"
     );
     const signature2 = generateTransferSignature(
@@ -4932,6 +5110,7 @@ describe("transfers with secrets", () => {
       1400000,
       1600000,
       1,
+      address2,
       "1234567890abcdef"
     );
 
@@ -4947,7 +5126,7 @@ describe("transfers with secrets", () => {
         Cl.buffer(signature2),
         Cl.uint(1),
         Cl.uint(ChannelAction.Transfer),
-        Cl.none(),
+        Cl.principal(address2),
         Cl.some(Cl.bufferFromHex("1234567890abcdee")),
       ],
       address1
@@ -4998,7 +5177,7 @@ describe("make-structured-data-hash", () => {
         Cl.uint(20000),
         Cl.uint(1),
         Cl.uint(ChannelAction.Transfer),
-        Cl.none(),
+        Cl.principal(address2),
         Cl.none(),
       ],
       address1
@@ -5012,7 +5191,7 @@ describe("make-structured-data-hash", () => {
       "balance-2": Cl.uint(20000),
       nonce: Cl.uint(1),
       action: Cl.uint(ChannelAction.Transfer),
-      actor: Cl.none(),
+      actor: Cl.principal(address2),
       "hashed-secret": Cl.none(),
     });
     const expectedHash = structuredDataHashWithPrefix(data);
@@ -5033,7 +5212,7 @@ describe("make-structured-data-hash", () => {
         Cl.uint(98765),
         Cl.uint(2),
         Cl.uint(ChannelAction.Close),
-        Cl.none(),
+        Cl.principal(address1),
         Cl.none(),
       ],
       address1
@@ -5047,7 +5226,7 @@ describe("make-structured-data-hash", () => {
       "balance-2": Cl.uint(98765),
       nonce: Cl.uint(2),
       action: Cl.uint(ChannelAction.Close),
-      actor: Cl.none(),
+      actor: Cl.principal(address1),
       "hashed-secret": Cl.none(),
     });
     const expectedHash = structuredDataHashWithPrefix(data);
