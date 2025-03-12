@@ -95,8 +95,13 @@ over structured data with the details of the channel:
    action: uint,
    ;; The principal initiating the action, `none` for close
    actor: (optional principal),
-   ;; An optional sha256 hash of a secret, used for multi-hop transfers
+   ;; An optional sha256 hash of a secret, used for multi-hop transfers or
+   ;; other advanced functionality
    hashed-secret: (optional (buff 32))
+   ;; An optional Bitcoin block height at which this transfer becomes valid. If
+   ;; set, this transfer cannot be used in `force-close` or `dispute-closure`
+   ;; to validate balances until the specified block height has passed.
+   valid-after: (optional uint)
 }
 ```
 

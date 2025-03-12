@@ -1,10 +1,10 @@
 ;; title: stackflow
 ;; author: brice.btc
-;; version: 0.4.0
+;; version: 0.5.0
 ;; summary: Stackflow is a payment channel network built on Stacks, enabling
 ;;   off-chain, non-custodial, and high-speed payments between users. Designed
 ;;   to be simple, secure, and efficient, it supports transactions in STX and
-;;   approved SIP-010 fungible tokens.
+;;   SIP-010 fungible tokens.
 
 ;; MIT License
 
@@ -29,7 +29,8 @@
 ;; SOFTWARE.
 
 (use-trait sip-010 'SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE.sip-010-trait-ft-standard.sip-010-trait)
-(impl-trait 'SP126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT6AD08RV.stackflow-token-0-4-0.stackflow-token)
+;; (impl-trait 'SP126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT6AD08RV.stackflow-token-0-5-0.stackflow-token)
+(impl-trait .stackflow-token.stackflow-token)
 
 (define-constant contract-deployer tx-sender)
 (define-constant MAX_HEIGHT u340282366920938463463374607431768211455)
@@ -40,7 +41,7 @@
 (define-constant message-domain-hash (sha256 (unwrap-panic (to-consensus-buff?
 	{
 		name: "StackFlow",
-		version: "0.4.0",
+		version: "0.5.0",
 		chain-id: chain-id
 	}
 ))))
@@ -74,6 +75,7 @@
 (define-constant ERR_NOT_EXPIRED (err u118))
 (define-constant ERR_NOT_INITIALIZED (err u119))
 (define-constant ERR_ALREADY_INITIALIZED (err u120))
+(define-constant ERR_NOT_VALID_YET (err u121))
 
 ;;; Has this contract been initialized?
 (define-data-var initialized bool false)
@@ -252,6 +254,7 @@
         ACTION_CLOSE
         tx-sender
         none
+        none
       )
     )
 
@@ -335,6 +338,7 @@
     (action uint)
     (actor principal)
     (secret (optional (buff 32)))
+    (valid-after (optional uint))
   )
   (let
     (
@@ -348,6 +352,12 @@
 
     ;; Exit early if the nonce is less than the channel's nonce
     (asserts! (> nonce channel-nonce) ERR_NONCE_TOO_LOW)
+
+    ;; Exit early if the transfer is not valid yet
+    (match valid-after
+      after (asserts! (<= after burn-block-height) ERR_NOT_VALID_YET)
+      false
+    )
 
     ;; If the total balance of the channel is not equal to the sum of the
     ;; balances provided, the channel close is invalid.
@@ -388,6 +398,7 @@
           action
           actor
           secret
+          valid-after
         )
       )
 
@@ -439,6 +450,7 @@
     (action uint)
     (actor principal)
     (secret (optional (buff 32)))
+    (valid-after (optional uint))
   )
   (dispute-closure-inner
     tx-sender
@@ -452,6 +464,7 @@
     action
     actor
     secret
+    valid-after
   )
 )
 
@@ -485,6 +498,7 @@
     (action uint)
     (actor principal)
     (secret (optional (buff 32)))
+    (valid-after (optional uint))
   )
   (let
     (
@@ -503,6 +517,7 @@
       action
       actor
       secret
+      valid-after
     )
   )
 )
@@ -624,6 +639,7 @@
         ACTION_DEPOSIT
         tx-sender
         none
+        none
       )
     )
 
@@ -728,6 +744,7 @@
         ACTION_WITHDRAWAL
         tx-sender
         none
+        none
       )
     )
 
@@ -789,6 +806,7 @@
     (action uint)
     (actor principal)
     (hashed-secret (optional (buff 32)))
+    (valid-after (optional uint))
   )
   (let
     (
@@ -801,6 +819,7 @@
           action: action,
           actor: actor,
           hashed-secret: hashed-secret,
+          valid-after: valid-after,
         }
       ))
       (data-hash (sha256 (unwrap! (to-consensus-buff? structured-data) ERR_CONSENSUS_BUFF)))
@@ -824,6 +843,7 @@
     (action uint)
     (actor principal)
     (hashed-secret (optional (buff 32)))
+    (valid-after (optional uint))
   )
   (let ((hash (unwrap! (make-structured-data-hash
       channel-key
@@ -833,6 +853,7 @@
       action
       actor
       hashed-secret
+      valid-after
     ) false)))
     (verify-hash-signature hash signature signer actor)
   )
@@ -857,6 +878,7 @@
     (action uint)
     (actor principal)
     (secret (optional (buff 32)))
+    (valid-after (optional uint))
   )
   (let (
     (hashed-secret (match secret s (some (sha256 s)) none))
@@ -868,6 +890,7 @@
       action
       actor
       hashed-secret
+      valid-after
     ))))
     (asserts! (verify-hash-signature hash signature-1 signer-1 actor) ERR_INVALID_SENDER_SIGNATURE)
     (asserts! (verify-hash-signature hash signature-2 signer-2 actor) ERR_INVALID_OTHER_SIGNATURE)
@@ -959,6 +982,7 @@
     (action uint)
     (actor principal)
     (secret (optional (buff 32)))
+    (valid-after (optional uint))
   )
   (let
     (
@@ -971,9 +995,21 @@
       (balance-1 (if (is-eq for principal-1) my-balance their-balance))
       (balance-2 (if (is-eq for principal-1) their-balance my-balance))
     )
+
+    ;; Exit early if this is an attempt to self-dispute
     (asserts! (not (is-eq for closer)) ERR_SELF_DISPUTE)
+
+    ;; Exit early if the channel has already expired
     (asserts! (< burn-block-height expires-at) ERR_CHANNEL_EXPIRED)
+
+    ;; Exit early if the nonce is less than the channel's nonce
     (asserts! (> nonce channel-nonce) ERR_NONCE_TOO_LOW)
+
+    ;; Exit early if the transfer is not valid yet
+    (match valid-after
+      after (asserts! (<= after burn-block-height) ERR_NOT_VALID_YET)
+      false
+    )
 
     ;; If the total balance of the channel is not equal to the sum of the
     ;; balances provided, the channel close is invalid.
@@ -1010,6 +1046,7 @@
           action
           actor
           secret
+          valid-after
         )
       )
 
