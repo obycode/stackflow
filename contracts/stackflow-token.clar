@@ -1,6 +1,6 @@
 ;; title: stackflow-token
 ;; author: brice.btc
-;; version: 0.5.0
+;; version: 0.6.0
 ;; summary: This contract defines a trait that Stackflow contracts for SIP-010
 ;;   tokens must implement.
 
@@ -30,7 +30,7 @@
 
 (define-trait stackflow-token
   (
-    (fund-channel
+    (fund-pipe
       (
         (optional <sip-010>) ;; token
         uint                 ;; amount
@@ -39,7 +39,7 @@
       )
       (response { token: (optional principal), principal-1: principal, principal-2: principal } uint)
     )
-    (close-channel
+    (close-pipe
       (
         (optional <sip-010>) ;; token
         principal            ;; with
