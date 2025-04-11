@@ -31,7 +31,7 @@ const address3PK = createStacksPrivateKey(
 const WAITING_PERIOD = 144;
 const MAX_HEIGHT = 340282366920938463463374607431768211455n;
 
-enum ChannelAction {
+enum PipeAction {
   Close = 0,
   Transfer = 1,
   Deposit = 2,
@@ -40,7 +40,7 @@ enum ChannelAction {
 
 enum TxError {
   DepositFailed = 100,
-  NoSuchChannel = 101,
+  NoSuchPipe = 101,
   InvalidPrincipal = 102,
   InvalidSenderSignature = 103,
   InvalidOtherSignature = 104,
@@ -49,7 +49,7 @@ enum TxError {
   MaxAllowed = 107,
   InvalidTotalBalance = 108,
   WithdrawalFailed = 109,
-  ChannelExpired = 110,
+  PipeExpired = 110,
   NonceTooLow = 111,
   CloseInProgress = 112,
   NoCloseInProgress = 113,
@@ -81,7 +81,7 @@ function structuredDataHash(structuredData: ClarityValue): Buffer {
 const domainHash = structuredDataHash(
   Cl.tuple({
     name: Cl.stringAscii("StackFlow"),
-    version: Cl.stringAscii("0.5.0"),
+    version: Cl.stringAscii("0.6.0"),
     "chain-id": Cl.uint(chainIds.testnet),
   })
 );
@@ -100,7 +100,7 @@ function signStructuredData(
   return Buffer.from(data.slice(2) + data.slice(0, 2), "hex");
 }
 
-function generateChannelSignature(
+function generatePipeSignature(
   privateKey: StacksPrivateKey,
   token: [string, string] | null,
   myPrincipal: string,
@@ -108,7 +108,7 @@ function generateChannelSignature(
   myBalance: number,
   theirBalance: number,
   nonce: number,
-  action: ChannelAction,
+  action: PipeAction,
   actor: string,
   secret: string | null = null,
   valid_after: number | null = null
@@ -145,7 +145,7 @@ function generateChannelSignature(
   return signStructuredData(privateKey, data);
 }
 
-function generateCloseChannelSignature(
+function generateClosePipeSignature(
   privateKey: StacksPrivateKey,
   token: [string, string] | null,
   myPrincipal: string,
@@ -155,7 +155,7 @@ function generateCloseChannelSignature(
   nonce: number,
   actor: string
 ): Buffer {
-  return generateChannelSignature(
+  return generatePipeSignature(
     privateKey,
     token,
     myPrincipal,
@@ -163,7 +163,7 @@ function generateCloseChannelSignature(
     myBalance,
     theirBalance,
     nonce,
-    ChannelAction.Close,
+    PipeAction.Close,
     actor
   );
 }
@@ -180,7 +180,7 @@ function generateTransferSignature(
   secret: string | null = null,
   valid_after: number | null = null
 ): Buffer {
-  return generateChannelSignature(
+  return generatePipeSignature(
     privateKey,
     token,
     myPrincipal,
@@ -188,7 +188,7 @@ function generateTransferSignature(
     myBalance,
     theirBalance,
     nonce,
-    ChannelAction.Transfer,
+    PipeAction.Transfer,
     actor,
     secret,
     valid_after
@@ -205,7 +205,7 @@ function generateDepositSignature(
   nonce: number,
   actor: string
 ): Buffer {
-  return generateChannelSignature(
+  return generatePipeSignature(
     privateKey,
     token,
     myPrincipal,
@@ -213,7 +213,7 @@ function generateDepositSignature(
     myBalance,
     theirBalance,
     nonce,
-    ChannelAction.Deposit,
+    PipeAction.Deposit,
     actor
   );
 }
@@ -228,7 +228,7 @@ function generateWithdrawSignature(
   nonce: number,
   actor: string
 ): Buffer {
-  return generateChannelSignature(
+  return generatePipeSignature(
     privateKey,
     token,
     myPrincipal,
@@ -236,7 +236,7 @@ function generateWithdrawSignature(
     myBalance,
     theirBalance,
     nonce,
-    ChannelAction.Withdraw,
+    PipeAction.Withdraw,
     actor
   );
 }
@@ -279,10 +279,10 @@ describe("init", () => {
     expect(result).toBeErr(Cl.uint(TxError.AlreadyInitialized));
   });
 
-  it("cannot fund a channel before initializing the contract", () => {
+  it("cannot fund a pipe before initializing the contract", () => {
     const { result } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
@@ -364,14 +364,14 @@ describe("deregister-agent", () => {
   });
 });
 
-describe("fund-channel", () => {
-  it("can fund a channel", () => {
+describe("fund-pipe", () => {
+  it("can fund a pipe", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
     const { result } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
@@ -382,15 +382,15 @@ describe("fund-channel", () => {
         "principal-2": Cl.principal(address2),
       })
     );
-    const channelKey = (result as ResponseOkCV).value;
+    const pipeKey = (result as ResponseOkCV).value;
 
-    // Verify the channel
-    const channel = simnet.getMapEntry(
+    // Verify the pipe
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(0),
@@ -413,19 +413,19 @@ describe("fund-channel", () => {
     expect(contractBalance).toBe(1000000n);
   });
 
-  it("can fund a channel that has been funded by the other party", () => {
+  it("can fund a pipe that has been funded by the other party", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
@@ -436,15 +436,15 @@ describe("fund-channel", () => {
         "principal-2": Cl.principal(address2),
       })
     );
-    const channelKey = (result as ResponseOkCV).value;
+    const pipeKey = (result as ResponseOkCV).value;
 
-    // Verify the channel
-    const channel = simnet.getMapEntry(
+    // Verify the pipe
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(2000000),
@@ -467,13 +467,13 @@ describe("fund-channel", () => {
     expect(contractBalance).toBe(3000000n);
   });
 
-  it("cannot fund a channel that has already been funded", () => {
+  it("cannot fund a pipe that has already been funded", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
     const { result } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
@@ -484,23 +484,23 @@ describe("fund-channel", () => {
         "principal-2": Cl.principal(address2),
       })
     );
-    const channelKey = (result as ResponseOkCV).value;
+    const pipeKey = (result as ResponseOkCV).value;
 
     const { result: badResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     expect(badResult).toBeErr(Cl.uint(TxError.AlreadyFunded));
 
-    // Verify the channel did not change
-    const channel = simnet.getMapEntry(
+    // Verify the pipe did not change
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(0),
@@ -523,19 +523,19 @@ describe("fund-channel", () => {
     expect(contractBalance).toBe(1000000n);
   });
 
-  it("second account cannot fund a channel that has already been funded", () => {
+  it("second account cannot fund a pipe that has already been funded", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
@@ -546,15 +546,15 @@ describe("fund-channel", () => {
         "principal-2": Cl.principal(address2),
       })
     );
-    const channelKey = (result as ResponseOkCV).value;
+    const pipeKey = (result as ResponseOkCV).value;
 
-    // Verify the channel
-    const channelBefore = simnet.getMapEntry(
+    // Verify the pipe
+    const pipeBefore = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channelBefore).toBeSome(
+    expect(pipeBefore).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(2000000),
@@ -566,19 +566,19 @@ describe("fund-channel", () => {
 
     const { result: badResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(3000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(badResult).toBeErr(Cl.uint(TxError.AlreadyFunded));
 
-    // Verify the channel did not change
-    const channel = simnet.getMapEntry(
+    // Verify the pipe did not change
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(2000000),
@@ -601,7 +601,7 @@ describe("fund-channel", () => {
     expect(contractBalance).toBe(3000000n);
   });
 
-  it("cannot fund channel with unapproved token", () => {
+  it("cannot fund pipe with unapproved token", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
@@ -621,7 +621,7 @@ describe("fund-channel", () => {
 
     const { result } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [
         Cl.some(Cl.principal(`${deployer}.test-token`)),
         Cl.uint(1000000),
@@ -633,7 +633,7 @@ describe("fund-channel", () => {
     expect(result).toBeErr(Cl.uint(TxError.UnapprovedToken));
   });
 
-  it("can fund a channel with an approved token", () => {
+  it("can fund a pipe with an approved token", () => {
     // Give address1 and address2 some test tokens
     simnet.callPublicFn(
       "test-token",
@@ -658,7 +658,7 @@ describe("fund-channel", () => {
 
     const { result } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [
         Cl.some(Cl.principal(`${deployer}.test-token`)),
         Cl.uint(1000000),
@@ -674,15 +674,15 @@ describe("fund-channel", () => {
         "principal-2": Cl.principal(address2),
       })
     );
-    const channelKey = (result as ResponseOkCV).value;
+    const pipeKey = (result as ResponseOkCV).value;
 
-    // Verify the channel
-    const channel = simnet.getMapEntry(
+    // Verify the pipe
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(0),
@@ -705,7 +705,7 @@ describe("fund-channel", () => {
     expect(contractBalance).toBe(1000000n);
   });
 
-  it("can fund a SIP-010 token channel that has been funded by the other party", () => {
+  it("can fund a SIP-010 token pipe that has been funded by the other party", () => {
     // Give address1 and address2 some test tokens
     simnet.callPublicFn(
       "test-token",
@@ -730,7 +730,7 @@ describe("fund-channel", () => {
 
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [
         Cl.some(Cl.principal(`${deployer}.test-token`)),
         Cl.uint(1000000),
@@ -741,7 +741,7 @@ describe("fund-channel", () => {
     );
     const { result } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [
         Cl.some(Cl.principal(`${deployer}.test-token`)),
         Cl.uint(2000000),
@@ -757,15 +757,15 @@ describe("fund-channel", () => {
         "principal-2": Cl.principal(address2),
       })
     );
-    const channelKey = (result as ResponseOkCV).value;
+    const pipeKey = (result as ResponseOkCV).value;
 
-    // Verify the channel
-    const channel = simnet.getMapEntry(
+    // Verify the pipe
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(2000000),
@@ -788,7 +788,7 @@ describe("fund-channel", () => {
     expect(contractBalance).toBe(3000000n);
   });
 
-  it("cannot fund a SIP-010 token channel that has already been funded", () => {
+  it("cannot fund a SIP-010 token pipe that has already been funded", () => {
     // Give address1 and address2 some test tokens
     simnet.callPublicFn(
       "test-token",
@@ -813,7 +813,7 @@ describe("fund-channel", () => {
 
     const { result } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [
         Cl.some(Cl.principal(`${deployer}.test-token`)),
         Cl.uint(1000000),
@@ -829,11 +829,11 @@ describe("fund-channel", () => {
         "principal-2": Cl.principal(address2),
       })
     );
-    const channelKey = (result as ResponseOkCV).value;
+    const pipeKey = (result as ResponseOkCV).value;
 
     const { result: badResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [
         Cl.some(Cl.principal(`${deployer}.test-token`)),
         Cl.uint(2000000),
@@ -844,13 +844,13 @@ describe("fund-channel", () => {
     );
     expect(badResult).toBeErr(Cl.uint(TxError.AlreadyFunded));
 
-    // Verify the channel did not change
-    const channel = simnet.getMapEntry(
+    // Verify the pipe did not change
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(0),
@@ -873,7 +873,7 @@ describe("fund-channel", () => {
     expect(contractBalance).toBe(1000000n);
   });
 
-  it("second account cannot fund a SIP-010 token channel that has already been funded", () => {
+  it("second account cannot fund a SIP-010 token pipe that has already been funded", () => {
     // Give address1 and address2 some test tokens
     simnet.callPublicFn(
       "test-token",
@@ -898,7 +898,7 @@ describe("fund-channel", () => {
 
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [
         Cl.some(Cl.principal(`${deployer}.test-token`)),
         Cl.uint(1000000),
@@ -909,7 +909,7 @@ describe("fund-channel", () => {
     );
     const { result } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [
         Cl.some(Cl.principal(`${deployer}.test-token`)),
         Cl.uint(2000000),
@@ -925,15 +925,15 @@ describe("fund-channel", () => {
         "principal-2": Cl.principal(address2),
       })
     );
-    const channelKey = (result as ResponseOkCV).value;
+    const pipeKey = (result as ResponseOkCV).value;
 
-    // Verify the channel
-    const channelBefore = simnet.getMapEntry(
+    // Verify the pipe
+    const pipeBefore = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channelBefore).toBeSome(
+    expect(pipeBefore).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(2000000),
@@ -945,7 +945,7 @@ describe("fund-channel", () => {
 
     const { result: badResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [
         Cl.some(Cl.principal(`${deployer}.test-token`)),
         Cl.uint(3000000),
@@ -956,13 +956,13 @@ describe("fund-channel", () => {
     );
     expect(badResult).toBeErr(Cl.uint(TxError.AlreadyFunded));
 
-    // Verify the channel did not change
-    const channel = simnet.getMapEntry(
+    // Verify the pipe did not change
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(2000000),
@@ -986,27 +986,27 @@ describe("fund-channel", () => {
   });
 });
 
-describe("close-channel", () => {
+describe("close-pipe", () => {
   it("account 1 can close account with no transfers", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
-    // Setup the channel
+    // Setup the pipe
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
 
     // Create the signatures
-    const signature1 = generateCloseChannelSignature(
+    const signature1 = generateClosePipeSignature(
       address1PK,
       null,
       address1,
@@ -1016,7 +1016,7 @@ describe("close-channel", () => {
       1,
       address1
     );
-    const signature2 = generateCloseChannelSignature(
+    const signature2 = generateClosePipeSignature(
       address2PK,
       null,
       address2,
@@ -1029,7 +1029,7 @@ describe("close-channel", () => {
 
     const { result } = simnet.callPublicFn(
       "stackflow",
-      "close-channel",
+      "close-pipe",
       [
         Cl.none(),
         Cl.principal(address2),
@@ -1057,16 +1057,16 @@ describe("close-channel", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
-    // Setup the channel
+    // Setup the pipe
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
 
     // Create the signatures
-    const signature1 = generateCloseChannelSignature(
+    const signature1 = generateClosePipeSignature(
       address1PK,
       null,
       address1,
@@ -1076,7 +1076,7 @@ describe("close-channel", () => {
       1,
       address1
     );
-    const signature2 = generateCloseChannelSignature(
+    const signature2 = generateClosePipeSignature(
       address2PK,
       null,
       address2,
@@ -1089,7 +1089,7 @@ describe("close-channel", () => {
 
     const { result } = simnet.callPublicFn(
       "stackflow",
-      "close-channel",
+      "close-pipe",
       [
         Cl.none(),
         Cl.principal(address2),
@@ -1117,22 +1117,22 @@ describe("close-channel", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
-    // Setup the channel
+    // Setup the pipe
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
 
     // Create the signatures
-    const signature1 = generateCloseChannelSignature(
+    const signature1 = generateClosePipeSignature(
       address1PK,
       null,
       address1,
@@ -1142,7 +1142,7 @@ describe("close-channel", () => {
       1,
       address2
     );
-    const signature2 = generateCloseChannelSignature(
+    const signature2 = generateClosePipeSignature(
       address2PK,
       null,
       address2,
@@ -1155,7 +1155,7 @@ describe("close-channel", () => {
 
     const { result } = simnet.callPublicFn(
       "stackflow",
-      "close-channel",
+      "close-pipe",
       [
         Cl.none(),
         Cl.principal(address1),
@@ -1183,22 +1183,22 @@ describe("close-channel", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
-    // Setup the channel
+    // Setup the pipe
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
 
     // Create the signatures
-    const signature1 = generateCloseChannelSignature(
+    const signature1 = generateClosePipeSignature(
       address1PK,
       null,
       address1,
@@ -1208,7 +1208,7 @@ describe("close-channel", () => {
       1,
       address1
     );
-    const signature2 = generateCloseChannelSignature(
+    const signature2 = generateClosePipeSignature(
       address2PK,
       null,
       address2,
@@ -1221,7 +1221,7 @@ describe("close-channel", () => {
 
     const { result } = simnet.callPublicFn(
       "stackflow",
-      "close-channel",
+      "close-pipe",
       [
         Cl.none(),
         Cl.principal(address2),
@@ -1249,22 +1249,22 @@ describe("close-channel", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
-    // Setup the channel
+    // Setup the pipe
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
 
     // Create the signatures
-    const signature1 = generateCloseChannelSignature(
+    const signature1 = generateClosePipeSignature(
       address1PK,
       null,
       address1,
@@ -1274,7 +1274,7 @@ describe("close-channel", () => {
       1,
       address2
     );
-    const signature2 = generateCloseChannelSignature(
+    const signature2 = generateClosePipeSignature(
       address2PK,
       null,
       address2,
@@ -1287,7 +1287,7 @@ describe("close-channel", () => {
 
     const { result } = simnet.callPublicFn(
       "stackflow",
-      "close-channel",
+      "close-pipe",
       [
         Cl.none(),
         Cl.principal(address1),
@@ -1315,22 +1315,22 @@ describe("close-channel", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
-    // Setup the channel
+    // Setup the pipe
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
 
     // Create the signatures
-    const signature1 = generateCloseChannelSignature(
+    const signature1 = generateClosePipeSignature(
       address1PK,
       null,
       address1,
@@ -1340,7 +1340,7 @@ describe("close-channel", () => {
       1,
       address1
     );
-    const signature2 = generateCloseChannelSignature(
+    const signature2 = generateClosePipeSignature(
       address2PK,
       null,
       address2,
@@ -1353,7 +1353,7 @@ describe("close-channel", () => {
 
     const { result } = simnet.callPublicFn(
       "stackflow",
-      "close-channel",
+      "close-pipe",
       [
         Cl.none(),
         Cl.principal(address2),
@@ -1384,22 +1384,22 @@ describe("close-channel", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
-    // Setup the channel
+    // Setup the pipe
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
 
     // Create the signatures
-    const signature1 = generateCloseChannelSignature(
+    const signature1 = generateClosePipeSignature(
       address1PK,
       null,
       address1,
@@ -1409,7 +1409,7 @@ describe("close-channel", () => {
       1,
       address2
     );
-    const signature2 = generateCloseChannelSignature(
+    const signature2 = generateClosePipeSignature(
       address2PK,
       null,
       address2,
@@ -1422,7 +1422,7 @@ describe("close-channel", () => {
 
     const { result } = simnet.callPublicFn(
       "stackflow",
-      "close-channel",
+      "close-pipe",
       [
         Cl.none(),
         Cl.principal(address1),
@@ -1453,22 +1453,22 @@ describe("close-channel", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
-    // Setup the channel
+    // Setup the pipe
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
 
     // Create the signatures
-    const signature1 = generateCloseChannelSignature(
+    const signature1 = generateClosePipeSignature(
       address1PK,
       null,
       address1,
@@ -1478,7 +1478,7 @@ describe("close-channel", () => {
       1,
       address1
     );
-    const signature2 = generateCloseChannelSignature(
+    const signature2 = generateClosePipeSignature(
       address2PK,
       null,
       address2,
@@ -1491,7 +1491,7 @@ describe("close-channel", () => {
 
     const { result } = simnet.callPublicFn(
       "stackflow",
-      "close-channel",
+      "close-pipe",
       [
         Cl.none(),
         Cl.principal(address2),
@@ -1520,22 +1520,22 @@ describe("close-channel", () => {
 });
 
 describe("force-cancel", () => {
-  it("account 1 can force cancel a channel", () => {
+  it("account 1 can force cancel a pipe", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
-    // Setup the channel and save the channel key
+    // Setup the pipe and save the pipe key
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
@@ -1550,12 +1550,12 @@ describe("force-cancel", () => {
     expect(result).toBeOk(Cl.uint(current_height + WAITING_PERIOD));
 
     // Verify that the waiting period has been set in the map
-    const channel = simnet.getMapEntry(
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(2000000),
@@ -1578,25 +1578,25 @@ describe("force-cancel", () => {
     expect(contractBalance).toBe(3000000n);
   });
 
-  it("account 2 can force cancel channel", () => {
+  it("account 2 can force cancel pipe", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
-    // Setup the channel and save the channel key
+    // Setup the pipe and save the pipe key
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
 
     const current_height = simnet.burnBlockHeight;
     const { result } = simnet.callPublicFn(
@@ -1608,12 +1608,12 @@ describe("force-cancel", () => {
     expect(result).toBeOk(Cl.uint(current_height + WAITING_PERIOD));
 
     // Verify that the waiting period has been set in the map
-    const channel = simnet.getMapEntry(
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(2000000),
@@ -1635,20 +1635,20 @@ describe("force-cancel", () => {
     expect(contractBalance).toBe(3000000n);
   });
 
-  it("canceling a non-existent channel gives an error", () => {
+  it("canceling a non-existent pipe gives an error", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
-    // Setup a channel
+    // Setup a pipe
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
@@ -1659,7 +1659,7 @@ describe("force-cancel", () => {
       [Cl.none(), Cl.principal(address1)],
       address3
     );
-    expect(result).toBeErr(Cl.uint(TxError.NoSuchChannel));
+    expect(result).toBeErr(Cl.uint(TxError.NoSuchPipe));
   });
 });
 
@@ -1671,18 +1671,18 @@ describe("force-close", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
-    // Setup the channel
+    // Setup the pipe
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
@@ -1721,7 +1721,7 @@ describe("force-close", () => {
         Cl.buffer(signature1),
         Cl.buffer(signature2),
         Cl.uint(1),
-        Cl.uint(ChannelAction.Transfer),
+        Cl.uint(PipeAction.Transfer),
         Cl.principal(address2),
         Cl.none(),
         Cl.none(),
@@ -1731,12 +1731,12 @@ describe("force-close", () => {
     expect(result).toBeOk(Cl.uint(heightBefore + WAITING_PERIOD));
 
     // Verify that the waiting period has been set in the map
-    const channel = simnet.getMapEntry(
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1600000),
         "balance-2": Cl.uint(1400000),
@@ -1762,21 +1762,21 @@ describe("force-close", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
-    // Setup the channel
+    // Setup the pipe
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
 
     // Create the signatures
     const signature1 = generateTransferSignature(
@@ -1812,7 +1812,7 @@ describe("force-close", () => {
         Cl.buffer(signature2),
         Cl.buffer(signature1),
         Cl.uint(1),
-        Cl.uint(ChannelAction.Transfer),
+        Cl.uint(PipeAction.Transfer),
         Cl.principal(address2),
         Cl.none(),
         Cl.none(),
@@ -1822,12 +1822,12 @@ describe("force-close", () => {
     expect(result).toBeOk(Cl.uint(heightBefore + WAITING_PERIOD));
 
     // Verify that the waiting period has been set in the map
-    const channel = simnet.getMapEntry(
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1600000),
         "balance-2": Cl.uint(1400000),
@@ -1853,16 +1853,16 @@ describe("force-close", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
-    // Setup the channel
+    // Setup the pipe
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
@@ -1900,7 +1900,7 @@ describe("force-close", () => {
         Cl.buffer(signature1),
         Cl.buffer(signature2),
         Cl.uint(1),
-        Cl.uint(ChannelAction.Transfer),
+        Cl.uint(PipeAction.Transfer),
         Cl.principal(address2),
         Cl.none(),
         Cl.none(),
@@ -1926,16 +1926,16 @@ describe("force-close", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
-    // Setup the channel
+    // Setup the pipe
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
@@ -1973,7 +1973,7 @@ describe("force-close", () => {
         Cl.buffer(signature2),
         Cl.buffer(signature1),
         Cl.uint(1),
-        Cl.uint(ChannelAction.Transfer),
+        Cl.uint(PipeAction.Transfer),
         Cl.principal(address2),
         Cl.none(),
         Cl.none(),
@@ -1999,16 +1999,16 @@ describe("force-close", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
-    // Setup the channel
+    // Setup the pipe
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
@@ -2046,7 +2046,7 @@ describe("force-close", () => {
         Cl.buffer(signature1),
         Cl.buffer(signature2),
         Cl.uint(1),
-        Cl.uint(ChannelAction.Transfer),
+        Cl.uint(PipeAction.Transfer),
         Cl.principal(address2),
         Cl.none(),
         Cl.none(),
@@ -2070,20 +2070,20 @@ describe("force-close", () => {
 });
 
 describe("dispute-closure", () => {
-  it("disputing a non-existent channel gives an error", () => {
+  it("disputing a non-existent pipe gives an error", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
-    // Setup a channel
+    // Setup a pipe
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
@@ -2121,35 +2121,35 @@ describe("dispute-closure", () => {
         Cl.buffer(signature3),
         Cl.buffer(signature1),
         Cl.uint(1),
-        Cl.uint(ChannelAction.Transfer),
+        Cl.uint(PipeAction.Transfer),
         Cl.principal(address2),
         Cl.none(),
         Cl.none(),
       ],
       address3
     );
-    expect(result).toBeErr(Cl.uint(TxError.NoSuchChannel));
+    expect(result).toBeErr(Cl.uint(TxError.NoSuchPipe));
   });
 
-  it("disputing a channel that is not closing gives an error", () => {
+  it("disputing a pipe that is not closing gives an error", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
-    // Setup the channel and save the channel key
+    // Setup the pipe and save the pipe key
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
 
     // Create the signatures for a transfer
     const signature1 = generateTransferSignature(
@@ -2185,7 +2185,7 @@ describe("dispute-closure", () => {
         Cl.buffer(signature2),
         Cl.buffer(signature1),
         Cl.uint(1),
-        Cl.uint(ChannelAction.Transfer),
+        Cl.uint(PipeAction.Transfer),
         Cl.principal(address2),
         Cl.none(),
         Cl.none(),
@@ -2195,12 +2195,12 @@ describe("dispute-closure", () => {
     expect(disputeResult).toBeErr(Cl.uint(TxError.NoCloseInProgress));
 
     // Verify that the map entry is unchanged
-    const channel = simnet.getMapEntry(
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(2000000),
@@ -2227,21 +2227,21 @@ describe("dispute-closure", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
-    // Setup the channel and save the channel key
+    // Setup the pipe and save the pipe key
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
 
     const cancel_height = simnet.burnBlockHeight;
     const { result } = simnet.callPublicFn(
@@ -2289,7 +2289,7 @@ describe("dispute-closure", () => {
         Cl.buffer(signature2),
         Cl.buffer(signature1),
         Cl.uint(1),
-        Cl.uint(ChannelAction.Transfer),
+        Cl.uint(PipeAction.Transfer),
         Cl.principal(address2),
         Cl.none(),
         Cl.none(),
@@ -2298,13 +2298,13 @@ describe("dispute-closure", () => {
     );
     expect(disputeResult).toBeOk(Cl.bool(false));
 
-    // Verify that the channel has been reset
-    const channel = simnet.getMapEntry(
+    // Verify that the pipe has been reset
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(0),
         "balance-2": Cl.uint(0),
@@ -2331,21 +2331,21 @@ describe("dispute-closure", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
-    // Setup the channel and save the channel key
+    // Setup the pipe and save the pipe key
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
 
     const cancel_height = simnet.burnBlockHeight;
     const { result } = simnet.callPublicFn(
@@ -2393,7 +2393,7 @@ describe("dispute-closure", () => {
         Cl.buffer(signature1),
         Cl.buffer(signature2),
         Cl.uint(1),
-        Cl.uint(ChannelAction.Transfer),
+        Cl.uint(PipeAction.Transfer),
         Cl.principal(address2),
         Cl.none(),
         Cl.none(),
@@ -2402,13 +2402,13 @@ describe("dispute-closure", () => {
     );
     expect(disputeResult).toBeOk(Cl.bool(false));
 
-    // Verify that the channel has been reset
-    const channel = simnet.getMapEntry(
+    // Verify that the pipe has been reset
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(0),
         "balance-2": Cl.uint(0),
@@ -2435,21 +2435,21 @@ describe("dispute-closure", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
-    // Setup the channel and save the channel key
+    // Setup the pipe and save the pipe key
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
 
     const cancel_height = simnet.burnBlockHeight;
     const { result } = simnet.callPublicFn(
@@ -2499,7 +2499,7 @@ describe("dispute-closure", () => {
         Cl.buffer(signature1),
         Cl.buffer(signature2),
         Cl.uint(1),
-        Cl.uint(ChannelAction.Transfer),
+        Cl.uint(PipeAction.Transfer),
         Cl.principal(address2),
         Cl.none(),
         Cl.none(),
@@ -2509,12 +2509,12 @@ describe("dispute-closure", () => {
     expect(disputeResult).toBeErr(Cl.uint(TxError.SelfDispute));
 
     // Verify that the map entry is unchanged
-    const channel = simnet.getMapEntry(
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(2000000),
@@ -2549,21 +2549,21 @@ describe("dispute-closure", () => {
       address1
     );
 
-    // Setup the channel and save the channel key
+    // Setup the pipe and save the pipe key
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
 
     const cancel_height = simnet.burnBlockHeight;
     const { result } = simnet.callPublicFn(
@@ -2611,7 +2611,7 @@ describe("dispute-closure", () => {
         Cl.buffer(signature2),
         Cl.buffer(signature1),
         Cl.uint(1),
-        Cl.uint(ChannelAction.Transfer),
+        Cl.uint(PipeAction.Transfer),
         Cl.principal(address2),
         Cl.none(),
         Cl.none(),
@@ -2620,13 +2620,13 @@ describe("dispute-closure", () => {
     );
     expect(disputeResult).toBeOk(Cl.bool(false));
 
-    // Verify that the channel has been reset
-    const channel = simnet.getMapEntry(
+    // Verify that the pipe has been reset
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(0),
         "balance-2": Cl.uint(0),
@@ -2651,7 +2651,7 @@ describe("dispute-closure", () => {
 });
 
 describe("agent-dispute-closure", () => {
-  it("disputing a non-existent channel gives an error", () => {
+  it("disputing a non-existent pipe gives an error", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
@@ -2663,16 +2663,16 @@ describe("agent-dispute-closure", () => {
       address1
     );
 
-    // Setup a channel
+    // Setup a pipe
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
@@ -2711,17 +2711,17 @@ describe("agent-dispute-closure", () => {
         Cl.buffer(signature3),
         Cl.buffer(signature1),
         Cl.uint(1),
-        Cl.uint(ChannelAction.Transfer),
+        Cl.uint(PipeAction.Transfer),
         Cl.principal(address3),
         Cl.none(),
         Cl.none(),
       ],
       address3
     );
-    expect(result).toBeErr(Cl.uint(TxError.NoSuchChannel));
+    expect(result).toBeErr(Cl.uint(TxError.NoSuchPipe));
   });
 
-  it("disputing a channel that is not closing gives an error", () => {
+  it("disputing a pipe that is not closing gives an error", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
@@ -2733,21 +2733,21 @@ describe("agent-dispute-closure", () => {
       address2
     );
 
-    // Setup the channel and save the channel key
+    // Setup the pipe and save the pipe key
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
 
     // Create the signatures for a transfer
     const signature1 = generateTransferSignature(
@@ -2784,7 +2784,7 @@ describe("agent-dispute-closure", () => {
         Cl.buffer(signature2),
         Cl.buffer(signature1),
         Cl.uint(1),
-        Cl.uint(ChannelAction.Transfer),
+        Cl.uint(PipeAction.Transfer),
         Cl.principal(address2),
         Cl.none(),
         Cl.none(),
@@ -2794,12 +2794,12 @@ describe("agent-dispute-closure", () => {
     expect(disputeResult).toBeErr(Cl.uint(TxError.NoCloseInProgress));
 
     // Verify that the map entry is unchanged
-    const channel = simnet.getMapEntry(
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(2000000),
@@ -2834,21 +2834,21 @@ describe("agent-dispute-closure", () => {
       address2
     );
 
-    // Setup the channel and save the channel key
+    // Setup the pipe and save the pipe key
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
 
     const cancel_height = simnet.burnBlockHeight;
     const { result } = simnet.callPublicFn(
@@ -2897,7 +2897,7 @@ describe("agent-dispute-closure", () => {
         Cl.buffer(signature2),
         Cl.buffer(signature1),
         Cl.uint(1),
-        Cl.uint(ChannelAction.Transfer),
+        Cl.uint(PipeAction.Transfer),
         Cl.principal(address2),
         Cl.none(),
         Cl.none(),
@@ -2906,13 +2906,13 @@ describe("agent-dispute-closure", () => {
     );
     expect(disputeResult).toBeOk(Cl.bool(false));
 
-    // Verify that the channel has been reset
-    const channel = simnet.getMapEntry(
+    // Verify that the pipe has been reset
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(0),
         "balance-2": Cl.uint(0),
@@ -2947,21 +2947,21 @@ describe("agent-dispute-closure", () => {
       address1
     );
 
-    // Setup the channel and save the channel key
+    // Setup the pipe and save the pipe key
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
 
     const cancel_height = simnet.burnBlockHeight;
     const { result } = simnet.callPublicFn(
@@ -3010,7 +3010,7 @@ describe("agent-dispute-closure", () => {
         Cl.buffer(signature1),
         Cl.buffer(signature2),
         Cl.uint(1),
-        Cl.uint(ChannelAction.Transfer),
+        Cl.uint(PipeAction.Transfer),
         Cl.principal(address2),
         Cl.none(),
         Cl.none(),
@@ -3019,13 +3019,13 @@ describe("agent-dispute-closure", () => {
     );
     expect(disputeResult).toBeOk(Cl.bool(false));
 
-    // Verify that the channel has been reset
-    const channel = simnet.getMapEntry(
+    // Verify that the pipe has been reset
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(0),
         "balance-2": Cl.uint(0),
@@ -3060,21 +3060,21 @@ describe("agent-dispute-closure", () => {
       address1
     );
 
-    // Setup the channel and save the channel key
+    // Setup the pipe and save the pipe key
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
 
     const cancel_height = simnet.burnBlockHeight;
     const { result } = simnet.callPublicFn(
@@ -3125,7 +3125,7 @@ describe("agent-dispute-closure", () => {
         Cl.buffer(signature1),
         Cl.buffer(signature2),
         Cl.uint(1),
-        Cl.uint(ChannelAction.Transfer),
+        Cl.uint(PipeAction.Transfer),
         Cl.principal(address2),
         Cl.none(),
         Cl.none(),
@@ -3135,12 +3135,12 @@ describe("agent-dispute-closure", () => {
     expect(disputeResult).toBeErr(Cl.uint(TxError.SelfDispute));
 
     // Verify that the map entry is unchanged
-    const channel = simnet.getMapEntry(
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(2000000),
@@ -3165,20 +3165,20 @@ describe("agent-dispute-closure", () => {
 });
 
 describe("finalize", () => {
-  it("finalizing a non-existent channel gives an error", () => {
+  it("finalizing a non-existent pipe gives an error", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
-    // Setup a channel
+    // Setup a pipe
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
@@ -3189,28 +3189,28 @@ describe("finalize", () => {
       [Cl.none(), Cl.principal(address1)],
       address3
     );
-    expect(result).toBeErr(Cl.uint(TxError.NoSuchChannel));
+    expect(result).toBeErr(Cl.uint(TxError.NoSuchPipe));
   });
 
-  it("finalizing a channel that is not closing gives an error", () => {
+  it("finalizing a pipe that is not closing gives an error", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
-    // Setup the channel and save the channel key
+    // Setup the pipe and save the pipe key
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
 
     // Account 2 tries to finalize a closure
     const { result: disputeResult } = simnet.callPublicFn(
@@ -3222,12 +3222,12 @@ describe("finalize", () => {
     expect(disputeResult).toBeErr(Cl.uint(TxError.NoCloseInProgress));
 
     // Verify that the map entry is unchanged
-    const channel = simnet.getMapEntry(
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(2000000),
@@ -3254,21 +3254,21 @@ describe("finalize", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
-    // Setup the channel and save the channel key
+    // Setup the pipe and save the pipe key
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
 
     const cancel_height = simnet.burnBlockHeight;
     const { result } = simnet.callPublicFn(
@@ -3291,13 +3291,13 @@ describe("finalize", () => {
     );
     expect(disputeResult).toBeOk(Cl.bool(false));
 
-    // Verify that the channel has been reset
-    const channel = simnet.getMapEntry(
+    // Verify that the pipe has been reset
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(0),
         "balance-2": Cl.uint(0),
@@ -3324,21 +3324,21 @@ describe("finalize", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
-    // Setup the channel and save the channel key
+    // Setup the pipe and save the pipe key
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
 
     const cancel_height = simnet.burnBlockHeight;
     const { result } = simnet.callPublicFn(
@@ -3361,13 +3361,13 @@ describe("finalize", () => {
     );
     expect(disputeResult).toBeOk(Cl.bool(false));
 
-    // Verify that the channel has been reset
-    const channel = simnet.getMapEntry(
+    // Verify that the pipe has been reset
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(0),
         "balance-2": Cl.uint(0),
@@ -3394,18 +3394,18 @@ describe("finalize", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
-    // Setup the channel
+    // Setup the pipe
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
@@ -3444,7 +3444,7 @@ describe("finalize", () => {
         Cl.buffer(signature1),
         Cl.buffer(signature2),
         Cl.uint(1),
-        Cl.uint(ChannelAction.Transfer),
+        Cl.uint(PipeAction.Transfer),
         Cl.principal(address2),
         Cl.none(),
         Cl.none(),
@@ -3465,13 +3465,13 @@ describe("finalize", () => {
     );
     expect(disputeResult).toBeOk(Cl.bool(false));
 
-    // Verify that the channel has been reset
-    const channel = simnet.getMapEntry(
+    // Verify that the pipe has been reset
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(0),
         "balance-2": Cl.uint(0),
@@ -3494,25 +3494,25 @@ describe("finalize", () => {
     expect(contractBalance).toBe(0n);
   });
 
-  it("channel cannot be finalized before waiting period has passed", () => {
+  it("pipe cannot be finalized before waiting period has passed", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
-    // Setup the channel and save the channel key
+    // Setup the pipe and save the pipe key
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
 
     const cancel_height = simnet.burnBlockHeight;
     const { result } = simnet.callPublicFn(
@@ -3536,12 +3536,12 @@ describe("finalize", () => {
     expect(disputeResult).toBeErr(Cl.uint(TxError.NotExpired));
 
     // Verify that the map entry is unchanged
-    const channel = simnet.getMapEntry(
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(2000000),
@@ -3566,19 +3566,19 @@ describe("finalize", () => {
 });
 
 describe("deposit", () => {
-  it("can deposit to a valid channel from account1", () => {
+  it("can deposit to a valid pipe from account1", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
@@ -3589,7 +3589,7 @@ describe("deposit", () => {
         "principal-2": Cl.principal(address2),
       })
     );
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
 
     // Create the signatures for a deposit
     const signature1 = generateDepositSignature(
@@ -3649,13 +3649,13 @@ describe("deposit", () => {
     const contractBalance = stxBalances.get(stackflowContract);
     expect(contractBalance).toBe(3050000n);
 
-    // Verify the channel
-    const channel = simnet.getMapEntry(
+    // Verify the pipe
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1050000),
         "balance-2": Cl.uint(2000000),
@@ -3666,19 +3666,19 @@ describe("deposit", () => {
     );
   });
 
-  it("can deposit to a valid channel from account2", () => {
+  it("can deposit to a valid pipe from account2", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
@@ -3689,7 +3689,7 @@ describe("deposit", () => {
         "principal-2": Cl.principal(address2),
       })
     );
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
 
     // Create the signatures for a deposit
     const signature1 = generateDepositSignature(
@@ -3748,13 +3748,13 @@ describe("deposit", () => {
     const contractBalance = stxBalances.get(stackflowContract);
     expect(contractBalance).toBe(3050000n);
 
-    // Verify the channel
-    const channel = simnet.getMapEntry(
+    // Verify the pipe
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(2050000),
@@ -3771,13 +3771,13 @@ describe("deposit", () => {
 
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
@@ -3788,7 +3788,7 @@ describe("deposit", () => {
         "principal-2": Cl.principal(address2),
       })
     );
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
 
     // Create the signatures for a deposit
     const signature1 = generateDepositSignature(
@@ -3847,13 +3847,13 @@ describe("deposit", () => {
     const contractBalance = stxBalances.get(stackflowContract);
     expect(contractBalance).toBe(3050000n);
 
-    // Verify the channel
-    const channel = simnet.getMapEntry(
+    // Verify the pipe
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(3040000n),
         "balance-2": Cl.uint(10000),
@@ -3864,7 +3864,7 @@ describe("deposit", () => {
     );
   });
 
-  it("cannot deposit into non-existant channel", () => {
+  it("cannot deposit into non-existant pipe", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
@@ -3890,7 +3890,7 @@ describe("deposit", () => {
       address1
     );
 
-    // Try a deposit when no channels exist
+    // Try a deposit when no pipes exist
     const { result: result1 } = simnet.callPublicFn(
       "stackflow",
       "deposit",
@@ -3906,22 +3906,22 @@ describe("deposit", () => {
       ],
       address1
     );
-    expect(result1).toBeErr(Cl.uint(TxError.NoSuchChannel));
+    expect(result1).toBeErr(Cl.uint(TxError.NoSuchPipe));
 
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
 
-    // Try a deposit when no channels exist
+    // Try a deposit when no pipes exist
     const { result: result2 } = simnet.callPublicFn(
       "stackflow",
       "deposit",
@@ -3937,7 +3937,7 @@ describe("deposit", () => {
       ],
       address1
     );
-    expect(result2).toBeErr(Cl.uint(TxError.NoSuchChannel));
+    expect(result2).toBeErr(Cl.uint(TxError.NoSuchPipe));
   });
 
   it("can not deposit with bad signatures", () => {
@@ -3946,13 +3946,13 @@ describe("deposit", () => {
 
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
@@ -3963,7 +3963,7 @@ describe("deposit", () => {
         "principal-2": Cl.principal(address2),
       })
     );
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
 
     // Create the signatures for a deposit
     const signature1 = generateDepositSignature(
@@ -4016,13 +4016,13 @@ describe("deposit", () => {
     const contractBalance = stxBalances.get(stackflowContract);
     expect(contractBalance).toBe(3000000n);
 
-    // Verify the channel
-    const channel = simnet.getMapEntry(
+    // Verify the pipe
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000n),
         "balance-2": Cl.uint(2000000n),
@@ -4039,13 +4039,13 @@ describe("deposit", () => {
 
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
@@ -4056,7 +4056,7 @@ describe("deposit", () => {
         "principal-2": Cl.principal(address2),
       })
     );
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
 
     // Create the signatures for a deposit
     const signature1 = generateDepositSignature(
@@ -4134,13 +4134,13 @@ describe("deposit", () => {
     const contractBalance = stxBalances.get(stackflowContract);
     expect(contractBalance).toBe(3050000n);
 
-    // Verify the channel did not change with the failed deposit
-    const channel = simnet.getMapEntry(
+    // Verify the pipe did not change with the failed deposit
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1050000),
         "balance-2": Cl.uint(2000000),
@@ -4153,19 +4153,19 @@ describe("deposit", () => {
 });
 
 describe("withdraw", () => {
-  it("can withdraw from a valid channel from account1", () => {
+  it("can withdraw from a valid pipe from account1", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
@@ -4176,7 +4176,7 @@ describe("withdraw", () => {
         "principal-2": Cl.principal(address2),
       })
     );
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
 
     // Create the signatures for a withdraw
     const signature1 = generateWithdrawSignature(
@@ -4236,13 +4236,13 @@ describe("withdraw", () => {
     const contractBalance = stxBalances.get(stackflowContract);
     expect(contractBalance).toBe(2500000n);
 
-    // Verify the channel
-    const channel = simnet.getMapEntry(
+    // Verify the pipe
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(500000),
         "balance-2": Cl.uint(2000000),
@@ -4253,19 +4253,19 @@ describe("withdraw", () => {
     );
   });
 
-  it("can withdraw from a valid channel from account2", () => {
+  it("can withdraw from a valid pipe from account2", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
@@ -4276,7 +4276,7 @@ describe("withdraw", () => {
         "principal-2": Cl.principal(address2),
       })
     );
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
 
     // Create the signatures for a withdraw
     const signature1 = generateWithdrawSignature(
@@ -4336,13 +4336,13 @@ describe("withdraw", () => {
     const contractBalance = stxBalances.get(stackflowContract);
     expect(contractBalance).toBe(2500000n);
 
-    // Verify the channel
-    const channel = simnet.getMapEntry(
+    // Verify the pipe
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(500000),
         "balance-2": Cl.uint(2000000),
@@ -4359,13 +4359,13 @@ describe("withdraw", () => {
 
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
@@ -4376,7 +4376,7 @@ describe("withdraw", () => {
         "principal-2": Cl.principal(address2),
       })
     );
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
 
     // Create the signatures for a withdraw
     const signature1 = generateWithdrawSignature(
@@ -4430,13 +4430,13 @@ describe("withdraw", () => {
     const contractBalance = stxBalances.get(stackflowContract);
     expect(contractBalance).toBe(3000000n);
 
-    // Verify the channel
-    const channel = simnet.getMapEntry(
+    // Verify the pipe
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(2000000),
@@ -4453,13 +4453,13 @@ describe("withdraw", () => {
 
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
@@ -4470,7 +4470,7 @@ describe("withdraw", () => {
         "principal-2": Cl.principal(address2),
       })
     );
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
 
     // Create the signatures for a withdraw
     const signature1 = generateWithdrawSignature(
@@ -4524,13 +4524,13 @@ describe("withdraw", () => {
     const contractBalance = stxBalances.get(stackflowContract);
     expect(contractBalance).toBe(3000000n);
 
-    // Verify the channel
-    const channel = simnet.getMapEntry(
+    // Verify the pipe
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(2000000),
@@ -4547,13 +4547,13 @@ describe("withdraw", () => {
 
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
@@ -4564,7 +4564,7 @@ describe("withdraw", () => {
         "principal-2": Cl.principal(address2),
       })
     );
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
 
     // Create the signatures for a withdraw
     const signature1 = generateWithdrawSignature(
@@ -4618,13 +4618,13 @@ describe("withdraw", () => {
     const contractBalance = stxBalances.get(stackflowContract);
     expect(contractBalance).toBe(3000000n);
 
-    // Verify the channel
-    const channel = simnet.getMapEntry(
+    // Verify the pipe
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(2000000),
@@ -4641,13 +4641,13 @@ describe("withdraw", () => {
 
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
@@ -4658,7 +4658,7 @@ describe("withdraw", () => {
         "principal-2": Cl.principal(address2),
       })
     );
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
 
     // Create the signatures for a deposit
     const depositSignature1 = generateDepositSignature(
@@ -4758,13 +4758,13 @@ describe("withdraw", () => {
     const contractBalance = stxBalances.get(stackflowContract);
     expect(contractBalance).toBe(3050000n);
 
-    // Verify the channel
-    const channel = simnet.getMapEntry(
+    // Verify the pipe
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1050000),
         "balance-2": Cl.uint(2000000),
@@ -4776,20 +4776,20 @@ describe("withdraw", () => {
   });
 });
 
-describe("get-channel", () => {
-  it("returns the channel info", () => {
+describe("get-pipe", () => {
+  it("returns the pipe info", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     const { result } = simnet.callReadOnlyFn(
       "stackflow",
-      "get-channel",
+      "get-pipe",
       [Cl.none(), Cl.principal(address2)],
       address1
     );
@@ -4827,11 +4827,11 @@ describe("contract-of-optional", () => {
   });
 });
 
-describe("get-channel-key", () => {
-  it("ensures the channel key is built correctly", () => {
+describe("get-pipe-key", () => {
+  it("ensures the pipe key is built correctly", () => {
     const { result } = simnet.callPrivateFn(
       "stackflow",
-      "get-channel-key",
+      "get-pipe-key",
       [Cl.none(), Cl.principal(address1), Cl.principal(address2)],
       address1
     );
@@ -4844,10 +4844,10 @@ describe("get-channel-key", () => {
     );
   });
 
-  it("ensures the channel key is ordered correctly", () => {
+  it("ensures the pipe key is ordered correctly", () => {
     const { result } = simnet.callPrivateFn(
       "stackflow",
-      "get-channel-key",
+      "get-pipe-key",
       [Cl.none(), Cl.principal(address2), Cl.principal(address1)],
       address1
     );
@@ -4860,10 +4860,10 @@ describe("get-channel-key", () => {
     );
   });
 
-  it("ensures the channel key includes the specified token", () => {
+  it("ensures the pipe key includes the specified token", () => {
     const { result } = simnet.callPrivateFn(
       "stackflow",
-      "get-channel-key",
+      "get-pipe-key",
       [
         Cl.some(Cl.contractPrincipal(address1, "test-token")),
         Cl.principal(address1),
@@ -4948,7 +4948,7 @@ describe("execute-withdraw", () => {
 
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
@@ -4977,7 +4977,7 @@ describe("execute-withdraw", () => {
 
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(100), Cl.principal(address2), Cl.uint(0)],
       address1
     );
@@ -5006,18 +5006,18 @@ describe("transfers with secrets", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
-    // Setup the channel
+    // Setup the pipe
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
@@ -5058,7 +5058,7 @@ describe("transfers with secrets", () => {
         Cl.buffer(signature1),
         Cl.buffer(signature2),
         Cl.uint(1),
-        Cl.uint(ChannelAction.Transfer),
+        Cl.uint(PipeAction.Transfer),
         Cl.principal(address2),
         Cl.some(Cl.bufferFromHex("1234567890abcdef")),
         Cl.none(),
@@ -5068,12 +5068,12 @@ describe("transfers with secrets", () => {
     expect(result).toBeOk(Cl.uint(heightBefore + WAITING_PERIOD));
 
     // Verify that the waiting period has been set in the map
-    const channel = simnet.getMapEntry(
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1600000),
         "balance-2": Cl.uint(1400000),
@@ -5099,18 +5099,18 @@ describe("transfers with secrets", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
-    // Setup the channel
+    // Setup the pipe
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
@@ -5150,7 +5150,7 @@ describe("transfers with secrets", () => {
         Cl.buffer(signature1),
         Cl.buffer(signature2),
         Cl.uint(1),
-        Cl.uint(ChannelAction.Transfer),
+        Cl.uint(PipeAction.Transfer),
         Cl.principal(address2),
         Cl.some(Cl.bufferFromHex("1234567890abcdee")),
         Cl.none(),
@@ -5160,12 +5160,12 @@ describe("transfers with secrets", () => {
     expect(result).toBeErr(Cl.uint(TxError.InvalidSenderSignature));
 
     // Verify that the map has not changed
-    const channel = simnet.getMapEntry(
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(2000000),
@@ -5202,7 +5202,7 @@ describe("make-structured-data-hash", () => {
         Cl.uint(10000),
         Cl.uint(20000),
         Cl.uint(1),
-        Cl.uint(ChannelAction.Transfer),
+        Cl.uint(PipeAction.Transfer),
         Cl.principal(address2),
         Cl.none(),
         Cl.none(),
@@ -5217,7 +5217,7 @@ describe("make-structured-data-hash", () => {
       "balance-1": Cl.uint(10000),
       "balance-2": Cl.uint(20000),
       nonce: Cl.uint(1),
-      action: Cl.uint(ChannelAction.Transfer),
+      action: Cl.uint(PipeAction.Transfer),
       actor: Cl.principal(address2),
       "hashed-secret": Cl.none(),
       "valid-after": Cl.none(),
@@ -5239,7 +5239,7 @@ describe("make-structured-data-hash", () => {
         Cl.uint(12345),
         Cl.uint(98765),
         Cl.uint(2),
-        Cl.uint(ChannelAction.Close),
+        Cl.uint(PipeAction.Close),
         Cl.principal(address1),
         Cl.none(),
         Cl.none(),
@@ -5254,7 +5254,7 @@ describe("make-structured-data-hash", () => {
       "balance-1": Cl.uint(12345),
       "balance-2": Cl.uint(98765),
       nonce: Cl.uint(2),
-      action: Cl.uint(ChannelAction.Close),
+      action: Cl.uint(PipeAction.Close),
       actor: Cl.principal(address1),
       "hashed-secret": Cl.none(),
       "valid-after": Cl.none(),
@@ -5269,18 +5269,18 @@ describe("transfers with valid-after", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
-    // Setup the channel
+    // Setup the pipe
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
@@ -5324,7 +5324,7 @@ describe("transfers with valid-after", () => {
         Cl.buffer(signature1),
         Cl.buffer(signature2),
         Cl.uint(1),
-        Cl.uint(ChannelAction.Transfer),
+        Cl.uint(PipeAction.Transfer),
         Cl.principal(address2),
         Cl.none(),
         Cl.some(Cl.uint(heightBefore)),
@@ -5334,12 +5334,12 @@ describe("transfers with valid-after", () => {
     expect(result).toBeOk(Cl.uint(heightBefore + WAITING_PERIOD));
 
     // Verify that the waiting period has been set in the map
-    const channel = simnet.getMapEntry(
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1600000),
         "balance-2": Cl.uint(1400000),
@@ -5365,18 +5365,18 @@ describe("transfers with valid-after", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
-    // Setup the channel
+    // Setup the pipe
     const { result: fundResult } = simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
-    const channelKey = (fundResult as ResponseOkCV).value;
+    const pipeKey = (fundResult as ResponseOkCV).value;
     simnet.callPublicFn(
       "stackflow",
-      "fund-channel",
+      "fund-pipe",
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
@@ -5420,7 +5420,7 @@ describe("transfers with valid-after", () => {
         Cl.buffer(signature1),
         Cl.buffer(signature2),
         Cl.uint(1),
-        Cl.uint(ChannelAction.Transfer),
+        Cl.uint(PipeAction.Transfer),
         Cl.principal(address2),
         Cl.none(),
         Cl.some(Cl.uint(heightBefore + 10)),
@@ -5430,12 +5430,12 @@ describe("transfers with valid-after", () => {
     expect(result).toBeErr(Cl.uint(TxError.NotValidYet));
 
     // Verify that the map has not changed
-    const channel = simnet.getMapEntry(
+    const pipe = simnet.getMapEntry(
       stackflowContract,
-      "channels",
-      channelKey
+      "pipes",
+      pipeKey
     );
-    expect(channel).toBeSome(
+    expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(2000000),

@@ -1,6 +1,6 @@
 ;; title: stackflow
 ;; author: brice.btc
-;; version: 0.5.0
+;; version: 0.6.0
 ;; summary: Stackflow is a payment channel network built on Stacks, enabling
 ;;   off-chain, non-custodial, and high-speed payments between users. Designed
 ;;   to be simple, secure, and efficient, it supports transactions in STX and
@@ -29,7 +29,7 @@
 ;; SOFTWARE.
 
 (use-trait sip-010 'SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE.sip-010-trait-ft-standard.sip-010-trait)
-;; (impl-trait 'SP126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT6AD08RV.stackflow-token-0-5-0.stackflow-token)
+;; (impl-trait 'SP126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT6AD08RV.stackflow-token-0-6-0.stackflow-token)
 (impl-trait .stackflow-token.stackflow-token)
 
 (define-constant contract-deployer tx-sender)
@@ -41,7 +41,7 @@
 (define-constant message-domain-hash (sha256 (unwrap-panic (to-consensus-buff?
 	{
 		name: "StackFlow",
-		version: "0.5.0",
+		version: "0.6.0",
 		chain-id: chain-id
 	}
 ))))
@@ -55,7 +55,7 @@
 
 ;; Error codes
 (define-constant ERR_DEPOSIT_FAILED (err u100))
-(define-constant ERR_NO_SUCH_CHANNEL (err u101))
+(define-constant ERR_NO_SUCH_PIPE (err u101))
 (define-constant ERR_INVALID_PRINCIPAL (err u102))
 (define-constant ERR_INVALID_SENDER_SIGNATURE (err u103))
 (define-constant ERR_INVALID_OTHER_SIGNATURE (err u104))
@@ -64,7 +64,7 @@
 (define-constant ERR_MAX_ALLOWED (err u107))
 (define-constant ERR_INVALID_TOTAL_BALANCE (err u108))
 (define-constant ERR_WITHDRAWAL_FAILED (err u109))
-(define-constant ERR_CHANNEL_EXPIRED (err u110))
+(define-constant ERR_PIPE_EXPIRED (err u110))
 (define-constant ERR_NONCE_TOO_LOW (err u111))
 (define-constant ERR_CLOSE_IN_PROGRESS (err u112))
 (define-constant ERR_NO_CLOSE_IN_PROGRESS (err u113))
@@ -84,10 +84,10 @@
 ;;; If `none`, only STX is supported.
 (define-data-var supported-token (optional principal) none)
 
-;;; Map tracking the initial balances in channels between two principals for a
+;;; Map tracking the initial balances in pipes between two principals for a
 ;;; given token.
 (define-map
-  channels
+  pipes
   { token: (optional principal), principal-1: principal, principal-2: principal }
   { balance-1: uint, balance-2: uint, expires-at: uint, nonce: uint, closer: (optional principal) }
 )
@@ -114,10 +114,10 @@
 
 ;;; Register an agent to act on your behalf. Registering an agent allows you to
 ;;; transfer the responsibility of maintaining an always-on server for managing
-;;; your payment channels. The agent can perform all reactive actions on your
-;;; behalf, including signing off on incoming transfers, deposit, withdraw, and
-;;; closure requests from the other party, and disputing closures initiated by
-;;; the other party.
+;;; your pipes. The agent can perform all reactive actions on your behalf,
+;;; including signing off on incoming transfers, deposit, withdraw, and closure
+;;; requests from the other party, and disputing closures initiated by the
+;;; other party.
 ;;; WARNING: An agent, collaborating with the other party, could potentially
 ;;; steal your funds. Only register agents you trust.
 ;;; Returns `(ok true)`
@@ -133,75 +133,75 @@
   (ok (map-delete agents tx-sender))
 )
 
-;;; Deposit `amount` funds into an unfunded channel between `tx-sender` and
-;;; `with` for FT `token` (`none` indicates STX). Create the channel if one
+;;; Deposit `amount` funds into an unfunded pipe between `tx-sender` and
+;;; `with` for FT `token` (`none` indicates STX). Create the pipe if one
 ;;; does not already exist.
 ;;; Returns:
-;;; - The channel key on success
+;;; - The pipe key on success
 ;;;   ```
 ;;;   { token: (optional principal), principal-1: principal, principal-2: principal }
 ;;;   ```
 ;;; - `ERR_NOT_INITIALIZED` if the contract has not been initialized
 ;;; - `ERR_UNAPPROVED_TOKEN` if the token is not the correct token
-;;; - `ERR_NONCE_TOO_LOW` if the nonce is less than the channel's saved nonce
+;;; - `ERR_NONCE_TOO_LOW` if the nonce is less than the pipe's saved nonce
 ;;; - `ERR_CLOSE_IN_PROGRESS` if a forced closure is in progress
-;;; - `ERR_ALREADY_FUNDED` if the channel has already been funded
-(define-public (fund-channel (token (optional <sip-010>)) (amount uint) (with principal) (nonce uint))
+;;; - `ERR_ALREADY_FUNDED` if the pipe has already been funded
+(define-public (fund-pipe (token (optional <sip-010>)) (amount uint) (with principal) (nonce uint))
   (begin
     (try! (check-token token))
 
     (let
       (
-        (channel-key (try! (get-channel-key (contract-of-optional token) tx-sender with)))
-        (existing-channel (map-get? channels channel-key))
-        (channel
+        (pipe-key (try! (get-pipe-key (contract-of-optional token) tx-sender with)))
+        (existing-pipe (map-get? pipes pipe-key))
+        (pipe
           (match
-            existing-channel
+            existing-pipe
             ch
             ch
             { balance-1: u0, balance-2: u0, expires-at: MAX_HEIGHT, nonce: nonce, closer: none }
           )
         )
-        (updated-channel (try! (increase-sender-balance channel-key channel token amount)))
-        (closer (get closer channel))
+        (updated-pipe (try! (increase-sender-balance pipe-key pipe token amount)))
+        (closer (get closer pipe))
       )
 
-      ;; If there was an existing channel, the new nonce must be equal or greater
-      (asserts! (>= (get nonce channel) nonce) ERR_NONCE_TOO_LOW)
+      ;; If there was an existing pipe, the new nonce must be equal or greater
+      (asserts! (>= (get nonce pipe) nonce) ERR_NONCE_TOO_LOW)
 
       ;; A forced closure must not be in progress
       (asserts! (is-none closer) ERR_CLOSE_IN_PROGRESS)
 
-      ;; Only fund a channel with a 0 balance for the sender can be funded. After
-      ;; the channel is initially funded, additional funds must use the `deposit`
+      ;; Only fund a pipe with a 0 balance for the sender can be funded. After
+      ;; the pipe is initially funded, additional funds must use the `deposit`
       ;; function, which requires signatures from both parties.
-      (asserts! (not (is-funded tx-sender channel-key channel)) ERR_ALREADY_FUNDED)
+      (asserts! (not (is-funded tx-sender pipe-key pipe)) ERR_ALREADY_FUNDED)
 
-      (map-set channels channel-key updated-channel)
+      (map-set pipes pipe-key updated-pipe)
 
       ;; Emit an event
       (print {
-        event: "fund-channel",
-        channel-key: channel-key,
-        channel: updated-channel,
+        event: "fund-pipe",
+        pipe-key: pipe-key,
+        pipe: updated-pipe,
         sender: tx-sender,
         amount: amount,
       })
-      (ok channel-key)
+      (ok pipe-key)
     )
   )
 )
 
-;;; Cooperatively close the channel, with authorization from both parties.
+;;; Cooperatively close the pipe, with authorization from both parties.
 ;;; Returns:
 ;;; - `(ok true)` on success
-;;; - `ERR_NO_SUCH_CHANNEL` if the channel does not exist
-;;; - `ERR_NONCE_TOO_LOW` if the nonce is less than the channel's saved nonce
-;;; - `ERR_INVALID_TOTAL_BALANCE` if the total balance of the channel is not
+;;; - `ERR_NO_SUCH_PIPE` if the pipe does not exist
+;;; - `ERR_NONCE_TOO_LOW` if the nonce is less than the pipe's saved nonce
+;;; - `ERR_INVALID_TOTAL_BALANCE` if the total balance of the pipe is not
 ;;;   equal to the sum of the balances provided
 ;;; - `ERR_INVALID_SENDER_SIGNATURE` if the sender's signature is invalid
 ;;; - `ERR_INVALID_OTHER_SIGNATURE` if the other party's signature is invalid
-(define-public (close-channel
+(define-public (close-pipe
     (token (optional <sip-010>))
     (with principal)
     (my-balance uint)
@@ -212,13 +212,13 @@
   )
   (let
     (
-      (channel-key (try! (get-channel-key (contract-of-optional token) tx-sender with)))
-      (channel (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
-      (channel-nonce (get nonce channel))
-      (principal-1 (get principal-1 channel-key))
+      (pipe-key (try! (get-pipe-key (contract-of-optional token) tx-sender with)))
+      (pipe (unwrap! (map-get? pipes pipe-key) ERR_NO_SUCH_PIPE))
+      (pipe-nonce (get nonce pipe))
+      (principal-1 (get principal-1 pipe-key))
       (balance-1 (if (is-eq tx-sender principal-1) my-balance their-balance))
       (balance-2 (if (is-eq tx-sender principal-1) their-balance my-balance))
-      (updated-channel {
+      (updated-pipe {
         balance-1: balance-1,
         balance-2: balance-2,
         expires-at: MAX_HEIGHT,
@@ -227,15 +227,15 @@
       })
     )
 
-    ;; The nonce must be greater than the channel's saved nonce
-    (asserts! (> nonce channel-nonce) ERR_NONCE_TOO_LOW)
+    ;; The nonce must be greater than the pipe's saved nonce
+    (asserts! (> nonce pipe-nonce) ERR_NONCE_TOO_LOW)
 
-    ;; If the total balance of the channel is not equal to the sum of the
-    ;; balances provided, the channel close is invalid.
+    ;; If the total balance of the pipe is not equal to the sum of the
+    ;; balances provided, the pipe close is invalid.
     (asserts!
       (is-eq
         (+ my-balance their-balance)
-        (+ (get balance-1 channel) (get balance-2 channel))
+        (+ (get balance-1 pipe) (get balance-2 pipe))
       )
       ERR_INVALID_TOTAL_BALANCE
     )
@@ -247,7 +247,7 @@
         tx-sender
         their-signature
         with
-        channel-key
+        pipe-key
         balance-1
         balance-2
         nonce
@@ -258,14 +258,14 @@
       )
     )
 
-    ;; Reset the channel in the map.
-    (reset-channel channel-key nonce)
+    ;; Reset the pipe in the map.
+    (reset-pipe pipe-key nonce)
 
     ;; Emit an event
     (print {
-      event: "close-channel",
-      channel-key: channel-key,
-      channel: updated-channel,
+      event: "close-pipe",
+      pipe-key: pipe-key,
+      pipe: updated-pipe,
       sender: tx-sender,
     })
 
@@ -274,38 +274,38 @@
   )
 )
 
-;;; Close the channel and return the original balances to both participants.
+;;; Close the pipe and return the original balances to both participants.
 ;;; This initiates a waiting period, giving the other party the opportunity to
-;;; dispute the closing of the channel, by calling `dispute-closure` and
+;;; dispute the closing of the pipe, by calling `dispute-closure` and
 ;;; providing signatures proving a transfer.
 ;;; Returns:
 ;;; - `(ok expires-at)` on success, where `expires-at` is the block height at
-;;;   which the channel can be finalized if it has not been disputed.
-;;; - `ERR_NO_SUCH_CHANNEL` if the channel does not exist
+;;;   which the pipe can be finalized if it has not been disputed.
+;;; - `ERR_NO_SUCH_PIPE` if the pipe does not exist
 ;;; - `ERR_CLOSE_IN_PROGRESS` if a forced closure is already in progress
 (define-public (force-cancel (token (optional <sip-010>)) (with principal))
   (let
     (
-      (channel-key (try! (get-channel-key (contract-of-optional token) tx-sender with)))
-      (channel (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
-      (closer (get closer channel))
+      (pipe-key (try! (get-pipe-key (contract-of-optional token) tx-sender with)))
+      (pipe (unwrap! (map-get? pipes pipe-key) ERR_NO_SUCH_PIPE))
+      (closer (get closer pipe))
       (expires-at (+ burn-block-height WAITING_PERIOD))
     )
     ;; A forced closure must not be in progress
     (asserts! (is-none closer) ERR_CLOSE_IN_PROGRESS)
 
-    ;; Set the waiting period for this channel.
+    ;; Set the waiting period for this pipe.
     (map-set
-      channels
-      channel-key
-      (merge channel { expires-at: expires-at, closer: (some tx-sender) })
+      pipes
+      pipe-key
+      (merge pipe { expires-at: expires-at, closer: (some tx-sender) })
     )
 
     ;; Emit an event
     (print {
       event: "force-cancel",
-      channel-key: channel-key,
-      channel: channel,
+      pipe-key: pipe-key,
+      pipe: pipe,
       sender: tx-sender,
     })
 
@@ -313,17 +313,17 @@
   )
 )
 
-;;; Close the channel using signatures from the most recent transfer.
+;;; Close the pipe using signatures from the most recent transfer.
 ;;; This initiates a waiting period, giving the other party the opportunity to
-;;; dispute the closing of the channel, by calling `dispute-closure` and
+;;; dispute the closing of the pipe, by calling `dispute-closure` and
 ;;; providing signatures with a later nonce.
 ;;; Returns:
 ;;; - `(ok expires-at)` on success, where `expires-at` is the block height at
-;;;   which the channel can be finalized if it has not been disputed.
-;;; - `ERR_NO_SUCH_CHANNEL` if the channel does not exist
+;;;   which the pipe can be finalized if it has not been disputed.
+;;; - `ERR_NO_SUCH_PIPE` if the pipe does not exist
 ;;; - `ERR_CLOSE_IN_PROGRESS` if a forced closure is already in progress
-;;; - `ERR_NONCE_TOO_LOW` if the nonce is less than the channel's saved nonce
-;;; - `ERR_INVALID_TOTAL_BALANCE` if the total balance of the channel is not
+;;; - `ERR_NONCE_TOO_LOW` if the nonce is less than the pipe's saved nonce
+;;; - `ERR_INVALID_TOTAL_BALANCE` if the total balance of the pipe is not
 ;;;   equal to the sum of the balances provided
 ;;; - `ERR_INVALID_SENDER_SIGNATURE` if the sender's signature is invalid
 ;;; - `ERR_INVALID_OTHER_SIGNATURE` if the other party's signature is invalid
@@ -342,16 +342,16 @@
   )
   (let
     (
-      (channel-key (try! (get-channel-key (contract-of-optional token) tx-sender with)))
-      (channel (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
-      (channel-nonce (get nonce channel))
-      (closer (get closer channel))
+      (pipe-key (try! (get-pipe-key (contract-of-optional token) tx-sender with)))
+      (pipe (unwrap! (map-get? pipes pipe-key) ERR_NO_SUCH_PIPE))
+      (pipe-nonce (get nonce pipe))
+      (closer (get closer pipe))
     )
     ;; Exit early if a forced closure is already in progress.
     (asserts! (is-none closer) ERR_CLOSE_IN_PROGRESS)
 
-    ;; Exit early if the nonce is less than the channel's nonce
-    (asserts! (> nonce channel-nonce) ERR_NONCE_TOO_LOW)
+    ;; Exit early if the nonce is less than the pipe's nonce
+    (asserts! (> nonce pipe-nonce) ERR_NONCE_TOO_LOW)
 
     ;; Exit early if the transfer is not valid yet
     (match valid-after
@@ -359,12 +359,12 @@
       false
     )
 
-    ;; If the total balance of the channel is not equal to the sum of the
-    ;; balances provided, the channel close is invalid.
+    ;; If the total balance of the pipe is not equal to the sum of the
+    ;; balances provided, the pipe close is invalid.
     (asserts!
       (is-eq
         (+ my-balance their-balance)
-        (+ (get balance-1 channel) (get balance-2 channel))
+        (+ (get balance-1 pipe) (get balance-2 pipe))
       )
       ERR_INVALID_TOTAL_BALANCE
     )
@@ -372,10 +372,10 @@
     (let
       (
         (expires-at (+ burn-block-height WAITING_PERIOD))
-        (principal-1 (get principal-1 channel-key))
+        (principal-1 (get principal-1 pipe-key))
         (balance-1 (if (is-eq tx-sender principal-1) my-balance their-balance))
         (balance-2 (if (is-eq tx-sender principal-1) their-balance my-balance))
-        (new-channel {
+        (new-pipe {
           balance-1: balance-1,
           balance-2: balance-2,
           expires-at: expires-at,
@@ -391,7 +391,7 @@
           tx-sender
           their-signature
           with
-          channel-key
+          pipe-key
           balance-1
           balance-2
           nonce
@@ -402,18 +402,18 @@
         )
       )
 
-      ;; Set the waiting period for this channel.
+      ;; Set the waiting period for this pipe.
       (map-set
-        channels
-        channel-key
-        new-channel
+        pipes
+        pipe-key
+        new-pipe
       )
 
       ;; Emit an event
       (print {
         event: "force-close",
-        channel-key: channel-key,
-        channel: new-channel,
+        pipe-key: pipe-key,
+        pipe: new-pipe,
         sender: tx-sender,
       })
 
@@ -422,19 +422,19 @@
   )
 )
 
-;;; Dispute the closing of a channel that has been closed early by submitting a
-;;; dispute within the waiting period. If the dispute is valid, the channel
+;;; Dispute the closing of a pipe that has been closed early by submitting a
+;;; dispute within the waiting period. If the dispute is valid, the pipe
 ;;; will be closed and the new balances will be paid out to the appropriate
 ;;; parties.
 ;;; Returns:
-;;; - `(ok false)` on success if the channel's token was STX
-;;; - `(ok true)` on success if the channel's token was a SIP-010 token
-;;; - `ERR_NO_SUCH_CHANNEL` if the channel does not exist
+;;; - `(ok false)` on success if the pipe's token was STX
+;;; - `(ok true)` on success if the pipe's token was a SIP-010 token
+;;; - `ERR_NO_SUCH_PIPE` if the pipe does not exist
 ;;; - `ERR_NO_CLOSE_IN_PROGRESS` if a forced closure is not in progress
 ;;; - `ERR_SELF_DISPUTE` if the sender is disputing their own force closure
-;;; - `ERR_CHANNEL_EXPIRED` if the channel has already expired
-;;; - `ERR_NONCE_TOO_LOW` if the nonce is less than the channel's saved nonce
-;;; - `ERR_INVALID_TOTAL_BALANCE` if the total balance of the channel is not
+;;; - `ERR_PIPE_EXPIRED` if the pipe has already expired
+;;; - `ERR_NONCE_TOO_LOW` if the nonce is less than the pipe's saved nonce
+;;; - `ERR_INVALID_TOTAL_BALANCE` if the total balance of the pipe is not
 ;;;   equal to the sum of the balances provided
 ;;; - `ERR_INVALID_SENDER_SIGNATURE` if the sender's signature is invalid
 ;;; - `ERR_INVALID_OTHER_SIGNATURE` if the other party's signature is invalid
@@ -468,20 +468,20 @@
   )
 )
 
-;;; As an agent of `for`, dispute the closing of a channel that has been closed
+;;; As an agent of `for`, dispute the closing of a pipe that has been closed
 ;;; early by submitting a dispute within the waiting period. If the dispute is
-;;; valid, the channel will be closed and the new balances will be paid out to
+;;; valid, the pipe will be closed and the new balances will be paid out to
 ;;; the appropriate parties.
 ;;; Returns:
-;;; - `(ok false)` on success if the channel's token was STX
-;;; - `(ok true)` on success if the channel's token was a SIP-010 token
+;;; - `(ok false)` on success if the pipe's token was STX
+;;; - `(ok true)` on success if the pipe's token was a SIP-010 token
 ;;; - `ERR_UNAUTHORIZED` if the sender is not an agent of `for`
-;;; - `ERR_NO_SUCH_CHANNEL` if the channel does not exist
+;;; - `ERR_NO_SUCH_PIPE` if the pipe does not exist
 ;;; - `ERR_NO_CLOSE_IN_PROGRESS` if a forced closure is not in progress
 ;;; - `ERR_SELF_DISPUTE` if the sender is disputing their own force closure
-;;; - `ERR_CHANNEL_EXPIRED` if the channel has already expired
-;;; - `ERR_NONCE_TOO_LOW` if the nonce is less than the channel's saved nonce
-;;; - `ERR_INVALID_TOTAL_BALANCE` if the total balance of the channel is not
+;;; - `ERR_PIPE_EXPIRED` if the pipe has already expired
+;;; - `ERR_NONCE_TOO_LOW` if the nonce is less than the pipe's saved nonce
+;;; - `ERR_INVALID_TOTAL_BALANCE` if the total balance of the pipe is not
 ;;;   equal to the sum of the balances provided
 ;;; - `ERR_INVALID_SENDER_SIGNATURE` if the sender's signature is invalid
 ;;; - `ERR_INVALID_OTHER_SIGNATURE` if the other party's signature is invalid
@@ -522,22 +522,22 @@
   )
 )
 
-;;; Close the channel after a forced cancel or closure, once the required
+;;; Close the pipe after a forced cancel or closure, once the required
 ;;; number of blocks have passed.
 ;;; Returns:
-;;; - `(ok false)` on success if the channel's token was STX
-;;; - `(ok true)` on success if the channel's token was a SIP-010 token
-;;; - `ERR_NO_SUCH_CHANNEL` if the channel does not exist
+;;; - `(ok false)` on success if the pipe's token was STX
+;;; - `(ok true)` on success if the pipe's token was a SIP-010 token
+;;; - `ERR_NO_SUCH_PIPE` if the pipe does not exist
 ;;; - `ERR_NO_CLOSE_IN_PROGRESS` if a forced closure is not in progress
 ;;; - `ERR_NOT_EXPIRED` if the waiting period has not passed
 ;;; - `ERR_WITHDRAWAL_FAILED` if the withdrawal fails
 (define-public (finalize  (token (optional <sip-010>)) (with principal))
   (let
     (
-      (channel-key (try! (get-channel-key (contract-of-optional token) tx-sender with)))
-      (channel (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
-      (closer (get closer channel))
-      (expires-at (get expires-at channel))
+      (pipe-key (try! (get-pipe-key (contract-of-optional token) tx-sender with)))
+      (pipe (unwrap! (map-get? pipes pipe-key) ERR_NO_SUCH_PIPE))
+      (closer (get closer pipe))
+      (expires-at (get expires-at pipe))
     )
     ;; A forced closure must be in progress
     (asserts! (is-some closer) ERR_NO_CLOSE_IN_PROGRESS)
@@ -545,36 +545,36 @@
     ;; The waiting period must have passed
     (asserts! (> burn-block-height expires-at) ERR_NOT_EXPIRED)
 
-    ;; Reset the channel in the map.
-    (reset-channel channel-key (get nonce channel))
+    ;; Reset the pipe in the map.
+    (reset-pipe pipe-key (get nonce pipe))
 
     ;; Emit an event
     (print {
       event: "finalize",
-      channel-key: channel-key,
-      channel: channel,
+      pipe-key: pipe-key,
+      pipe: pipe,
       sender: tx-sender,
     })
 
     (payout
       token
-      (get principal-1 channel-key)
-      (get principal-2 channel-key)
-      (get balance-1 channel)
-      (get balance-2 channel)
+      (get principal-1 pipe-key)
+      (get principal-2 pipe-key)
+      (get balance-1 pipe)
+      (get balance-2 pipe)
     )
   )
 )
 
-;;; Deposit `amount` additional funds into an existing channel between
+;;; Deposit `amount` additional funds into an existing pipe between
 ;;; `tx-sender` and `with` for FT `token` (`none` indicates STX). Signatures
 ;;; must confirm the deposit and the new balances.
 ;;; Returns:
-;;; -`(ok channel-key)` on success
-;;; - `ERR_NO_SUCH_CHANNEL` if the channel does not exist
+;;; -`(ok pipe-key)` on success
+;;; - `ERR_NO_SUCH_PIPE` if the pipe does not exist
 ;;; - `ERR_CLOSE_IN_PROGRESS` if a forced closure is in progress
-;;; - `ERR_NONCE_TOO_LOW` if the nonce is less than the channel's saved nonce
-;;; - `ERR_INVALID_TOTAL_BALANCE` if the total balance of the channel is not
+;;; - `ERR_NONCE_TOO_LOW` if the nonce is less than the pipe's saved nonce
+;;; - `ERR_INVALID_TOTAL_BALANCE` if the total balance of the pipe is not
 ;;;   equal to the sum of the balances provided and the deposit amount
 ;;; - `ERR_INVALID_SENDER_SIGNATURE` if the sender's signature is invalid
 ;;; - `ERR_INVALID_OTHER_SIGNATURE` if the other party's signature is invalid
@@ -591,16 +591,16 @@
   )
   (let
     (
-      (channel-key (try! (get-channel-key (contract-of-optional token) tx-sender with)))
-      (channel (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
-      (channel-nonce (get nonce channel))
-      (closer (get closer channel))
-      (principal-1 (get principal-1 channel-key))
+      (pipe-key (try! (get-pipe-key (contract-of-optional token) tx-sender with)))
+      (pipe (unwrap! (map-get? pipes pipe-key) ERR_NO_SUCH_PIPE))
+      (pipe-nonce (get nonce pipe))
+      (closer (get closer pipe))
+      (principal-1 (get principal-1 pipe-key))
       (balance-1 (if (is-eq tx-sender principal-1) my-balance their-balance))
       (balance-2 (if (is-eq tx-sender principal-1) their-balance my-balance))
-      (updated-channel
+      (updated-pipe
         (merge
-          channel
+          pipe
           {
             balance-1: balance-1,
             balance-2: balance-2,
@@ -612,15 +612,15 @@
     ;; A forced closure must not be in progress
     (asserts! (is-none closer) ERR_CLOSE_IN_PROGRESS)
 
-    ;; Nonce must be greater than the channel nonce
-    (asserts! (> nonce channel-nonce) ERR_NONCE_TOO_LOW)
+    ;; Nonce must be greater than the pipe nonce
+    (asserts! (> nonce pipe-nonce) ERR_NONCE_TOO_LOW)
 
-    ;; If the new balance of the channel is not equal to the sum of the
+    ;; If the new balance of the pipe is not equal to the sum of the
     ;; existing balances and the deposit amount, the deposit is invalid.
     (asserts!
       (is-eq
         (+ my-balance their-balance)
-        (+ (get balance-1 channel) (get balance-2 channel) amount)
+        (+ (get balance-1 pipe) (get balance-2 pipe) amount)
       )
       ERR_INVALID_TOTAL_BALANCE
     )
@@ -632,7 +632,7 @@
         tx-sender
         their-signature
         with
-        channel-key
+        pipe-key
         balance-1
         balance-2
         nonce
@@ -644,35 +644,35 @@
     )
 
     ;; Perform the deposit
-    (try! (increase-sender-balance channel-key channel token amount))
+    (try! (increase-sender-balance pipe-key pipe token amount))
 
     (map-set
-      channels
-      channel-key
-      updated-channel
+      pipes
+      pipe-key
+      updated-pipe
     )
     (print {
       event: "deposit",
-      channel-key: channel-key,
-      channel: updated-channel,
+      pipe-key: pipe-key,
+      pipe: updated-pipe,
       sender: tx-sender,
       amount: amount,
       my-signature: my-signature,
       their-signature: their-signature,
     })
-    (ok channel-key)
+    (ok pipe-key)
   )
 )
 
-;;; Withdrawal `amount` funds from an existing channel between `tx-sender` and
+;;; Withdrawal `amount` funds from an existing pipe between `tx-sender` and
 ;;; `with` for FT `token` (`none` indicates STX). Signatures must confirm the
 ;;; withdrawal and the new balances.
 ;;; Returns:
-;;; -`(ok channel-key)` on success
-;;; - `ERR_NO_SUCH_CHANNEL` if the channel does not exist
+;;; -`(ok pipe-key)` on success
+;;; - `ERR_NO_SUCH_PIPE` if the pipe does not exist
 ;;; - `ERR_CLOSE_IN_PROGRESS` if a forced closure is in progress
-;;; - `ERR_NONCE_TOO_LOW` if the nonce is less than the channel's saved nonce
-;;; - `ERR_INVALID_TOTAL_BALANCE` if the total balance of the channel is not
+;;; - `ERR_NONCE_TOO_LOW` if the nonce is less than the pipe's saved nonce
+;;; - `ERR_INVALID_TOTAL_BALANCE` if the total balance of the pipe is not
 ;;;   equal to the sum of the balances provided and the deposit amount
 ;;; - `ERR_INVALID_SENDER_SIGNATURE` if the sender's signature is invalid
 ;;; - `ERR_INVALID_OTHER_SIGNATURE` if the other party's signature is invalid
@@ -689,16 +689,16 @@
   )
   (let
     (
-      (channel-key (try! (get-channel-key (contract-of-optional token) tx-sender with)))
-      (channel (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
-      (channel-nonce (get nonce channel))
-      (closer (get closer channel))
-      (principal-1 (get principal-1 channel-key))
+      (pipe-key (try! (get-pipe-key (contract-of-optional token) tx-sender with)))
+      (pipe (unwrap! (map-get? pipes pipe-key) ERR_NO_SUCH_PIPE))
+      (pipe-nonce (get nonce pipe))
+      (closer (get closer pipe))
+      (principal-1 (get principal-1 pipe-key))
       (balance-1 (if (is-eq tx-sender principal-1) my-balance their-balance))
       (balance-2 (if (is-eq tx-sender principal-1) their-balance my-balance))
-      (updated-channel
+      (updated-pipe
         (merge
-          channel
+          pipe
           {
             balance-1: balance-1,
             balance-2: balance-2,
@@ -711,21 +711,21 @@
     ;; A forced closure must not be in progress
     (asserts! (is-none closer) ERR_CLOSE_IN_PROGRESS)
 
-    ;; Nonce must be greater than the channel nonce
-    (asserts! (> nonce channel-nonce) ERR_NONCE_TOO_LOW)
+    ;; Nonce must be greater than the pipe nonce
+    (asserts! (> nonce pipe-nonce) ERR_NONCE_TOO_LOW)
 
-    ;; Withdrawal amount cannot be greater than the total channel balance
+    ;; Withdrawal amount cannot be greater than the total pipe balance
     (asserts!
-      (> (+ (get balance-1 channel) (get balance-2 channel)) amount)
+      (> (+ (get balance-1 pipe) (get balance-2 pipe)) amount)
       ERR_INVALID_WITHDRAWAL
     )
 
-    ;; If the new balance of the channel is not equal to the sum of the
+    ;; If the new balance of the pipe is not equal to the sum of the
     ;; prior balances minus the withdraw amount, the withdrawal is invalid.
     (asserts!
       (is-eq
         (+ my-balance their-balance)
-        (- (+ (get balance-1 channel) (get balance-2 channel)) amount)
+        (- (+ (get balance-1 pipe) (get balance-2 pipe)) amount)
       )
       ERR_INVALID_TOTAL_BALANCE
     )
@@ -737,7 +737,7 @@
         tx-sender
         their-signature
         with
-        channel-key
+        pipe-key
         balance-1
         balance-2
         nonce
@@ -752,30 +752,30 @@
     (try! (execute-withdraw token amount))
 
     (map-set
-      channels
-      channel-key
-      updated-channel
+      pipes
+      pipe-key
+      updated-pipe
     )
     (print {
       event: "withdraw",
-      channel-key: channel-key,
-      channel: updated-channel,
+      pipe-key: pipe-key,
+      pipe: updated-pipe,
       sender: tx-sender,
       amount: amount,
       my-signature: my-signature,
       their-signature: their-signature,
     })
-    (ok channel-key)
+    (ok pipe-key)
   )
 )
 
 ;; Read Only Functions
 ;;
 
-;;; Get the current balances of the channel between `tx-sender` and `with` for
+;;; Get the current balances of the pipe between `tx-sender` and `with` for
 ;;; token `token` (`none` indicates STX).
 ;;; Returns:
-;;; - The channel data tuple on success, with type
+;;; - The pipe data tuple on success, with type
 ;;;   ```
 ;;;   (some {
 ;;;     balance-1: uint,
@@ -785,21 +785,21 @@
 ;;;     closer: (optional principal)
 ;;;   })
 ;;;   ```
-;;; - `none` if the channel does not exist
-(define-read-only (get-channel (token (optional principal)) (with principal))
-  (match (get-channel-key token tx-sender with)
-    channel-key (map-get? channels channel-key)
+;;; - `none` if the pipe does not exist
+(define-read-only (get-pipe (token (optional principal)) (with principal))
+  (match (get-pipe-key token tx-sender with)
+    pipe-key (map-get? pipes pipe-key)
     e none
   )
 )
 
-;;; Generate a hash of the structured data for a channel.
+;;; Generate a hash of the structured data for a pipe.
 ;;; Returns:
 ;;; - (ok (buff 32)) with the hash of the structured data on success
 ;;; - `ERR_CONSENSUS_BUFF` if the structured data cannot be converted to a
 ;;;   consensus buff
 (define-read-only (make-structured-data-hash
-    (channel-key { token: (optional principal), principal-1: principal, principal-2: principal })
+    (pipe-key { token: (optional principal), principal-1: principal, principal-2: principal })
     (balance-1 uint)
     (balance-2 uint)
     (nonce uint)
@@ -811,7 +811,7 @@
   (let
     (
       (structured-data (merge
-        channel-key
+        pipe-key
         {
           balance-1: balance-1,
           balance-2: balance-2,
@@ -836,7 +836,7 @@
 (define-read-only (verify-signature
     (signature (buff 65))
     (signer principal)
-    (channel-key { token: (optional principal), principal-1: principal, principal-2: principal })
+    (pipe-key { token: (optional principal), principal-1: principal, principal-2: principal })
     (balance-1 uint)
     (balance-2 uint)
     (nonce uint)
@@ -846,7 +846,7 @@
     (valid-after (optional uint))
   )
   (let ((hash (unwrap! (make-structured-data-hash
-      channel-key
+      pipe-key
       balance-1
       balance-2
       nonce
@@ -871,7 +871,7 @@
     (signer-1 principal)
     (signature-2 (buff 65))
     (signer-2 principal)
-    (channel-key { token: (optional principal), principal-1: principal, principal-2: principal })
+    (pipe-key { token: (optional principal), principal-1: principal, principal-2: principal })
     (balance-1 uint)
     (balance-2 uint)
     (nonce uint)
@@ -883,7 +883,7 @@
   (let (
     (hashed-secret (match secret s (some (sha256 s)) none))
     (hash (try! (make-structured-data-hash
-      channel-key
+      pipe-key
       balance-1
       balance-2
       nonce
@@ -910,10 +910,10 @@
   )
 )
 
-;;; Given two principals, return the key for the channel between these two principals.
+;;; Given two principals, return the key for the pipe between these two principals.
 ;;; The key is a map with two keys: principal-1 and principal-2, where principal-1 is the principal
 ;;; with the lower consensus representation.
-(define-private (get-channel-key (token (optional principal)) (principal-1 principal) (principal-2 principal))
+(define-private (get-pipe-key (token (optional principal)) (principal-1 principal) (principal-2 principal))
   (let
     (
       (p1 (unwrap! (to-consensus-buff? principal-1) ERR_INVALID_PRINCIPAL))
@@ -926,11 +926,11 @@
   )
 )
 
-;;; Transfer `amount` from `tx-sender` to the contract and update the channel
+;;; Transfer `amount` from `tx-sender` to the contract and update the pipe
 ;;; balances.
 (define-private (increase-sender-balance
-    (channel-key { token: (optional principal), principal-1: principal, principal-2: principal })
-    (channel { balance-1: uint, balance-2: uint, expires-at: uint, nonce: uint, closer: (optional principal) })
+    (pipe-key { token: (optional principal), principal-1: principal, principal-2: principal })
+    (pipe { balance-1: uint, balance-2: uint, expires-at: uint, nonce: uint, closer: (optional principal) })
     (token (optional <sip-010>))
     (amount uint)
   )
@@ -941,9 +941,9 @@
       (unwrap! (stx-transfer? amount tx-sender (as-contract tx-sender)) ERR_DEPOSIT_FAILED)
     )
     (ok
-      (if (is-eq tx-sender (get principal-1 channel-key))
-        (merge channel { balance-1: (+ (get balance-1 channel) amount) })
-        (merge channel { balance-2: (+ (get balance-2 channel) amount) })
+      (if (is-eq tx-sender (get principal-1 pipe-key))
+        (merge pipe { balance-1: (+ (get balance-1 pipe) amount) })
+        (merge pipe { balance-2: (+ (get balance-2 pipe) amount) })
       )
     )
   )
@@ -951,7 +951,7 @@
 
 ;;; Transfer `amount` from the contract to `tx-sender`.
 ;;; Note that this function assumes that the token contract has already been
-;;; verified (by finding the corresponding channel).
+;;; verified (by finding the corresponding pipe).
 (define-private (execute-withdraw
     (token (optional <sip-010>))
     (amount uint)
@@ -986,12 +986,12 @@
   )
   (let
     (
-      (channel-key (try! (get-channel-key (contract-of-optional token) for with)))
-      (channel (unwrap! (map-get? channels channel-key) ERR_NO_SUCH_CHANNEL))
-      (expires-at (get expires-at channel))
-      (channel-nonce (get nonce channel))
-      (closer (unwrap! (get closer channel) ERR_NO_CLOSE_IN_PROGRESS))
-      (principal-1 (get principal-1 channel-key))
+      (pipe-key (try! (get-pipe-key (contract-of-optional token) for with)))
+      (pipe (unwrap! (map-get? pipes pipe-key) ERR_NO_SUCH_PIPE))
+      (expires-at (get expires-at pipe))
+      (pipe-nonce (get nonce pipe))
+      (closer (unwrap! (get closer pipe) ERR_NO_CLOSE_IN_PROGRESS))
+      (principal-1 (get principal-1 pipe-key))
       (balance-1 (if (is-eq for principal-1) my-balance their-balance))
       (balance-2 (if (is-eq for principal-1) their-balance my-balance))
     )
@@ -999,11 +999,11 @@
     ;; Exit early if this is an attempt to self-dispute
     (asserts! (not (is-eq for closer)) ERR_SELF_DISPUTE)
 
-    ;; Exit early if the channel has already expired
-    (asserts! (< burn-block-height expires-at) ERR_CHANNEL_EXPIRED)
+    ;; Exit early if the pipe has already expired
+    (asserts! (< burn-block-height expires-at) ERR_PIPE_EXPIRED)
 
-    ;; Exit early if the nonce is less than the channel's nonce
-    (asserts! (> nonce channel-nonce) ERR_NONCE_TOO_LOW)
+    ;; Exit early if the nonce is less than the pipe's nonce
+    (asserts! (> nonce pipe-nonce) ERR_NONCE_TOO_LOW)
 
     ;; Exit early if the transfer is not valid yet
     (match valid-after
@@ -1011,19 +1011,19 @@
       false
     )
 
-    ;; If the total balance of the channel is not equal to the sum of the
-    ;; balances provided, the channel close is invalid.
+    ;; If the total balance of the pipe is not equal to the sum of the
+    ;; balances provided, the pipe close is invalid.
     (asserts!
       (is-eq
         (+ my-balance their-balance)
-        (+ (get balance-1 channel) (get balance-2 channel))
+        (+ (get balance-1 pipe) (get balance-2 pipe))
       )
       ERR_INVALID_TOTAL_BALANCE
     )
 
     (let
       (
-        (updated-channel {
+        (updated-pipe {
           balance-1: balance-1,
           balance-2: balance-2,
           expires-at: MAX_HEIGHT,
@@ -1039,7 +1039,7 @@
           for
           their-signature
           with
-          channel-key
+          pipe-key
           balance-1
           balance-2
           nonce
@@ -1050,14 +1050,14 @@
         )
       )
 
-      ;; Reset the channel in the map.
-      (reset-channel channel-key nonce)
+      ;; Reset the pipe in the map.
+      (reset-pipe pipe-key nonce)
 
       ;; Emit an event
       (print {
         event: "dispute-closure",
-        channel-key: channel-key,
-        channel: updated-channel,
+        pipe-key: pipe-key,
+        pipe: updated-pipe,
         sender: for,
       })
 
@@ -1067,15 +1067,15 @@
   )
 )
 
-;;; Check if the balance of `account` in the channel is greater than 0.
+;;; Check if the balance of `account` in the pipe is greater than 0.
 (define-private (is-funded
     (account principal)
-    (channel-key { token: (optional principal), principal-1: principal, principal-2: principal })
-    (channel { balance-1: uint, balance-2: uint, expires-at: uint, nonce: uint, closer: (optional principal) })
+    (pipe-key { token: (optional principal), principal-1: principal, principal-2: principal })
+    (pipe { balance-1: uint, balance-2: uint, expires-at: uint, nonce: uint, closer: (optional principal) })
   )
   (or
-    (and (is-eq account (get principal-1 channel-key)) (> (get balance-1 channel) u0))
-    (and (is-eq account (get principal-2 channel-key)) (> (get balance-2 channel) u0))
+    (and (is-eq account (get principal-1 pipe-key)) (> (get balance-1 pipe) u0))
+    (and (is-eq account (get principal-2 pipe-key)) (> (get balance-2 pipe) u0))
   )
 )
 
@@ -1110,14 +1110,14 @@
   )
 )
 
-;;; Reset the channel so that it is closed but retains the last nonce.
-(define-private (reset-channel
-    (channel-key { token: (optional principal), principal-1: principal, principal-2: principal })
+;;; Reset the pipe so that it is closed but retains the last nonce.
+(define-private (reset-pipe
+    (pipe-key { token: (optional principal), principal-1: principal, principal-2: principal })
     (nonce uint)
   )
   (map-set
-    channels
-    channel-key
+    pipes
+    pipe-key
     { balance-1: u0, balance-2: u0, expires-at: MAX_HEIGHT, nonce: nonce, closer: none }
   )
 )
