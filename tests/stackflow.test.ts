@@ -61,7 +61,12 @@ enum TxError {
   NotInitialized = 119,
   AlreadyInitialized = 120,
   NotValidYet = 121,
+  AlreadyPending = 122,
+  Pending = 123,
+  InvalidBalances = 124,
 }
+
+const CONFIRMATION_DEPTH = 6;
 
 const structuredDataPrefix = Buffer.from([0x53, 0x49, 0x50, 0x30, 0x31, 0x38]);
 
@@ -383,17 +388,21 @@ describe("fund-pipe", () => {
       })
     );
     const pipeKey = (result as ResponseOkCV).value;
+    const burnBlockHeight = simnet.burnBlockHeight;
 
     // Verify the pipe
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
-        "balance-1": Cl.uint(1000000),
+        "balance-1": Cl.uint(0),
         "balance-2": Cl.uint(0),
+        "pending-1": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(1000000),
+            "burn-height": Cl.uint(burnBlockHeight + CONFIRMATION_DEPTH),
+          })
+        ),
+        "pending-2": Cl.none(),
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(0),
         closer: Cl.none(),
@@ -411,6 +420,45 @@ describe("fund-pipe", () => {
 
     const contractBalance = stxBalances.get(stackflowContract);
     expect(contractBalance).toBe(1000000n);
+
+    // Verify that the funded amount can not be spent yet
+    const { result: resultBefore } = simnet.callPrivateFn(
+      "stackflow",
+      "balance-check",
+      [
+        Cl.tuple({
+          token: Cl.none(),
+          "principal-1": Cl.principal(address1),
+          "principal-2": Cl.principal(address2),
+        }),
+        Cl.uint(0),
+        Cl.uint(1000000),
+        Cl.none(),
+      ],
+      address1
+    );
+    expect(resultBefore).toBeErr(Cl.uint(TxError.InvalidBalances));
+
+    // Wait for the fund to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
+    // Verify that the funded amount can be spent
+    const { result: resultAfter } = simnet.callPrivateFn(
+      "stackflow",
+      "balance-check",
+      [
+        Cl.tuple({
+          token: Cl.none(),
+          "principal-1": Cl.principal(address1),
+          "principal-2": Cl.principal(address2),
+        }),
+        Cl.uint(0),
+        Cl.uint(1000000),
+        Cl.none(),
+      ],
+      address1
+    );
+    expect(resultAfter).toBeOk(Cl.bool(true));
   });
 
   it("can fund a pipe that has been funded by the other party", () => {
@@ -437,17 +485,26 @@ describe("fund-pipe", () => {
       })
     );
     const pipeKey = (result as ResponseOkCV).value;
+    const burnBlockHeight = simnet.burnBlockHeight;
 
     // Verify the pipe
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(2000000),
+        "pending-1": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(1000000),
+            "burn-height": Cl.uint(burnBlockHeight + CONFIRMATION_DEPTH),
+          })
+        ),
+        "pending-2": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(2000000),
+            "burn-height": Cl.uint(burnBlockHeight + CONFIRMATION_DEPTH),
+          })
+        ),
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(0),
         closer: Cl.none(),
@@ -495,11 +552,7 @@ describe("fund-pipe", () => {
     expect(badResult).toBeErr(Cl.uint(TxError.AlreadyFunded));
 
     // Verify the pipe did not change
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
@@ -549,11 +602,7 @@ describe("fund-pipe", () => {
     const pipeKey = (result as ResponseOkCV).value;
 
     // Verify the pipe
-    const pipeBefore = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipeBefore = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipeBefore).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
@@ -573,11 +622,7 @@ describe("fund-pipe", () => {
     expect(badResult).toBeErr(Cl.uint(TxError.AlreadyFunded));
 
     // Verify the pipe did not change
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
@@ -677,11 +722,7 @@ describe("fund-pipe", () => {
     const pipeKey = (result as ResponseOkCV).value;
 
     // Verify the pipe
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
@@ -760,11 +801,7 @@ describe("fund-pipe", () => {
     const pipeKey = (result as ResponseOkCV).value;
 
     // Verify the pipe
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
@@ -845,11 +882,7 @@ describe("fund-pipe", () => {
     expect(badResult).toBeErr(Cl.uint(TxError.AlreadyFunded));
 
     // Verify the pipe did not change
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
@@ -928,11 +961,7 @@ describe("fund-pipe", () => {
     const pipeKey = (result as ResponseOkCV).value;
 
     // Verify the pipe
-    const pipeBefore = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipeBefore = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipeBefore).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
@@ -957,11 +986,7 @@ describe("fund-pipe", () => {
     expect(badResult).toBeErr(Cl.uint(TxError.AlreadyFunded));
 
     // Verify the pipe did not change
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
@@ -1550,11 +1575,7 @@ describe("force-cancel", () => {
     expect(result).toBeOk(Cl.uint(current_height + WAITING_PERIOD));
 
     // Verify that the waiting period has been set in the map
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
@@ -1608,11 +1629,7 @@ describe("force-cancel", () => {
     expect(result).toBeOk(Cl.uint(current_height + WAITING_PERIOD));
 
     // Verify that the waiting period has been set in the map
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
@@ -1731,11 +1748,7 @@ describe("force-close", () => {
     expect(result).toBeOk(Cl.uint(heightBefore + WAITING_PERIOD));
 
     // Verify that the waiting period has been set in the map
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1600000),
@@ -1822,11 +1835,7 @@ describe("force-close", () => {
     expect(result).toBeOk(Cl.uint(heightBefore + WAITING_PERIOD));
 
     // Verify that the waiting period has been set in the map
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1600000),
@@ -2195,11 +2204,7 @@ describe("dispute-closure", () => {
     expect(disputeResult).toBeErr(Cl.uint(TxError.NoCloseInProgress));
 
     // Verify that the map entry is unchanged
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
@@ -2299,11 +2304,7 @@ describe("dispute-closure", () => {
     expect(disputeResult).toBeOk(Cl.bool(false));
 
     // Verify that the pipe has been reset
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(0),
@@ -2403,11 +2404,7 @@ describe("dispute-closure", () => {
     expect(disputeResult).toBeOk(Cl.bool(false));
 
     // Verify that the pipe has been reset
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(0),
@@ -2509,11 +2506,7 @@ describe("dispute-closure", () => {
     expect(disputeResult).toBeErr(Cl.uint(TxError.SelfDispute));
 
     // Verify that the map entry is unchanged
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
@@ -2621,11 +2614,7 @@ describe("dispute-closure", () => {
     expect(disputeResult).toBeOk(Cl.bool(false));
 
     // Verify that the pipe has been reset
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(0),
@@ -2794,11 +2783,7 @@ describe("agent-dispute-closure", () => {
     expect(disputeResult).toBeErr(Cl.uint(TxError.NoCloseInProgress));
 
     // Verify that the map entry is unchanged
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
@@ -2907,11 +2892,7 @@ describe("agent-dispute-closure", () => {
     expect(disputeResult).toBeOk(Cl.bool(false));
 
     // Verify that the pipe has been reset
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(0),
@@ -3020,11 +3001,7 @@ describe("agent-dispute-closure", () => {
     expect(disputeResult).toBeOk(Cl.bool(false));
 
     // Verify that the pipe has been reset
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(0),
@@ -3135,11 +3112,7 @@ describe("agent-dispute-closure", () => {
     expect(disputeResult).toBeErr(Cl.uint(TxError.SelfDispute));
 
     // Verify that the map entry is unchanged
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
@@ -3222,11 +3195,7 @@ describe("finalize", () => {
     expect(disputeResult).toBeErr(Cl.uint(TxError.NoCloseInProgress));
 
     // Verify that the map entry is unchanged
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
@@ -3292,11 +3261,7 @@ describe("finalize", () => {
     expect(disputeResult).toBeOk(Cl.bool(false));
 
     // Verify that the pipe has been reset
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(0),
@@ -3362,11 +3327,7 @@ describe("finalize", () => {
     expect(disputeResult).toBeOk(Cl.bool(false));
 
     // Verify that the pipe has been reset
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(0),
@@ -3466,11 +3427,7 @@ describe("finalize", () => {
     expect(disputeResult).toBeOk(Cl.bool(false));
 
     // Verify that the pipe has been reset
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(0),
@@ -3536,11 +3493,7 @@ describe("finalize", () => {
     expect(disputeResult).toBeErr(Cl.uint(TxError.NotExpired));
 
     // Verify that the map entry is unchanged
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
@@ -3650,11 +3603,7 @@ describe("deposit", () => {
     expect(contractBalance).toBe(3050000n);
 
     // Verify the pipe
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1050000),
@@ -3749,11 +3698,7 @@ describe("deposit", () => {
     expect(contractBalance).toBe(3050000n);
 
     // Verify the pipe
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
@@ -3848,11 +3793,7 @@ describe("deposit", () => {
     expect(contractBalance).toBe(3050000n);
 
     // Verify the pipe
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(3040000n),
@@ -4017,11 +3958,7 @@ describe("deposit", () => {
     expect(contractBalance).toBe(3000000n);
 
     // Verify the pipe
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000n),
@@ -4135,11 +4072,7 @@ describe("deposit", () => {
     expect(contractBalance).toBe(3050000n);
 
     // Verify the pipe did not change with the failed deposit
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1050000),
@@ -4237,11 +4170,7 @@ describe("withdraw", () => {
     expect(contractBalance).toBe(2500000n);
 
     // Verify the pipe
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(500000),
@@ -4337,11 +4266,7 @@ describe("withdraw", () => {
     expect(contractBalance).toBe(2500000n);
 
     // Verify the pipe
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(500000),
@@ -4431,11 +4356,7 @@ describe("withdraw", () => {
     expect(contractBalance).toBe(3000000n);
 
     // Verify the pipe
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
@@ -4525,11 +4446,7 @@ describe("withdraw", () => {
     expect(contractBalance).toBe(3000000n);
 
     // Verify the pipe
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
@@ -4619,11 +4536,7 @@ describe("withdraw", () => {
     expect(contractBalance).toBe(3000000n);
 
     // Verify the pipe
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
@@ -4759,11 +4672,7 @@ describe("withdraw", () => {
     expect(contractBalance).toBe(3050000n);
 
     // Verify the pipe
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1050000),
@@ -5068,11 +4977,7 @@ describe("transfers with secrets", () => {
     expect(result).toBeOk(Cl.uint(heightBefore + WAITING_PERIOD));
 
     // Verify that the waiting period has been set in the map
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1600000),
@@ -5160,11 +5065,7 @@ describe("transfers with secrets", () => {
     expect(result).toBeErr(Cl.uint(TxError.InvalidSenderSignature));
 
     // Verify that the map has not changed
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
@@ -5334,11 +5235,7 @@ describe("transfers with valid-after", () => {
     expect(result).toBeOk(Cl.uint(heightBefore + WAITING_PERIOD));
 
     // Verify that the waiting period has been set in the map
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1600000),
@@ -5430,11 +5327,7 @@ describe("transfers with valid-after", () => {
     expect(result).toBeErr(Cl.uint(TxError.NotValidYet));
 
     // Verify that the map has not changed
-    const pipe = simnet.getMapEntry(
-      stackflowContract,
-      "pipes",
-      pipeKey
-    );
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),

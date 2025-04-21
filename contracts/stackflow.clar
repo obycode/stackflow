@@ -76,6 +76,12 @@
 (define-constant ERR_NOT_INITIALIZED (err u119))
 (define-constant ERR_ALREADY_INITIALIZED (err u120))
 (define-constant ERR_NOT_VALID_YET (err u121))
+(define-constant ERR_ALREADY_PENDING (err u122))
+(define-constant ERR_PENDING (err u123))
+(define-constant ERR_INVALID_BALANCES (err u124))
+
+;; Number of burn blocks to wait before considering an on-chain action finalized.
+(define-constant CONFIRMATION_DEPTH u6)
 
 ;;; Has this contract been initialized?
 (define-data-var initialized bool false)
@@ -89,7 +95,15 @@
 (define-map
   pipes
   { token: (optional principal), principal-1: principal, principal-2: principal }
-  { balance-1: uint, balance-2: uint, expires-at: uint, nonce: uint, closer: (optional principal) }
+  {
+    balance-1: uint,
+    balance-2: uint,
+    pending-1: (optional { amount: uint, burn-height: uint }),
+    pending-2: (optional { amount: uint, burn-height: uint }),
+    expires-at: uint,
+    nonce: uint,
+    closer: (optional principal)
+  }
 )
 
 ;; Mapping of principals to agents registered to act on their behalf
@@ -159,7 +173,15 @@
             existing-pipe
             ch
             ch
-            { balance-1: u0, balance-2: u0, expires-at: MAX_HEIGHT, nonce: nonce, closer: none }
+            {
+              balance-1: u0,
+              balance-2: u0,
+              pending-1: none,
+              pending-2: none,
+              expires-at: MAX_HEIGHT,
+              nonce: nonce,
+              closer: none,
+            }
           )
         )
         (updated-pipe (try! (increase-sender-balance pipe-key pipe token amount)))
@@ -226,6 +248,9 @@
         closer: none
       })
     )
+
+    ;; Cannot close a pipe while there is a pending deposit
+    (asserts! (settle-pending pipe-key pipe) ERR_PENDING)
 
     ;; The nonce must be greater than the pipe's saved nonce
     (asserts! (> nonce pipe-nonce) ERR_NONCE_TOO_LOW)
@@ -294,6 +319,9 @@
     ;; A forced closure must not be in progress
     (asserts! (is-none closer) ERR_CLOSE_IN_PROGRESS)
 
+    ;; Cannot cancel a pipe while there is a pending deposit
+    (asserts! (settle-pending pipe-key pipe) ERR_PENDING)
+
     ;; Set the waiting period for this pipe.
     (map-set
       pipes
@@ -350,6 +378,9 @@
     ;; Exit early if a forced closure is already in progress.
     (asserts! (is-none closer) ERR_CLOSE_IN_PROGRESS)
 
+    ;; Exit early if there is a pending deposit
+    (asserts! (settle-pending pipe-key pipe) ERR_PENDING)
+
     ;; Exit early if the nonce is less than the pipe's nonce
     (asserts! (> nonce pipe-nonce) ERR_NONCE_TOO_LOW)
 
@@ -374,10 +405,14 @@
         (expires-at (+ burn-block-height WAITING_PERIOD))
         (principal-1 (get principal-1 pipe-key))
         (balance-1 (if (is-eq tx-sender principal-1) my-balance their-balance))
+        (pending-1 (if (is-eq tx-sender principal-1) (get pending-1 pipe) (get pending-2 pipe)))
+        (pending-2 (if (is-eq tx-sender principal-1) (get pending-2 pipe) (get pending-1 pipe)))
         (balance-2 (if (is-eq tx-sender principal-1) their-balance my-balance))
         (new-pipe {
           balance-1: balance-1,
           balance-2: balance-2,
+          pending-1: pending-1,
+          pending-2: pending-2,
           expires-at: expires-at,
           closer: (some tx-sender),
           nonce: nonce
@@ -711,6 +746,9 @@
     ;; A forced closure must not be in progress
     (asserts! (is-none closer) ERR_CLOSE_IN_PROGRESS)
 
+    ;; Settle any pending deposits that may be in progress
+    (settle-pending pipe-key pipe)
+
     ;; Nonce must be greater than the pipe nonce
     (asserts! (> nonce pipe-nonce) ERR_NONCE_TOO_LOW)
 
@@ -892,6 +930,7 @@
       hashed-secret
       valid-after
     ))))
+    (try! (balance-check pipe-key balance-1 balance-2 valid-after))
     (asserts! (verify-hash-signature hash signature-1 signer-1 actor) ERR_INVALID_SENDER_SIGNATURE)
     (asserts! (verify-hash-signature hash signature-2 signer-2 actor) ERR_INVALID_OTHER_SIGNATURE)
     (ok true)
@@ -930,11 +969,23 @@
 ;;; balances.
 (define-private (increase-sender-balance
     (pipe-key { token: (optional principal), principal-1: principal, principal-2: principal })
-    (pipe { balance-1: uint, balance-2: uint, expires-at: uint, nonce: uint, closer: (optional principal) })
+    (pipe {
+      balance-1: uint,
+      balance-2: uint,
+      pending-1: (optional { amount: uint, burn-height: uint }),
+      pending-2: (optional { amount: uint, burn-height: uint }),
+      expires-at: uint,
+      nonce: uint,
+      closer: (optional principal)
+    })
     (token (optional <sip-010>))
     (amount uint)
   )
   (begin
+    ;; If there are outstanding deposits that can be settled, settle them.
+    ;; If there are outstanding deposits that cannot be settled, return an error.
+    (asserts! (settle-pending pipe-key pipe) ERR_ALREADY_PENDING)
+
     (match token
       t
       (unwrap! (contract-call? t transfer amount tx-sender (as-contract tx-sender) none) ERR_DEPOSIT_FAILED)
@@ -942,8 +993,18 @@
     )
     (ok
       (if (is-eq tx-sender (get principal-1 pipe-key))
-        (merge pipe { balance-1: (+ (get balance-1 pipe) amount) })
-        (merge pipe { balance-2: (+ (get balance-2 pipe) amount) })
+        (merge pipe {
+          pending-1: (some {
+            amount: amount,
+            burn-height: (+ burn-block-height CONFIRMATION_DEPTH)
+          })
+        })
+        (merge pipe {
+          pending-2: (some {
+            amount: amount,
+            burn-height: (+ burn-block-height CONFIRMATION_DEPTH)
+          })
+        })
       )
     )
   )
@@ -1071,7 +1132,15 @@
 (define-private (is-funded
     (account principal)
     (pipe-key { token: (optional principal), principal-1: principal, principal-2: principal })
-    (pipe { balance-1: uint, balance-2: uint, expires-at: uint, nonce: uint, closer: (optional principal) })
+    (pipe {
+      balance-1: uint,
+      balance-2: uint,
+      pending-1: (optional { amount: uint, burn-height: uint }),
+      pending-2: (optional { amount: uint, burn-height: uint }),
+      expires-at: uint,
+      nonce: uint,
+      closer: (optional principal)
+    })
   )
   (or
     (and (is-eq account (get principal-1 pipe-key)) (> (get balance-1 pipe) u0))
@@ -1118,7 +1187,15 @@
   (map-set
     pipes
     pipe-key
-    { balance-1: u0, balance-2: u0, expires-at: MAX_HEIGHT, nonce: nonce, closer: none }
+    {
+      balance-1: u0,
+      balance-2: u0,
+      pending-1: none,
+      pending-2: none,
+      expires-at: MAX_HEIGHT,
+      nonce: nonce,
+      closer: none
+    }
   )
 )
 
@@ -1153,5 +1230,118 @@
     (asserts! (is-eq (contract-of-optional token) (var-get supported-token)) ERR_UNAPPROVED_TOKEN)
 
     (ok true)
+  )
+)
+
+;;; Settle the pending deposit(s) for a pipe.
+;;; Returns `false` if there are still outstanding deposits which cannot yet be
+;;; settled, or `true` if all deposits have been settled.
+(define-private (settle-pending
+    (pipe-key { token: (optional principal), principal-1: principal, principal-2: principal })
+    (pipe {
+      balance-1: uint,
+      balance-2: uint,
+      pending-1: (optional { amount: uint, burn-height: uint }),
+      pending-2: (optional { amount: uint, burn-height: uint }),
+      expires-at: uint,
+      nonce: uint,
+      closer: (optional principal)
+    })
+  )
+  (fold and (list
+    (match (get pending-1 pipe)
+      pending (if (> burn-block-height (get burn-height pending))
+        (map-set
+          pipes
+          pipe-key
+          (merge pipe {
+            balance-1: (+ (get balance-1 pipe) (get amount pending)),
+            pending-1: none
+          })
+        )
+        false)
+      true)
+    (match (get pending-2 pipe)
+      pending (if (> burn-block-height (get burn-height pending))
+        (map-set
+          pipes
+          pipe-key
+          (merge pipe {
+            balance-2: (+ (get balance-2 pipe) (get amount pending)),
+            pending-2: none
+          })
+        )
+        false)
+      true)
+  ) true)
+)
+
+;;; Check that the balances provided are legal for the pipe. Each participant
+;;; cannot have spent more than their balance, excluding pending deposits.
+(define-private (balance-check
+    (pipe-key {
+      token: (optional principal),
+      principal-1: principal,
+      principal-2: principal,
+    })
+    (balance-1 uint)
+    (balance-2 uint)
+    (at-height-opt (optional uint))
+  )
+  (let
+    (
+      (pipe (unwrap! (map-get? pipes pipe-key) ERR_NO_SUCH_PIPE))
+      (at-height (default-to burn-block-height at-height-opt))
+      (pipe-1 (get balance-1 pipe))
+      (pipe-2 (get balance-2 pipe))
+      (pipe-pending-1 (get pending-1 pipe))
+      (pipe-pending-2 (get pending-2 pipe))
+      (pipe-balances-1 (calculate-balances pipe-1 pipe-pending-1 at-height))
+      (pipe-balances-2 (calculate-balances pipe-2 pipe-pending-2 at-height))
+      (confirmed (+ (get confirmed pipe-balances-1) (get confirmed pipe-balances-2)))
+      (pending (+ (get pending pipe-balances-1) (get pending pipe-balances-2)))
+      (pipe-total-sum (+ confirmed pending))
+      (sum (+ balance-1 balance-2))
+    )
+    ;; The sum of the balances must be equal to the sum of the pipe balances
+    ;; and the pending deposits.
+    (asserts! (is-eq sum pipe-total-sum) ERR_INVALID_TOTAL_BALANCE)
+
+    ;; Ensure that these balances do not require spending the pending deposits.
+    (asserts!
+      (<=
+        balance-1
+        (+
+          (get confirmed pipe-balances-1)
+          (get pending pipe-balances-1)
+          (get confirmed pipe-balances-2)))
+      ERR_INVALID_BALANCES)
+    (asserts!
+      (<=
+        balance-2
+        (+
+          (get confirmed pipe-balances-2)
+          (get pending pipe-balances-2)
+          (get confirmed pipe-balances-1)))
+      ERR_INVALID_BALANCES)
+
+    (ok true)
+  )
+)
+
+;;; Given the current confirmed balance and an optional pending deposit,
+;;; calculate the confirmed and pending balances at the current block height.
+;;; Returns a tuple with the confirmed balance and the pending balance.
+(define-private (calculate-balances
+    (confirmed uint)
+    (maybe-pending (optional { amount: uint, burn-height: uint }))
+    (at-height uint)
+  )
+  (match maybe-pending
+    pending (if (>= at-height (get burn-height pending))
+      { confirmed: (+ confirmed (get amount pending)), pending: u0 }
+      { confirmed: confirmed, pending: (get amount pending) }
+    )
+    { confirmed: confirmed, pending: u0 }
   )
 )
