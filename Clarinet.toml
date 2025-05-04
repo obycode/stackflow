@@ -10,6 +10,15 @@ contract_id = 'SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE.sip-010-trait-ft-standa
 
 [[project.requirements]]
 contract_id = 'ST126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT59ZTE2J.sip-010-trait-ft-standard'
+[contracts.reservoir]
+path = 'contracts/reservoir.clar'
+clarity_version = 3
+epoch = 3.1
+
+[contracts.stackflow]
+path = 'contracts/stackflow.clar'
+clarity_version = 3
+epoch = 3.1
 
 [contracts.stackflow-token]
 path = 'contracts/stackflow-token.clar'
@@ -20,12 +29,6 @@ epoch = 3.1
 path = 'contracts/test-token.clar'
 clarity_version = 3
 epoch = 3.0
-
-[contracts.stackflow]
-path = 'contracts/stackflow.clar'
-clarity_version = 3
-epoch = 3.1
-
 [repl.analysis]
 passes = []
 
@@ -34,3 +37,7 @@ strict = false
 trusted_sender = false
 trusted_caller = false
 callee_filter = false
+
+[repl.remote_data]
+enabled = false
+api_url = 'https://api.hiro.so'
