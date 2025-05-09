@@ -3,6 +3,7 @@ import {
   ClarityType,
   ClarityValue,
   createStacksPrivateKey,
+  cvToString,
   ResponseOkCV,
   serializeCV,
   signWithKey,
@@ -491,8 +492,8 @@ describe("fund-pipe", () => {
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
-        "balance-1": Cl.uint(1000000),
-        "balance-2": Cl.uint(2000000),
+        "balance-1": Cl.uint(0),
+        "balance-2": Cl.uint(0),
         "pending-1": Cl.some(
           Cl.tuple({
             amount: Cl.uint(1000000),
@@ -528,6 +529,72 @@ describe("fund-pipe", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
+    const burnBlockHeight = simnet.burnBlockHeight;
+
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "fund-pipe",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
+      address1
+    );
+    expect(result).toBeOk(
+      Cl.tuple({
+        token: Cl.none(),
+        "principal-1": Cl.principal(address1),
+        "principal-2": Cl.principal(address2),
+      })
+    );
+    const pipeKey = (result as ResponseOkCV).value;
+
+    // Wait for the fund to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
+    const { result: badResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-pipe",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address2), Cl.uint(0)],
+      address1
+    );
+    expect(badResult).toBeErr(Cl.uint(TxError.AlreadyFunded));
+
+    // Verify the pipe did not change
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
+    expect(pipe).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(0),
+        "balance-2": Cl.uint(0),
+        "pending-1": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(1000000),
+            "burn-height": Cl.uint(burnBlockHeight + CONFIRMATION_DEPTH),
+          })
+        ),
+        "pending-2": Cl.none(),
+        "expires-at": Cl.uint(MAX_HEIGHT),
+        nonce: Cl.uint(0),
+        closer: Cl.none(),
+      })
+    );
+
+    // Verify the balances
+    const stxBalances = simnet.getAssetsMap().get("STX")!;
+
+    const balance1 = stxBalances.get(address1);
+    expect(balance1).toBe(99999999000000n);
+
+    const balance2 = stxBalances.get(address2);
+    expect(balance2).toBe(100000000000000n);
+
+    const contractBalance = stxBalances.get(stackflowContract);
+    expect(contractBalance).toBe(1000000n);
+  });
+
+  it("cannot fund a pipe that has already been funded (but pending)", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
+    const burnBlockHeight = simnet.burnBlockHeight;
+
     const { result } = simnet.callPublicFn(
       "stackflow",
       "fund-pipe",
@@ -549,14 +616,21 @@ describe("fund-pipe", () => {
       [Cl.none(), Cl.uint(2000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
-    expect(badResult).toBeErr(Cl.uint(TxError.AlreadyFunded));
+    expect(badResult).toBeErr(Cl.uint(TxError.AlreadyPending));
 
     // Verify the pipe did not change
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
-        "balance-1": Cl.uint(1000000),
+        "balance-1": Cl.uint(0),
         "balance-2": Cl.uint(0),
+        "pending-1": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(1000000),
+            "burn-height": Cl.uint(burnBlockHeight + CONFIRMATION_DEPTH),
+          })
+        ),
+        "pending-2": Cl.none(),
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(0),
         closer: Cl.none(),
@@ -579,6 +653,8 @@ describe("fund-pipe", () => {
   it("second account cannot fund a pipe that has already been funded", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
+    const burnBlockHeight = simnet.burnBlockHeight;
 
     simnet.callPublicFn(
       "stackflow",
@@ -605,13 +681,28 @@ describe("fund-pipe", () => {
     const pipeBefore = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipeBefore).toBeSome(
       Cl.tuple({
-        "balance-1": Cl.uint(1000000),
-        "balance-2": Cl.uint(2000000),
+        "balance-1": Cl.uint(0),
+        "balance-2": Cl.uint(0),
+        "pending-1": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(1000000),
+            "burn-height": Cl.uint(burnBlockHeight + CONFIRMATION_DEPTH),
+          })
+        ),
+        "pending-2": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(2000000),
+            "burn-height": Cl.uint(burnBlockHeight + CONFIRMATION_DEPTH),
+          })
+        ),
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(0),
         closer: Cl.none(),
       })
     );
+
+    // Wait for the fund to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     const { result: badResult } = simnet.callPublicFn(
       "stackflow",
@@ -625,8 +716,20 @@ describe("fund-pipe", () => {
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
-        "balance-1": Cl.uint(1000000),
-        "balance-2": Cl.uint(2000000),
+        "balance-1": Cl.uint(0),
+        "balance-2": Cl.uint(0),
+        "pending-1": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(1000000),
+            "burn-height": Cl.uint(burnBlockHeight + CONFIRMATION_DEPTH),
+          })
+        ),
+        "pending-2": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(2000000),
+            "burn-height": Cl.uint(burnBlockHeight + CONFIRMATION_DEPTH),
+          })
+        ),
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(0),
         closer: Cl.none(),
@@ -693,6 +796,8 @@ describe("fund-pipe", () => {
       deployer
     );
 
+    const burnBlockHeight = simnet.burnBlockHeight;
+
     // Initialize the contract for test-token
     simnet.callPublicFn(
       "stackflow",
@@ -725,8 +830,15 @@ describe("fund-pipe", () => {
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
-        "balance-1": Cl.uint(1000000),
+        "balance-1": Cl.uint(0),
         "balance-2": Cl.uint(0),
+        "pending-1": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(1000000),
+            "burn-height": Cl.uint(burnBlockHeight + CONFIRMATION_DEPTH),
+          })
+        ),
+        "pending-2": Cl.none(),
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(0),
         closer: Cl.none(),
@@ -769,6 +881,8 @@ describe("fund-pipe", () => {
       deployer
     );
 
+    const burnBlockHeight = simnet.burnBlockHeight;
+
     simnet.callPublicFn(
       "stackflow",
       "fund-pipe",
@@ -804,11 +918,23 @@ describe("fund-pipe", () => {
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
-        "balance-1": Cl.uint(1000000),
-        "balance-2": Cl.uint(2000000),
+        "balance-1": Cl.uint(0),
+        "balance-2": Cl.uint(0),
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(0),
         closer: Cl.none(),
+        "pending-1": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(1000000),
+            "burn-height": Cl.uint(burnBlockHeight + CONFIRMATION_DEPTH),
+          })
+        ),
+        "pending-2": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(2000000),
+            "burn-height": Cl.uint(burnBlockHeight + CONFIRMATION_DEPTH),
+          })
+        ),
       })
     );
 
@@ -848,6 +974,8 @@ describe("fund-pipe", () => {
       deployer
     );
 
+    const burnBlockHeight = simnet.burnBlockHeight;
+
     const { result } = simnet.callPublicFn(
       "stackflow",
       "fund-pipe",
@@ -868,6 +996,9 @@ describe("fund-pipe", () => {
     );
     const pipeKey = (result as ResponseOkCV).value;
 
+    // Wait for the fund to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
     const { result: badResult } = simnet.callPublicFn(
       "stackflow",
       "fund-pipe",
@@ -885,8 +1016,15 @@ describe("fund-pipe", () => {
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
-        "balance-1": Cl.uint(1000000),
+        "balance-1": Cl.uint(0),
         "balance-2": Cl.uint(0),
+        "pending-1": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(1000000),
+            "burn-height": Cl.uint(burnBlockHeight + CONFIRMATION_DEPTH),
+          })
+        ),
+        "pending-2": Cl.none(),
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(0),
         closer: Cl.none(),
@@ -929,6 +1067,8 @@ describe("fund-pipe", () => {
       deployer
     );
 
+    const burnBlockHeight = simnet.burnBlockHeight;
+
     simnet.callPublicFn(
       "stackflow",
       "fund-pipe",
@@ -964,13 +1104,28 @@ describe("fund-pipe", () => {
     const pipeBefore = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipeBefore).toBeSome(
       Cl.tuple({
-        "balance-1": Cl.uint(1000000),
-        "balance-2": Cl.uint(2000000),
+        "balance-1": Cl.uint(0),
+        "balance-2": Cl.uint(0),
+        "pending-1": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(1000000),
+            "burn-height": Cl.uint(burnBlockHeight + CONFIRMATION_DEPTH),
+          })
+        ),
+        "pending-2": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(2000000),
+            "burn-height": Cl.uint(burnBlockHeight + CONFIRMATION_DEPTH),
+          })
+        ),
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(0),
         closer: Cl.none(),
       })
     );
+
+    // Wait for the fund to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     const { result: badResult } = simnet.callPublicFn(
       "stackflow",
@@ -989,8 +1144,20 @@ describe("fund-pipe", () => {
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
-        "balance-1": Cl.uint(1000000),
-        "balance-2": Cl.uint(2000000),
+        "balance-1": Cl.uint(0),
+        "balance-2": Cl.uint(0),
+        "pending-1": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(1000000),
+            "burn-height": Cl.uint(burnBlockHeight + CONFIRMATION_DEPTH),
+          })
+        ),
+        "pending-2": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(2000000),
+            "burn-height": Cl.uint(burnBlockHeight + CONFIRMATION_DEPTH),
+          })
+        ),
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(0),
         closer: Cl.none(),
@@ -1029,6 +1196,9 @@ describe("close-pipe", () => {
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     // Create the signatures
     const signature1 = generateClosePipeSignature(
@@ -1089,6 +1259,9 @@ describe("close-pipe", () => {
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     // Create the signatures
     const signature1 = generateClosePipeSignature(
@@ -1156,6 +1329,9 @@ describe("close-pipe", () => {
       address2
     );
 
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
     // Create the signatures
     const signature1 = generateClosePipeSignature(
       address1PK,
@@ -1221,6 +1397,9 @@ describe("close-pipe", () => {
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     // Create the signatures
     const signature1 = generateClosePipeSignature(
@@ -1288,6 +1467,9 @@ describe("close-pipe", () => {
       address2
     );
 
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
     // Create the signatures
     const signature1 = generateClosePipeSignature(
       address1PK,
@@ -1353,6 +1535,9 @@ describe("close-pipe", () => {
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     // Create the signatures
     const signature1 = generateClosePipeSignature(
@@ -1423,6 +1608,9 @@ describe("close-pipe", () => {
       address2
     );
 
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
     // Create the signatures
     const signature1 = generateClosePipeSignature(
       address1PK,
@@ -1491,6 +1679,9 @@ describe("close-pipe", () => {
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     // Create the signatures
     const signature1 = generateClosePipeSignature(
@@ -1565,6 +1756,9 @@ describe("force-cancel", () => {
       address2
     );
 
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
     const current_height = simnet.burnBlockHeight;
     const { result } = simnet.callPublicFn(
       "stackflow",
@@ -1583,6 +1777,8 @@ describe("force-cancel", () => {
         "expires-at": Cl.uint(current_height + WAITING_PERIOD),
         nonce: Cl.uint(0),
         closer: Cl.some(Cl.principal(address1)),
+        "pending-1": Cl.none(),
+        "pending-2": Cl.none(),
       })
     );
 
@@ -1619,6 +1815,9 @@ describe("force-cancel", () => {
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
     const pipeKey = (fundResult as ResponseOkCV).value;
 
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
     const current_height = simnet.burnBlockHeight;
     const { result } = simnet.callPublicFn(
       "stackflow",
@@ -1637,6 +1836,8 @@ describe("force-cancel", () => {
         "expires-at": Cl.uint(current_height + WAITING_PERIOD),
         nonce: Cl.uint(0),
         closer: Cl.some(Cl.principal(address2)),
+        "pending-1": Cl.none(),
+        "pending-2": Cl.none(),
       })
     );
 
@@ -1669,6 +1870,9 @@ describe("force-cancel", () => {
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     const { result } = simnet.callPublicFn(
       "stackflow",
@@ -1703,6 +1907,9 @@ describe("force-close", () => {
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     // Create the signatures
     const signature1 = generateTransferSignature(
@@ -1756,6 +1963,8 @@ describe("force-close", () => {
         "expires-at": Cl.uint(heightBefore + WAITING_PERIOD),
         nonce: Cl.uint(1),
         closer: Cl.some(Cl.principal(address1)),
+        "pending-1": Cl.none(),
+        "pending-2": Cl.none(),
       })
     );
 
@@ -1790,6 +1999,9 @@ describe("force-close", () => {
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
     const pipeKey = (fundResult as ResponseOkCV).value;
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     // Create the signatures
     const signature1 = generateTransferSignature(
@@ -1843,6 +2055,8 @@ describe("force-close", () => {
         "expires-at": Cl.uint(heightBefore + WAITING_PERIOD),
         nonce: Cl.uint(1),
         closer: Cl.some(Cl.principal(address2)),
+        "pending-1": Cl.none(),
+        "pending-2": Cl.none(),
       })
     );
 
@@ -1875,6 +2089,9 @@ describe("force-close", () => {
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     // Create the signatures
     const signature1 = generateTransferSignature(
@@ -1949,6 +2166,9 @@ describe("force-close", () => {
       address2
     );
 
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
     // Create the signatures
     const signature1 = generateTransferSignature(
       address1PK,
@@ -2022,6 +2242,9 @@ describe("force-close", () => {
       address2
     );
 
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
     // Create the signatures
     const signature1 = generateTransferSignature(
       address1PK,
@@ -2076,6 +2299,76 @@ describe("force-close", () => {
     const contractBalance = stxBalances.get(stackflowContract);
     expect(contractBalance).toBe(3000000n);
   });
+
+  it("force-close fails when valid-after is in future", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
+    // Setup the pipe
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-pipe",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
+      address1
+    );
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-pipe",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
+      address2
+    );
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
+    const futureBlock = simnet.burnBlockHeight + 10;
+
+    const signature1 = generateTransferSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      1600000,
+      1400000,
+      1,
+      address1,
+      null,
+      futureBlock
+    );
+    const signature2 = generateTransferSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      1400000,
+      1600000,
+      1,
+      address1,
+      null,
+      futureBlock
+    );
+
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "force-close",
+      [
+        Cl.none(),
+        Cl.principal(address2),
+        Cl.uint(1600000),
+        Cl.uint(1400000),
+        Cl.buffer(signature1),
+        Cl.buffer(signature2),
+        Cl.uint(1),
+        Cl.uint(PipeAction.Transfer),
+        Cl.principal(address1),
+        Cl.none(),
+        Cl.some(Cl.uint(futureBlock)),
+      ],
+      address1
+    );
+
+    expect(result).toBeErr(Cl.uint(TxError.NotValidYet));
+  });
 });
 
 describe("dispute-closure", () => {
@@ -2096,6 +2389,9 @@ describe("dispute-closure", () => {
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     // Create the signatures for a transfer
     const signature1 = generateTransferSignature(
@@ -2144,6 +2440,8 @@ describe("dispute-closure", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
+    const burnBlockHeight = simnet.burnBlockHeight;
+
     // Setup the pipe and save the pipe key
     simnet.callPublicFn(
       "stackflow",
@@ -2159,6 +2457,9 @@ describe("dispute-closure", () => {
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
     const pipeKey = (fundResult as ResponseOkCV).value;
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     // Create the signatures for a transfer
     const signature1 = generateTransferSignature(
@@ -2207,11 +2508,23 @@ describe("dispute-closure", () => {
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
-        "balance-1": Cl.uint(1000000),
-        "balance-2": Cl.uint(2000000),
+        "balance-1": Cl.uint(0),
+        "balance-2": Cl.uint(0),
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(0),
         closer: Cl.none(),
+        "pending-1": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(1000000),
+            "burn-height": Cl.uint(burnBlockHeight + CONFIRMATION_DEPTH),
+          })
+        ),
+        "pending-2": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(2000000),
+            "burn-height": Cl.uint(burnBlockHeight + CONFIRMATION_DEPTH),
+          })
+        ),
       })
     );
 
@@ -2247,6 +2560,9 @@ describe("dispute-closure", () => {
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
     const pipeKey = (fundResult as ResponseOkCV).value;
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     const cancel_height = simnet.burnBlockHeight;
     const { result } = simnet.callPublicFn(
@@ -2312,6 +2628,8 @@ describe("dispute-closure", () => {
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(1),
         closer: Cl.none(),
+        "pending-1": Cl.none(),
+        "pending-2": Cl.none(),
       })
     );
 
@@ -2347,6 +2665,9 @@ describe("dispute-closure", () => {
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
     const pipeKey = (fundResult as ResponseOkCV).value;
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     const cancel_height = simnet.burnBlockHeight;
     const { result } = simnet.callPublicFn(
@@ -2412,6 +2733,8 @@ describe("dispute-closure", () => {
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(1),
         closer: Cl.none(),
+        "pending-1": Cl.none(),
+        "pending-2": Cl.none(),
       })
     );
 
@@ -2447,6 +2770,9 @@ describe("dispute-closure", () => {
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
     const pipeKey = (fundResult as ResponseOkCV).value;
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     const cancel_height = simnet.burnBlockHeight;
     const { result } = simnet.callPublicFn(
@@ -2514,6 +2840,8 @@ describe("dispute-closure", () => {
         "expires-at": Cl.uint(cancel_height + WAITING_PERIOD),
         nonce: Cl.uint(0),
         closer: Cl.some(Cl.principal(address1)),
+        "pending-1": Cl.none(),
+        "pending-2": Cl.none(),
       })
     );
 
@@ -2557,6 +2885,9 @@ describe("dispute-closure", () => {
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
     const pipeKey = (fundResult as ResponseOkCV).value;
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     const cancel_height = simnet.burnBlockHeight;
     const { result } = simnet.callPublicFn(
@@ -2622,6 +2953,8 @@ describe("dispute-closure", () => {
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(1),
         closer: Cl.none(),
+        "pending-1": Cl.none(),
+        "pending-2": Cl.none(),
       })
     );
 
@@ -2665,6 +2998,9 @@ describe("agent-dispute-closure", () => {
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     // Create the signatures for a transfer
     const signature1 = generateTransferSignature(
@@ -2722,6 +3058,8 @@ describe("agent-dispute-closure", () => {
       address2
     );
 
+    const burnBlockHeight = simnet.burnBlockHeight;
+
     // Setup the pipe and save the pipe key
     simnet.callPublicFn(
       "stackflow",
@@ -2737,6 +3075,9 @@ describe("agent-dispute-closure", () => {
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
     const pipeKey = (fundResult as ResponseOkCV).value;
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     // Create the signatures for a transfer
     const signature1 = generateTransferSignature(
@@ -2786,11 +3127,23 @@ describe("agent-dispute-closure", () => {
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
-        "balance-1": Cl.uint(1000000),
-        "balance-2": Cl.uint(2000000),
+        "balance-1": Cl.uint(0),
+        "balance-2": Cl.uint(0),
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(0),
         closer: Cl.none(),
+        "pending-1": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(1000000),
+            "burn-height": Cl.uint(burnBlockHeight + CONFIRMATION_DEPTH),
+          })
+        ),
+        "pending-2": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(2000000),
+            "burn-height": Cl.uint(burnBlockHeight + CONFIRMATION_DEPTH),
+          })
+        ),
       })
     );
 
@@ -2834,6 +3187,9 @@ describe("agent-dispute-closure", () => {
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
     const pipeKey = (fundResult as ResponseOkCV).value;
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     const cancel_height = simnet.burnBlockHeight;
     const { result } = simnet.callPublicFn(
@@ -2900,6 +3256,8 @@ describe("agent-dispute-closure", () => {
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(1),
         closer: Cl.none(),
+        "pending-1": Cl.none(),
+        "pending-2": Cl.none(),
       })
     );
 
@@ -2943,6 +3301,9 @@ describe("agent-dispute-closure", () => {
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
     const pipeKey = (fundResult as ResponseOkCV).value;
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     const cancel_height = simnet.burnBlockHeight;
     const { result } = simnet.callPublicFn(
@@ -3009,6 +3370,8 @@ describe("agent-dispute-closure", () => {
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(1),
         closer: Cl.none(),
+        "pending-1": Cl.none(),
+        "pending-2": Cl.none(),
       })
     );
 
@@ -3052,6 +3415,9 @@ describe("agent-dispute-closure", () => {
     );
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
     const pipeKey = (fundResult as ResponseOkCV).value;
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     const cancel_height = simnet.burnBlockHeight;
     const { result } = simnet.callPublicFn(
@@ -3120,6 +3486,8 @@ describe("agent-dispute-closure", () => {
         "expires-at": Cl.uint(cancel_height + WAITING_PERIOD),
         nonce: Cl.uint(0),
         closer: Cl.some(Cl.principal(address1)),
+        "pending-1": Cl.none(),
+        "pending-2": Cl.none(),
       })
     );
 
@@ -3156,6 +3524,9 @@ describe("finalize", () => {
       address2
     );
 
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
     const { result } = simnet.callPublicFn(
       "stackflow",
       "finalize",
@@ -3168,6 +3539,8 @@ describe("finalize", () => {
   it("finalizing a pipe that is not closing gives an error", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
+    const burnBlockHeight = simnet.burnBlockHeight;
 
     // Setup the pipe and save the pipe key
     simnet.callPublicFn(
@@ -3185,6 +3558,9 @@ describe("finalize", () => {
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
     const pipeKey = (fundResult as ResponseOkCV).value;
 
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
     // Account 2 tries to finalize a closure
     const { result: disputeResult } = simnet.callPublicFn(
       "stackflow",
@@ -3198,11 +3574,23 @@ describe("finalize", () => {
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
-        "balance-1": Cl.uint(1000000),
-        "balance-2": Cl.uint(2000000),
+        "balance-1": Cl.uint(0),
+        "balance-2": Cl.uint(0),
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(0),
         closer: Cl.none(),
+        "pending-1": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(1000000),
+            "burn-height": Cl.uint(burnBlockHeight + CONFIRMATION_DEPTH),
+          })
+        ),
+        "pending-2": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(2000000),
+            "burn-height": Cl.uint(burnBlockHeight + CONFIRMATION_DEPTH),
+          })
+        ),
       })
     );
 
@@ -3239,6 +3627,9 @@ describe("finalize", () => {
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
     const pipeKey = (fundResult as ResponseOkCV).value;
 
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
     const cancel_height = simnet.burnBlockHeight;
     const { result } = simnet.callPublicFn(
       "stackflow",
@@ -3269,6 +3660,8 @@ describe("finalize", () => {
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(0),
         closer: Cl.none(),
+        "pending-1": Cl.none(),
+        "pending-2": Cl.none(),
       })
     );
 
@@ -3305,6 +3698,9 @@ describe("finalize", () => {
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
     const pipeKey = (fundResult as ResponseOkCV).value;
 
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
     const cancel_height = simnet.burnBlockHeight;
     const { result } = simnet.callPublicFn(
       "stackflow",
@@ -3335,6 +3731,8 @@ describe("finalize", () => {
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(0),
         closer: Cl.none(),
+        "pending-1": Cl.none(),
+        "pending-2": Cl.none(),
       })
     );
 
@@ -3370,6 +3768,9 @@ describe("finalize", () => {
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     // Create the signatures
     const signature1 = generateTransferSignature(
@@ -3435,6 +3836,8 @@ describe("finalize", () => {
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(1),
         closer: Cl.none(),
+        "pending-1": Cl.none(),
+        "pending-2": Cl.none(),
       })
     );
 
@@ -3471,6 +3874,9 @@ describe("finalize", () => {
     expect(fundResult.type).toBe(ClarityType.ResponseOk);
     const pipeKey = (fundResult as ResponseOkCV).value;
 
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
     const cancel_height = simnet.burnBlockHeight;
     const { result } = simnet.callPublicFn(
       "stackflow",
@@ -3501,6 +3907,8 @@ describe("finalize", () => {
         "expires-at": Cl.uint(cancel_height + WAITING_PERIOD),
         nonce: Cl.uint(0),
         closer: Cl.some(Cl.principal(address1)),
+        "pending-1": Cl.none(),
+        "pending-2": Cl.none(),
       })
     );
 
@@ -3543,6 +3951,9 @@ describe("deposit", () => {
       })
     );
     const pipeKey = (fundResult as ResponseOkCV).value;
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     // Create the signatures for a deposit
     const signature1 = generateDepositSignature(
@@ -3606,11 +4017,18 @@ describe("deposit", () => {
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
-        "balance-1": Cl.uint(1050000),
+        "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(2000000),
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(1),
         closer: Cl.none(),
+        "pending-1": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(50000),
+            "burn-height": Cl.uint(simnet.burnBlockHeight + CONFIRMATION_DEPTH),
+          })
+        ),
+        "pending-2": Cl.none(),
       })
     );
   });
@@ -3639,6 +4057,9 @@ describe("deposit", () => {
       })
     );
     const pipeKey = (fundResult as ResponseOkCV).value;
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     // Create the signatures for a deposit
     const signature1 = generateDepositSignature(
@@ -3702,10 +4123,17 @@ describe("deposit", () => {
     expect(pipe).toBeSome(
       Cl.tuple({
         "balance-1": Cl.uint(1000000),
-        "balance-2": Cl.uint(2050000),
+        "balance-2": Cl.uint(2000000),
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(3),
         closer: Cl.none(),
+        "pending-1": Cl.none(),
+        "pending-2": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(50000),
+            "burn-height": Cl.uint(simnet.burnBlockHeight + CONFIRMATION_DEPTH),
+          })
+        ),
       })
     );
   });
@@ -3735,14 +4163,17 @@ describe("deposit", () => {
     );
     const pipeKey = (fundResult as ResponseOkCV).value;
 
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
     // Create the signatures for a deposit
     const signature1 = generateDepositSignature(
       address1PK,
       null,
       address1,
       address2,
-      3040000,
       10000,
+      3040000,
       3,
       address2
     );
@@ -3751,8 +4182,8 @@ describe("deposit", () => {
       null,
       address2,
       address1,
-      10000,
       3040000,
+      10000,
       3,
       address2
     );
@@ -3764,8 +4195,8 @@ describe("deposit", () => {
         Cl.uint(50000),
         Cl.none(),
         Cl.principal(address1),
-        Cl.uint(10000),
         Cl.uint(3040000),
+        Cl.uint(10000),
         Cl.buffer(signature2),
         Cl.buffer(signature1),
         Cl.uint(3),
@@ -3796,11 +4227,18 @@ describe("deposit", () => {
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
-        "balance-1": Cl.uint(3040000n),
-        "balance-2": Cl.uint(10000),
+        "balance-1": Cl.uint(10000),
+        "balance-2": Cl.uint(2990000n),
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(3),
         closer: Cl.none(),
+        "pending-1": Cl.none(),
+        "pending-2": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(50000),
+            "burn-height": Cl.uint(simnet.burnBlockHeight + CONFIRMATION_DEPTH),
+          })
+        ),
       })
     );
   });
@@ -3862,7 +4300,10 @@ describe("deposit", () => {
       address2
     );
 
-    // Try a deposit when no pipes exist
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
+    // Try a deposit when one other pipe exists
     const { result: result2 } = simnet.callPublicFn(
       "stackflow",
       "deposit",
@@ -3906,14 +4347,17 @@ describe("deposit", () => {
     );
     const pipeKey = (fundResult as ResponseOkCV).value;
 
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
     // Create the signatures for a deposit
     const signature1 = generateDepositSignature(
       address1PK,
       null,
       address1,
       address2,
-      3040000,
       10000,
+      3040000,
       3,
       address2
     );
@@ -3922,8 +4366,8 @@ describe("deposit", () => {
       null,
       address2,
       address1,
-      10000,
       3040000,
+      10000,
       3,
       address2
     );
@@ -3935,8 +4379,8 @@ describe("deposit", () => {
         Cl.uint(50000),
         Cl.none(),
         Cl.principal(address1),
-        Cl.uint(20000),
         Cl.uint(3030000),
+        Cl.uint(20000),
         Cl.buffer(signature2),
         Cl.buffer(signature1),
         Cl.uint(3),
@@ -3961,11 +4405,23 @@ describe("deposit", () => {
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
-        "balance-1": Cl.uint(1000000n),
-        "balance-2": Cl.uint(2000000n),
+        "balance-1": Cl.uint(0),
+        "balance-2": Cl.uint(0),
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(0),
         closer: Cl.none(),
+        "pending-1": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(1000000),
+            "burn-height": Cl.uint(simnet.burnBlockHeight),
+          })
+        ),
+        "pending-2": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(2000000),
+            "burn-height": Cl.uint(simnet.burnBlockHeight),
+          })
+        ),
       })
     );
   });
@@ -3994,6 +4450,9 @@ describe("deposit", () => {
       })
     );
     const pipeKey = (fundResult as ResponseOkCV).value;
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     // Create the signatures for a deposit
     const signature1 = generateDepositSignature(
@@ -4041,6 +4500,9 @@ describe("deposit", () => {
       })
     );
 
+    // Wait for the deposit to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
     const { result: result2 } = simnet.callPublicFn(
       "stackflow",
       "deposit",
@@ -4075,13 +4537,82 @@ describe("deposit", () => {
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
-        "balance-1": Cl.uint(1050000),
+        "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(2000000),
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(1),
         closer: Cl.none(),
+        "pending-1": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(50000),
+            "burn-height": Cl.uint(simnet.burnBlockHeight),
+          })
+        ),
+        "pending-2": Cl.none(),
       })
     );
+  });
+
+  it("fails deposit with invalid balances", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
+    // Setup the pipe
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-pipe",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
+      address1
+    );
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-pipe",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
+      address2
+    );
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
+    // Try deposit with invalid balances
+    const signature1 = generateDepositSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      500000, // Balance less than deposit amount
+      2000000,
+      1,
+      address1
+    );
+    const signature2 = generateDepositSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      2000000,
+      500000,
+      1,
+      address1
+    );
+
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "deposit",
+      [
+        Cl.uint(1000000),
+        Cl.none(),
+        Cl.principal(address2),
+        Cl.uint(500000),
+        Cl.uint(2000000),
+        Cl.buffer(signature1),
+        Cl.buffer(signature2),
+        Cl.uint(1),
+      ],
+      address1
+    );
+
+    expect(result).toBeErr(Cl.uint(TxError.InvalidBalances));
   });
 });
 
@@ -4110,6 +4641,9 @@ describe("withdraw", () => {
       })
     );
     const pipeKey = (fundResult as ResponseOkCV).value;
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     // Create the signatures for a withdraw
     const signature1 = generateWithdrawSignature(
@@ -4178,6 +4712,8 @@ describe("withdraw", () => {
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(1),
         closer: Cl.none(),
+        "pending-1": Cl.none(),
+        "pending-2": Cl.none(),
       })
     );
   });
@@ -4206,6 +4742,9 @@ describe("withdraw", () => {
       })
     );
     const pipeKey = (fundResult as ResponseOkCV).value;
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     // Create the signatures for a withdraw
     const signature1 = generateWithdrawSignature(
@@ -4274,6 +4813,8 @@ describe("withdraw", () => {
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(1),
         closer: Cl.none(),
+        "pending-1": Cl.none(),
+        "pending-2": Cl.none(),
       })
     );
   });
@@ -4302,6 +4843,9 @@ describe("withdraw", () => {
       })
     );
     const pipeKey = (fundResult as ResponseOkCV).value;
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     // Create the signatures for a withdraw
     const signature1 = generateWithdrawSignature(
@@ -4359,11 +4903,23 @@ describe("withdraw", () => {
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
-        "balance-1": Cl.uint(1000000),
-        "balance-2": Cl.uint(2000000),
+        "balance-1": Cl.uint(0),
+        "balance-2": Cl.uint(0),
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(0),
         closer: Cl.none(),
+        "pending-1": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(1000000),
+            "burn-height": Cl.uint(simnet.burnBlockHeight),
+          })
+        ),
+        "pending-2": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(2000000),
+            "burn-height": Cl.uint(simnet.burnBlockHeight),
+          })
+        ),
       })
     );
   });
@@ -4392,6 +4948,9 @@ describe("withdraw", () => {
       })
     );
     const pipeKey = (fundResult as ResponseOkCV).value;
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     // Create the signatures for a withdraw
     const signature1 = generateWithdrawSignature(
@@ -4449,11 +5008,23 @@ describe("withdraw", () => {
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
-        "balance-1": Cl.uint(1000000),
-        "balance-2": Cl.uint(2000000),
+        "balance-1": Cl.uint(0),
+        "balance-2": Cl.uint(0),
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(0),
         closer: Cl.none(),
+        "pending-1": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(1000000),
+            "burn-height": Cl.uint(simnet.burnBlockHeight),
+          })
+        ),
+        "pending-2": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(2000000),
+            "burn-height": Cl.uint(simnet.burnBlockHeight),
+          })
+        ),
       })
     );
   });
@@ -4482,6 +5053,9 @@ describe("withdraw", () => {
       })
     );
     const pipeKey = (fundResult as ResponseOkCV).value;
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     // Create the signatures for a withdraw
     const signature1 = generateWithdrawSignature(
@@ -4539,11 +5113,23 @@ describe("withdraw", () => {
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
-        "balance-1": Cl.uint(1000000),
-        "balance-2": Cl.uint(2000000),
+        "balance-1": Cl.uint(0),
+        "balance-2": Cl.uint(0),
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(0),
         closer: Cl.none(),
+        "pending-1": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(1000000),
+            "burn-height": Cl.uint(simnet.burnBlockHeight),
+          })
+        ),
+        "pending-2": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(2000000),
+            "burn-height": Cl.uint(simnet.burnBlockHeight),
+          })
+        ),
       })
     );
   });
@@ -4572,6 +5158,9 @@ describe("withdraw", () => {
       })
     );
     const pipeKey = (fundResult as ResponseOkCV).value;
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     // Create the signatures for a deposit
     const depositSignature1 = generateDepositSignature(
@@ -4618,6 +5207,9 @@ describe("withdraw", () => {
         token: Cl.none(),
       })
     );
+
+    // Wait for the deposit to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     // Create the signatures for a withdraw
     const signature1 = generateWithdrawSignature(
@@ -4675,13 +5267,259 @@ describe("withdraw", () => {
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
-        "balance-1": Cl.uint(1050000),
+        "balance-1": Cl.uint(1000000),
         "balance-2": Cl.uint(2000000),
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(1),
         closer: Cl.none(),
+        "pending-1": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(50000),
+            "burn-height": Cl.uint(simnet.burnBlockHeight),
+          })
+        ),
+        "pending-2": Cl.none(),
       })
     );
+  });
+});
+
+describe("multiple deposits and withdrawals", () => {
+  it("can perform multiple deposits and withdrawals in sequence", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
+    // Setup the pipe
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-pipe",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
+      address1
+    );
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-pipe",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
+      address2
+    );
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
+    // First deposit
+    const signature1Deposit1 = generateDepositSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      2000000,
+      2000000,
+      1,
+      address1
+    );
+    const signature2Deposit1 = generateDepositSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      2000000,
+      2000000,
+      1,
+      address1
+    );
+
+    simnet.callPublicFn(
+      "stackflow",
+      "deposit",
+      [
+        Cl.uint(1000000),
+        Cl.none(),
+        Cl.principal(address2),
+        Cl.uint(2000000),
+        Cl.uint(2000000),
+        Cl.buffer(signature1Deposit1),
+        Cl.buffer(signature2Deposit1),
+        Cl.uint(1),
+      ],
+      address1
+    );
+
+    // Second deposit
+    const signature1Deposit2 = generateDepositSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      3000000,
+      2000000,
+      2,
+      address2
+    );
+    const signature2Deposit2 = generateDepositSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      2000000,
+      3000000,
+      2,
+      address2
+    );
+
+    simnet.callPublicFn(
+      "stackflow",
+      "deposit",
+      [
+        Cl.uint(1000000),
+        Cl.none(),
+        Cl.principal(address1),
+        Cl.uint(2000000),
+        Cl.uint(3000000),
+        Cl.buffer(signature2Deposit2),
+        Cl.buffer(signature1Deposit2),
+        Cl.uint(2),
+      ],
+      address2
+    );
+
+    // Wait for the deposits to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
+    // Withdraw
+    const signature1Withdraw = generateWithdrawSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      2500000,
+      2000000,
+      3,
+      address1
+    );
+    const signature2Withdraw = generateWithdrawSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      2000000,
+      2500000,
+      3,
+      address1
+    );
+
+    simnet.callPublicFn(
+      "stackflow",
+      "withdraw",
+      [
+        Cl.uint(500000),
+        Cl.none(),
+        Cl.principal(address2),
+        Cl.uint(2500000),
+        Cl.uint(2000000),
+        Cl.buffer(signature1Withdraw),
+        Cl.buffer(signature2Withdraw),
+        Cl.uint(3),
+      ],
+      address1
+    );
+
+    // Verify final balances
+    const stxBalances = simnet.getAssetsMap().get("STX")!;
+    const balance1 = stxBalances.get(address1);
+    const balance2 = stxBalances.get(address2);
+    const contractBalance = stxBalances.get(stackflowContract);
+
+    expect(balance1).toBe(99999998500000n);
+    expect(balance2).toBe(99999997000000n);
+    expect(contractBalance).toBe(4500000n);
+  });
+});
+
+describe("agent-dispute additional tests", () => {
+  it("agent-dispute-closure fails when agent not registered", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
+    // Setup the pipe
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-pipe",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
+      address1
+    );
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-pipe",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
+      address2
+    );
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
+    // Force close
+    const signature1 = generateTransferSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      1600000,
+      1400000,
+      1,
+      address1
+    );
+    const signature2 = generateTransferSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      1400000,
+      1600000,
+      1,
+      address1
+    );
+
+    simnet.callPublicFn(
+      "stackflow",
+      "force-close",
+      [
+        Cl.none(),
+        Cl.principal(address2),
+        Cl.uint(1600000),
+        Cl.uint(1400000),
+        Cl.buffer(signature1),
+        Cl.buffer(signature2),
+        Cl.uint(1),
+        Cl.uint(PipeAction.Transfer),
+        Cl.principal(address1),
+        Cl.none(),
+        Cl.none(),
+      ],
+      address1
+    );
+
+    // Try to dispute with unregistered agent
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "agent-dispute-closure",
+      [
+        Cl.principal(address2),
+        Cl.none(),
+        Cl.principal(address1),
+        Cl.uint(1400000),
+        Cl.uint(1600000),
+        Cl.buffer(signature2),
+        Cl.buffer(signature1),
+        Cl.uint(1),
+        Cl.uint(PipeAction.Transfer),
+        Cl.principal(address1),
+        Cl.none(),
+        Cl.none(),
+      ],
+      address3
+    );
+
+    expect(result).toBeErr(Cl.uint(TxError.Unauthorized));
   });
 });
 
@@ -4704,11 +5542,18 @@ describe("get-pipe", () => {
     );
     expect(result).toBeSome(
       Cl.tuple({
-        "balance-1": Cl.uint(1000000),
+        "balance-1": Cl.uint(0),
         "balance-2": Cl.uint(0),
         "expires-at": Cl.uint(340282366920938463463374607431768211455n),
         nonce: Cl.uint(0),
         closer: Cl.none(),
+        "pending-1": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(1000000),
+            "burn-height": Cl.uint(simnet.burnBlockHeight + CONFIRMATION_DEPTH),
+          })
+        ),
+        "pending-2": Cl.none(),
       })
     );
   });
@@ -4801,7 +5646,15 @@ describe("increase-sender-balance", () => {
           "principal-1": Cl.principal(address1),
           "principal-2": Cl.principal(address2),
         }),
-        Cl.tuple({ "balance-1": Cl.uint(100), "balance-2": Cl.uint(0) }),
+        Cl.tuple({
+          "balance-1": Cl.uint(100),
+          "balance-2": Cl.uint(0),
+          "expires-at": Cl.uint(0),
+          nonce: Cl.uint(0),
+          closer: Cl.none(),
+          "pending-1": Cl.none(),
+          "pending-2": Cl.none(),
+        }),
         Cl.none(),
         Cl.uint(123),
       ],
@@ -4809,8 +5662,18 @@ describe("increase-sender-balance", () => {
     );
     expect(result).toBeOk(
       Cl.tuple({
-        "balance-1": Cl.uint(223),
+        "balance-1": Cl.uint(100),
         "balance-2": Cl.uint(0),
+        "expires-at": Cl.uint(0),
+        nonce: Cl.uint(0),
+        closer: Cl.none(),
+        "pending-1": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(123),
+            "burn-height": Cl.uint(simnet.burnBlockHeight + CONFIRMATION_DEPTH),
+          })
+        ),
+        "pending-2": Cl.none(),
       })
     );
   });
@@ -4825,7 +5688,15 @@ describe("increase-sender-balance", () => {
           "principal-1": Cl.principal(address1),
           "principal-2": Cl.principal(address2),
         }),
-        Cl.tuple({ "balance-1": Cl.uint(100), "balance-2": Cl.uint(0) }),
+        Cl.tuple({
+          "balance-1": Cl.uint(100),
+          "balance-2": Cl.uint(0),
+          "expires-at": Cl.uint(0),
+          nonce: Cl.uint(0),
+          closer: Cl.none(),
+          "pending-1": Cl.none(),
+          "pending-2": Cl.none(),
+        }),
         Cl.none(),
         Cl.uint(123),
       ],
@@ -4834,7 +5705,17 @@ describe("increase-sender-balance", () => {
     expect(result).toBeOk(
       Cl.tuple({
         "balance-1": Cl.uint(100),
-        "balance-2": Cl.uint(123),
+        "balance-2": Cl.uint(0),
+        "expires-at": Cl.uint(0),
+        nonce: Cl.uint(0),
+        closer: Cl.none(),
+        "pending-1": Cl.none(),
+        "pending-2": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(123),
+            "burn-height": Cl.uint(simnet.burnBlockHeight + CONFIRMATION_DEPTH),
+          })
+        ),
       })
     );
   });
@@ -4861,6 +5742,9 @@ describe("execute-withdraw", () => {
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     const { result } = simnet.callPrivateFn(
       "stackflow",
@@ -4890,6 +5774,9 @@ describe("execute-withdraw", () => {
       [Cl.none(), Cl.uint(100), Cl.principal(address2), Cl.uint(0)],
       address1
     );
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     const { result } = simnet.callPrivateFn(
       "stackflow",
@@ -4930,6 +5817,9 @@ describe("transfers with secrets", () => {
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     // Create the signatures
     const signature1 = generateTransferSignature(
@@ -4985,6 +5875,8 @@ describe("transfers with secrets", () => {
         "expires-at": Cl.uint(heightBefore + WAITING_PERIOD),
         nonce: Cl.uint(1),
         closer: Cl.some(Cl.principal(address1)),
+        "pending-1": Cl.none(),
+        "pending-2": Cl.none(),
       })
     );
 
@@ -5019,6 +5911,9 @@ describe("transfers with secrets", () => {
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     // Create the signatures
     const signature1 = generateTransferSignature(
@@ -5068,11 +5963,23 @@ describe("transfers with secrets", () => {
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
-        "balance-1": Cl.uint(1000000),
-        "balance-2": Cl.uint(2000000),
+        "balance-1": Cl.uint(0),
+        "balance-2": Cl.uint(0),
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(0),
         closer: Cl.none(),
+        "pending-1": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(1000000),
+            "burn-height": Cl.uint(simnet.burnBlockHeight),
+          })
+        ),
+        "pending-2": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(2000000),
+            "burn-height": Cl.uint(simnet.burnBlockHeight),
+          })
+        ),
       })
     );
 
@@ -5186,6 +6093,9 @@ describe("transfers with valid-after", () => {
       address2
     );
 
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
     let heightBefore = simnet.burnBlockHeight;
 
     // Create the signatures
@@ -5243,6 +6153,8 @@ describe("transfers with valid-after", () => {
         "expires-at": Cl.uint(heightBefore + WAITING_PERIOD),
         nonce: Cl.uint(1),
         closer: Cl.some(Cl.principal(address1)),
+        "pending-1": Cl.none(),
+        "pending-2": Cl.none(),
       })
     );
 
@@ -5277,6 +6189,9 @@ describe("transfers with valid-after", () => {
       [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
     const heightBefore = simnet.burnBlockHeight;
 
@@ -5330,11 +6245,23 @@ describe("transfers with valid-after", () => {
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
-        "balance-1": Cl.uint(1000000),
-        "balance-2": Cl.uint(2000000),
+        "balance-1": Cl.uint(0),
+        "balance-2": Cl.uint(0),
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(0),
         closer: Cl.none(),
+        "pending-1": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(1000000),
+            "burn-height": Cl.uint(simnet.burnBlockHeight),
+          })
+        ),
+        "pending-2": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(2000000),
+            "burn-height": Cl.uint(simnet.burnBlockHeight),
+          })
+        ),
       })
     );
 
