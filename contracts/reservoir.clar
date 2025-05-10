@@ -76,8 +76,7 @@
   (let ((borrower tx-sender))
     (unwrap!
       (match token
-        t
-        (contract-call? t transfer amount tx-sender (as-contract tx-sender) none)
+        t (contract-call? t transfer amount tx-sender (as-contract tx-sender) none)
         (stx-transfer? amount tx-sender (as-contract tx-sender))
       )
       ERR_BORROW_FEE_PAYMENT_FAILED
@@ -94,13 +93,15 @@
 ;;; - `(ok true)` on success
 ;;; - `ERR_UNAUTHORIZED` if the caller is not the operator
 ;;; - `ERR_FUNDING_FAILED` if the funding failed
-(define-public (add-liquidity (token (optional <sip-010>)) (amount uint))
+(define-public (add-liquidity
+    (token (optional <sip-010>))
+    (amount uint)
+  )
   (begin
     (asserts! (is-eq tx-sender OPERATOR) ERR_UNAUTHORIZED)
     (unwrap!
       (match token
-        t
-        (contract-call? t transfer amount tx-sender (as-contract tx-sender) none)
+        t (contract-call? t transfer amount tx-sender (as-contract tx-sender) none)
         (stx-transfer? amount tx-sender (as-contract tx-sender))
       )
       ERR_FUNDING_FAILED
@@ -114,17 +115,17 @@
 ;;; - `(ok true)` on success
 ;;; - `ERR_UNAUTHORIZED` if the caller is not the operator
 ;;; - `ERR_TRANSFER_FAILED` if the transfer failed
-(define-public (remove-liquidity (token (optional <sip-010>)) (amount uint))
+(define-public (remove-liquidity
+    (token (optional <sip-010>))
+    (amount uint)
+  )
   (begin
     (asserts! (is-eq tx-sender OPERATOR) ERR_UNAUTHORIZED)
     (unwrap!
-      (as-contract
-        (match token
-          t
-          (contract-call? t transfer amount tx-sender OPERATOR none)
-          (stx-transfer? amount tx-sender OPERATOR)
-        )
-      )
+      (as-contract (match token
+        t (contract-call? t transfer amount tx-sender OPERATOR none)
+        (stx-transfer? amount tx-sender OPERATOR)
+      ))
       ERR_TRANSFER_FAILED
     )
     (ok true)

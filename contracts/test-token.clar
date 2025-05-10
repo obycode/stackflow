@@ -15,7 +15,6 @@
 (define-constant TOKEN_SYMBOL "TEST")
 (define-constant TOKEN_DECIMALS u6) ;; 6 units displayed past decimal, e.g. 1.000_000 = 1 token
 
-
 ;; SIP-010 function: Get the token balance of a specified principal
 (define-read-only (get-balance (who principal))
   (ok (ft-get-balance test-coin who))
@@ -48,7 +47,10 @@
 
 ;; Mint new tokens and send them to a recipient.
 ;; Only the contract deployer can perform this operation.
-(define-public (mint (amount uint) (recipient principal))
+(define-public (mint
+    (amount uint)
+    (recipient principal)
+  )
   (begin
     (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_OWNER_ONLY)
     (ft-mint? test-coin amount recipient)
@@ -58,16 +60,21 @@
 ;; SIP-010 function: Transfers tokens to a recipient
 ;; Sender must be the same as the caller to prevent principals from transferring tokens they do not own.
 (define-public (transfer
-  (amount uint)
-  (sender principal)
-  (recipient principal)
-  (memo (optional (buff 34)))
-)
+    (amount uint)
+    (sender principal)
+    (recipient principal)
+    (memo (optional (buff 34)))
+  )
   (begin
     ;; #[filter(amount, recipient)]
-    (asserts! (or (is-eq tx-sender sender) (is-eq contract-caller sender)) ERR_NOT_TOKEN_OWNER)
+    (asserts! (or (is-eq tx-sender sender) (is-eq contract-caller sender))
+      ERR_NOT_TOKEN_OWNER
+    )
     (try! (ft-transfer? test-coin amount sender recipient))
-    (match memo to-print (print to-print) 0x)
+    (match memo
+      to-print (print to-print)
+      0x
+    )
     (ok true)
   )
 )
