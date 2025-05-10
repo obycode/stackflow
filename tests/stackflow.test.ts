@@ -2369,6 +2369,148 @@ describe("force-close", () => {
 
     expect(result).toBeErr(Cl.uint(TxError.NotValidYet));
   });
+
+  it("cannot force-close with deposit signatures that were never applied", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-pipe",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
+      address1
+    );
+    const { result: fundResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-pipe",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
+      address2
+    );
+    expect(fundResult).toBeOk(
+      Cl.tuple({
+        token: Cl.none(),
+        "principal-1": Cl.principal(address1),
+        "principal-2": Cl.principal(address2),
+      })
+    );
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
+    // Create the signatures for a deposit
+    const signature1 = generateDepositSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      1050000,
+      2000000,
+      1,
+      address1
+    );
+    const signature2 = generateDepositSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      2000000,
+      1050000,
+      1,
+      address1
+    );
+
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "force-close",
+      [
+        Cl.none(),
+        Cl.principal(address2),
+        Cl.uint(1050000),
+        Cl.uint(2000000),
+        Cl.buffer(signature1),
+        Cl.buffer(signature2),
+        Cl.uint(1),
+        Cl.uint(PipeAction.Deposit),
+        Cl.principal(address1),
+        Cl.none(),
+        Cl.none(),
+      ],
+      address1
+    );
+
+    expect(result).toBeErr(Cl.uint(TxError.InvalidTotalBalance));
+  });
+
+  it("cannot force-close with withdraw signatures that were never applied", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-pipe",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
+      address1
+    );
+    const { result: fundResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-pipe",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
+      address2
+    );
+    expect(fundResult).toBeOk(
+      Cl.tuple({
+        token: Cl.none(),
+        "principal-1": Cl.principal(address1),
+        "principal-2": Cl.principal(address2),
+      })
+    );
+
+    // Wait for the funds to confirm
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
+    // Create the signatures for a withdraw
+    const signature1 = generateWithdrawSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      500000,
+      2000000,
+      1,
+      address1
+    );
+    const signature2 = generateWithdrawSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      2000000,
+      500000,
+      1,
+      address1
+    );
+
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "force-close",
+      [
+        Cl.none(),
+        Cl.principal(address2),
+        Cl.uint(1050000),
+        Cl.uint(2000000),
+        Cl.buffer(signature1),
+        Cl.buffer(signature2),
+        Cl.uint(1),
+        Cl.uint(PipeAction.Withdraw),
+        Cl.principal(address1),
+        Cl.none(),
+        Cl.none(),
+      ],
+      address1
+    );
+
+    expect(result).toBeErr(Cl.uint(TxError.InvalidTotalBalance));
+  });
 });
 
 describe("dispute-closure", () => {
