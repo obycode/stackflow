@@ -1,9 +1,5 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import {
-  Cl,
-  ClarityType,
-  ResponseOkCV,
-} from "@stacks/transactions";
+import { Cl, ClarityType, ResponseOkCV } from "@stacks/transactions";
 import {
   deployer,
   address1,
@@ -28,7 +24,7 @@ describe("reservoir", () => {
     simnet.callPublicFn(
       "reservoir",
       "init",
-      [Cl.none(), Cl.principal(stackflowContract), Cl.uint(0)],
+      [Cl.principal(stackflowContract), Cl.none(), Cl.uint(0)],
       deployer
     );
   });
@@ -86,7 +82,12 @@ describe("reservoir", () => {
       simnet.callPublicFn(
         "reservoir",
         "fund-tap",
-        [Cl.none(), Cl.uint(1000000), Cl.uint(0)],
+        [
+          Cl.principal(stackflowContract),
+          Cl.none(),
+          Cl.uint(1000000),
+          Cl.uint(0),
+        ],
         address1
       );
 
@@ -116,6 +117,7 @@ describe("reservoir", () => {
         "reservoir",
         "borrow-liquidity",
         [
+          Cl.principal(stackflowContract),
           Cl.uint(1000), // amount
           Cl.uint(50), // incorrect fee (should be 100)
           Cl.none(), // token
@@ -206,7 +208,12 @@ describe("reservoir", () => {
       const { result } = simnet.callPublicFn(
         "reservoir",
         "fund-tap",
-        [Cl.none(), Cl.uint(1000000), Cl.uint(0)],
+        [
+          Cl.principal(stackflowContract),
+          Cl.none(),
+          Cl.uint(1000000),
+          Cl.uint(0),
+        ],
         address1
       );
       expect(result).toBeOk(
@@ -244,7 +251,12 @@ describe("reservoir", () => {
       const { result } = simnet.callPublicFn(
         "reservoir",
         "fund-tap",
-        [Cl.none(), Cl.uint(1000000), Cl.uint(0)],
+        [
+          Cl.principal(stackflowContract),
+          Cl.none(),
+          Cl.uint(1000000),
+          Cl.uint(0),
+        ],
         address1
       );
       expect(result.type).toBe(ClarityType.ResponseOk);
@@ -279,6 +291,7 @@ describe("reservoir", () => {
         "reservoir",
         "borrow-liquidity",
         [
+          Cl.principal(stackflowContract),
           Cl.uint(amount),
           Cl.uint(fee),
           Cl.none(),
@@ -355,7 +368,12 @@ describe("reservoir", () => {
       simnet.callPublicFn(
         "reservoir",
         "fund-tap",
-        [Cl.none(), Cl.uint(50000), Cl.uint(0)],
+        [
+          Cl.principal(stackflowContract),
+          Cl.none(),
+          Cl.uint(50000),
+          Cl.uint(0),
+        ],
         address1
       );
 
@@ -389,6 +407,7 @@ describe("reservoir", () => {
         "reservoir",
         "borrow-liquidity",
         [
+          Cl.principal(stackflowContract),
           Cl.uint(amount),
           Cl.uint(fee),
           Cl.none(),

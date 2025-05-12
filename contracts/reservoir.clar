@@ -37,6 +37,8 @@
 (define-constant ERR_INVALID_FEE (err u204))
 (define-constant ERR_ALREADY_INITIALIZED (err u205))
 (define-constant ERR_NOT_INITIALIZED (err u206))
+(define-constant ERR_UNAPPROVED_TOKEN (err u207))
+(define-constant ERR_INCORRECT_STACKFLOW (err u208))
 
 ;;; Has this contract been initialized?
 (define-data-var initialized bool false)
@@ -49,13 +51,19 @@
 ;;; If `none`, only STX is supported.
 (define-data-var supported-token (optional principal) none)
 
+;;; The StackFlow contract that this Reservoir is registered with.
+(define-data-var stackflow-contract (optional principal) none)
+
 ;;; Track the open taps
 ;; The key is the principal and the value is the height at which it was opened.
-(define-map taps principal uint)
+(define-map taps
+  principal
+  uint
+)
 
 (define-public (init
-    (token (optional <sip-010>))
     (stackflow <stackflow-token>)
+    (token (optional <sip-010>))
     (initial-borrow-rate uint)
   )
   (begin
@@ -64,6 +72,9 @@
 
     ;; Set the token for this instance of the Reservoir contract.
     (var-set supported-token (contract-of-optional token))
+
+    ;; Set the StackFlow contract for this instance of the Reservoir contract.
+    (var-set stackflow-contract (some (contract-of stackflow)))
 
     ;; Authorize the operator as a StackFlow agent for this contract.
     (try! (as-contract (contract-call? stackflow register-agent OPERATOR)))
@@ -89,13 +100,14 @@
 ;;; - `ERR_CLOSE_IN_PROGRESS` if a forced closure is in progress
 ;;; - `ERR_ALREADY_FUNDED` if the pipe has already been funded
 (define-public (fund-tap
+    (stackflow <stackflow-token>)
     (token (optional <sip-010>))
     (amount uint)
     (nonce uint)
   )
   (begin
-    (asserts! (var-get initialized) ERR_NOT_INITIALIZED)
-    (contract-call? .stackflow fund-pipe token amount RESERVOIR nonce)
+    (try! (check-valid stackflow token))
+    (contract-call? stackflow fund-pipe token amount RESERVOIR nonce)
   )
 )
 
@@ -109,6 +121,7 @@
 ;;; - `ERR_BORROW_FEE_PAYMENT_FAILED` if the fee payment failed
 ;;; - Errors passed through from the StackFlow `deposit` function
 (define-public (borrow-liquidity
+    (stackflow <stackflow-token>)
     (amount uint)
     (fee uint)
     (token (optional <sip-010>))
@@ -122,7 +135,7 @@
       (borrower tx-sender)
       (expected-fee (get-borrow-fee amount))
     )
-    (asserts! (var-get initialized) ERR_NOT_INITIALIZED)
+    (try! (check-valid stackflow token))
     (asserts! (>= fee expected-fee) ERR_INVALID_FEE)
     (unwrap!
       (match token
@@ -131,7 +144,7 @@
       )
       ERR_BORROW_FEE_PAYMENT_FAILED
     )
-    (as-contract (contract-call? .stackflow deposit amount token borrower reservoir-balance
+    (as-contract (contract-call? stackflow deposit amount token borrower reservoir-balance
       my-balance reservoir-signature my-signature nonce
     ))
   )
@@ -167,7 +180,7 @@
   )
   (begin
     (asserts! (is-eq contract-caller OPERATOR) ERR_UNAUTHORIZED)
-    (asserts! (var-get initialized) ERR_NOT_INITIALIZED)
+    (try! (check-valid-token token))
     (unwrap!
       (match token
         t (contract-call? t transfer amount tx-sender (as-contract tx-sender) none)
@@ -207,5 +220,36 @@
   (match trait
     t (some (contract-of t))
     none
+  )
+)
+
+;;; Check if the Reservoir is initialized and the correct stackflow and token
+;;; contracts are passed.
+(define-private (check-valid
+    (stackflow <stackflow-token>)
+    (token (optional <sip-010>))
+  )
+  (begin
+    (asserts! (var-get initialized) ERR_NOT_INITIALIZED)
+    (asserts! (is-eq (some (contract-of stackflow)) (var-get stackflow-contract))
+      ERR_INCORRECT_STACKFLOW
+    )
+    (asserts! (is-eq (contract-of-optional token) (var-get supported-token))
+      ERR_UNAPPROVED_TOKEN
+    )
+    (ok true)
+  )
+)
+
+;;; Check if the Reservoir is initialized and the correct token is passed.
+(define-private (check-valid-token
+    (token (optional <sip-010>))
+  )
+  (begin
+    (asserts! (var-get initialized) ERR_NOT_INITIALIZED)
+    (asserts! (is-eq (contract-of-optional token) (var-get supported-token))
+      ERR_UNAPPROVED_TOKEN
+    )
+    (ok true)
   )
 )
