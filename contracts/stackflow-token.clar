@@ -29,6 +29,16 @@
 (use-trait sip-010 'SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE.sip-010-trait-ft-standard.sip-010-trait)
 
 (define-trait stackflow-token (
+  (register-agent
+    (
+      principal            ;; agent
+    )
+    (response bool uint)
+  )
+  (deregister-agent
+    ()
+    (response bool uint)
+  )
   (fund-pipe
     (
       (optional <sip-010>) ;; token

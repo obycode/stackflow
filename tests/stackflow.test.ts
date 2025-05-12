@@ -1,251 +1,25 @@
-import {
-  Cl,
-  ClarityType,
-  ClarityValue,
-  createStacksPrivateKey,
-  cvToString,
-  ResponseOkCV,
-  serializeCV,
-  signWithKey,
-  StacksPrivateKey,
-} from "@stacks/transactions";
+import { Cl, ClarityType, ResponseOkCV } from "@stacks/transactions";
 import { describe, expect, it } from "vitest";
-import { createHash } from "crypto";
-
-const accounts = simnet.getAccounts();
-const deployer = accounts.get("deployer")!;
-const address1 = accounts.get("wallet_1")!;
-const address2 = accounts.get("wallet_2")!;
-const address3 = accounts.get("wallet_3")!;
-const stackflowContract = `${deployer}.stackflow`;
-
-const address1PK = createStacksPrivateKey(
-  "7287ba251d44a4d3fd9276c88ce34c5c52a038955511cccaf77e61068649c17801"
-);
-const address2PK = createStacksPrivateKey(
-  "530d9f61984c888536871c6573073bdfc0058896dc1adfe9a6a10dfacadc209101"
-);
-const address3PK = createStacksPrivateKey(
-  "d655b2523bcd65e34889725c73064feb17ceb796831c0e111ba1a552b0f31b3901"
-);
-
-const WAITING_PERIOD = 144;
-const MAX_HEIGHT = 340282366920938463463374607431768211455n;
-
-enum PipeAction {
-  Close = 0,
-  Transfer = 1,
-  Deposit = 2,
-  Withdraw = 3,
-}
-
-enum TxError {
-  DepositFailed = 100,
-  NoSuchPipe = 101,
-  InvalidPrincipal = 102,
-  InvalidSenderSignature = 103,
-  InvalidOtherSignature = 104,
-  ConsensusBuff = 105,
-  Unauthorized = 106,
-  MaxAllowed = 107,
-  InvalidTotalBalance = 108,
-  WithdrawalFailed = 109,
-  PipeExpired = 110,
-  NonceTooLow = 111,
-  CloseInProgress = 112,
-  NoCloseInProgress = 113,
-  SelfDispute = 114,
-  AlreadyFunded = 115,
-  InvalidWithdrawal = 116,
-  UnapprovedToken = 117,
-  NotExpired = 118,
-  NotInitialized = 119,
-  AlreadyInitialized = 120,
-  NotValidYet = 121,
-  AlreadyPending = 122,
-  Pending = 123,
-  InvalidBalances = 124,
-}
-
-const CONFIRMATION_DEPTH = 6;
-
-const structuredDataPrefix = Buffer.from([0x53, 0x49, 0x50, 0x30, 0x31, 0x38]);
-
-const chainIds = {
-  mainnet: 1,
-  testnet: 2147483648,
-};
-
-function sha256(data: Buffer): Buffer {
-  return createHash("sha256").update(data).digest();
-}
-
-function structuredDataHash(structuredData: ClarityValue): Buffer {
-  return sha256(Buffer.from(serializeCV(structuredData)));
-}
-
-const domainHash = structuredDataHash(
-  Cl.tuple({
-    name: Cl.stringAscii("StackFlow"),
-    version: Cl.stringAscii("0.6.0"),
-    "chain-id": Cl.uint(chainIds.testnet),
-  })
-);
-
-function structuredDataHashWithPrefix(structuredData: ClarityValue): Buffer {
-  const messageHash = structuredDataHash(structuredData);
-  return sha256(Buffer.concat([structuredDataPrefix, domainHash, messageHash]));
-}
-
-function signStructuredData(
-  privateKey: StacksPrivateKey,
-  structuredData: ClarityValue
-): Buffer {
-  const hash = structuredDataHashWithPrefix(structuredData);
-  const data = signWithKey(privateKey, hash.toString("hex")).data;
-  return Buffer.from(data.slice(2) + data.slice(0, 2), "hex");
-}
-
-function generatePipeSignature(
-  privateKey: StacksPrivateKey,
-  token: [string, string] | null,
-  myPrincipal: string,
-  theirPrincipal: string,
-  myBalance: number,
-  theirBalance: number,
-  nonce: number,
-  action: PipeAction,
-  actor: string,
-  secret: string | null = null,
-  valid_after: number | null = null
-): Buffer {
-  const meFirst = myPrincipal < theirPrincipal;
-  const principal1 = meFirst ? myPrincipal : theirPrincipal;
-  const principal2 = meFirst ? theirPrincipal : myPrincipal;
-  const balance1 = meFirst ? myBalance : theirBalance;
-  const balance2 = meFirst ? theirBalance : myBalance;
-
-  const tokenCV =
-    token === null
-      ? Cl.none()
-      : Cl.some(Cl.contractPrincipal(token[0], token[1]));
-  const secretCV =
-    secret === null
-      ? Cl.none()
-      : Cl.some(Cl.buffer(sha256(Buffer.from(secret, "hex"))));
-  const validAfterCV =
-    valid_after === null ? Cl.none() : Cl.some(Cl.uint(valid_after));
-
-  const data = Cl.tuple({
-    token: tokenCV,
-    "principal-1": Cl.principal(principal1),
-    "principal-2": Cl.principal(principal2),
-    "balance-1": Cl.uint(balance1),
-    "balance-2": Cl.uint(balance2),
-    nonce: Cl.uint(nonce),
-    action: Cl.uint(action),
-    actor: Cl.principal(actor),
-    "hashed-secret": secretCV,
-    "valid-after": validAfterCV,
-  });
-  return signStructuredData(privateKey, data);
-}
-
-function generateClosePipeSignature(
-  privateKey: StacksPrivateKey,
-  token: [string, string] | null,
-  myPrincipal: string,
-  theirPrincipal: string,
-  myBalance: number,
-  theirBalance: number,
-  nonce: number,
-  actor: string
-): Buffer {
-  return generatePipeSignature(
-    privateKey,
-    token,
-    myPrincipal,
-    theirPrincipal,
-    myBalance,
-    theirBalance,
-    nonce,
-    PipeAction.Close,
-    actor
-  );
-}
-
-function generateTransferSignature(
-  privateKey: StacksPrivateKey,
-  token: [string, string] | null,
-  myPrincipal: string,
-  theirPrincipal: string,
-  myBalance: number,
-  theirBalance: number,
-  nonce: number,
-  actor: string,
-  secret: string | null = null,
-  valid_after: number | null = null
-): Buffer {
-  return generatePipeSignature(
-    privateKey,
-    token,
-    myPrincipal,
-    theirPrincipal,
-    myBalance,
-    theirBalance,
-    nonce,
-    PipeAction.Transfer,
-    actor,
-    secret,
-    valid_after
-  );
-}
-
-function generateDepositSignature(
-  privateKey: StacksPrivateKey,
-  token: [string, string] | null,
-  myPrincipal: string,
-  theirPrincipal: string,
-  myBalance: number,
-  theirBalance: number,
-  nonce: number,
-  actor: string
-): Buffer {
-  return generatePipeSignature(
-    privateKey,
-    token,
-    myPrincipal,
-    theirPrincipal,
-    myBalance,
-    theirBalance,
-    nonce,
-    PipeAction.Deposit,
-    actor
-  );
-}
-
-function generateWithdrawSignature(
-  privateKey: StacksPrivateKey,
-  token: [string, string] | null,
-  myPrincipal: string,
-  theirPrincipal: string,
-  myBalance: number,
-  theirBalance: number,
-  nonce: number,
-  actor: string
-): Buffer {
-  return generatePipeSignature(
-    privateKey,
-    token,
-    myPrincipal,
-    theirPrincipal,
-    myBalance,
-    theirBalance,
-    nonce,
-    PipeAction.Withdraw,
-    actor
-  );
-}
+import {
+  deployer,
+  StackflowError,
+  address2,
+  address1,
+  address3,
+  stackflowContract,
+  CONFIRMATION_DEPTH,
+  MAX_HEIGHT,
+  generateClosePipeSignature,
+  address1PK,
+  address2PK,
+  WAITING_PERIOD,
+  generateTransferSignature,
+  PipeAction,
+  generateDepositSignature,
+  generateWithdrawSignature,
+  address3PK,
+  structuredDataHashWithPrefix,
+} from "./utils";
 
 describe("init", () => {
   it("can initialize the contract for STX", () => {
@@ -282,7 +56,7 @@ describe("init", () => {
       [Cl.none()],
       deployer
     );
-    expect(result).toBeErr(Cl.uint(TxError.AlreadyInitialized));
+    expect(result).toBeErr(Cl.uint(StackflowError.AlreadyInitialized));
   });
 
   it("cannot fund a pipe before initializing the contract", () => {
@@ -292,7 +66,7 @@ describe("init", () => {
       [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
-    expect(result).toBeErr(Cl.uint(TxError.NotInitialized));
+    expect(result).toBeErr(Cl.uint(StackflowError.NotInitialized));
   });
 });
 
@@ -438,7 +212,7 @@ describe("fund-pipe", () => {
       ],
       address1
     );
-    expect(resultBefore).toBeErr(Cl.uint(TxError.InvalidBalances));
+    expect(resultBefore).toBeErr(Cl.uint(StackflowError.InvalidBalances));
 
     // Wait for the fund to confirm
     simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
@@ -555,7 +329,7 @@ describe("fund-pipe", () => {
       [Cl.none(), Cl.uint(2000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
-    expect(badResult).toBeErr(Cl.uint(TxError.AlreadyFunded));
+    expect(badResult).toBeErr(Cl.uint(StackflowError.AlreadyFunded));
 
     // Verify the pipe did not change
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
@@ -616,7 +390,7 @@ describe("fund-pipe", () => {
       [Cl.none(), Cl.uint(2000000), Cl.principal(address2), Cl.uint(0)],
       address1
     );
-    expect(badResult).toBeErr(Cl.uint(TxError.AlreadyPending));
+    expect(badResult).toBeErr(Cl.uint(StackflowError.AlreadyPending));
 
     // Verify the pipe did not change
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
@@ -710,7 +484,7 @@ describe("fund-pipe", () => {
       [Cl.none(), Cl.uint(3000000), Cl.principal(address1), Cl.uint(0)],
       address2
     );
-    expect(badResult).toBeErr(Cl.uint(TxError.AlreadyFunded));
+    expect(badResult).toBeErr(Cl.uint(StackflowError.AlreadyFunded));
 
     // Verify the pipe did not change
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
@@ -778,7 +552,7 @@ describe("fund-pipe", () => {
       ],
       address1
     );
-    expect(result).toBeErr(Cl.uint(TxError.UnapprovedToken));
+    expect(result).toBeErr(Cl.uint(StackflowError.UnapprovedToken));
   });
 
   it("can fund a pipe with an approved token", () => {
@@ -1010,7 +784,7 @@ describe("fund-pipe", () => {
       ],
       address1
     );
-    expect(badResult).toBeErr(Cl.uint(TxError.AlreadyFunded));
+    expect(badResult).toBeErr(Cl.uint(StackflowError.AlreadyFunded));
 
     // Verify the pipe did not change
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
@@ -1138,7 +912,7 @@ describe("fund-pipe", () => {
       ],
       address2
     );
-    expect(badResult).toBeErr(Cl.uint(TxError.AlreadyFunded));
+    expect(badResult).toBeErr(Cl.uint(StackflowError.AlreadyFunded));
 
     // Verify the pipe did not change
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
@@ -1575,7 +1349,7 @@ describe("close-pipe", () => {
       ],
       address1
     );
-    expect(result).toBeErr(Cl.uint(TxError.InvalidSenderSignature));
+    expect(result).toBeErr(Cl.uint(StackflowError.InvalidSenderSignature));
 
     // Verify the balances
     const stxBalances = simnet.getAssetsMap().get("STX")!;
@@ -1647,7 +1421,7 @@ describe("close-pipe", () => {
       ],
       address2
     );
-    expect(result).toBeErr(Cl.uint(TxError.InvalidOtherSignature));
+    expect(result).toBeErr(Cl.uint(StackflowError.InvalidOtherSignature));
 
     // Verify the balances
     const stxBalances = simnet.getAssetsMap().get("STX")!;
@@ -1719,7 +1493,7 @@ describe("close-pipe", () => {
       ],
       address1
     );
-    expect(result).toBeErr(Cl.uint(TxError.InvalidTotalBalance));
+    expect(result).toBeErr(Cl.uint(StackflowError.InvalidTotalBalance));
 
     // Verify the balances
     const stxBalances = simnet.getAssetsMap().get("STX")!;
@@ -1880,7 +1654,7 @@ describe("force-cancel", () => {
       [Cl.none(), Cl.principal(address1)],
       address3
     );
-    expect(result).toBeErr(Cl.uint(TxError.NoSuchPipe));
+    expect(result).toBeErr(Cl.uint(StackflowError.NoSuchPipe));
   });
 });
 
@@ -2133,7 +1907,7 @@ describe("force-close", () => {
       ],
       address1
     );
-    expect(result).toBeErr(Cl.uint(TxError.InvalidSenderSignature));
+    expect(result).toBeErr(Cl.uint(StackflowError.InvalidSenderSignature));
 
     // Verify the balances
     const stxBalances = simnet.getAssetsMap().get("STX")!;
@@ -2209,7 +1983,7 @@ describe("force-close", () => {
       ],
       address2
     );
-    expect(result).toBeErr(Cl.uint(TxError.InvalidOtherSignature));
+    expect(result).toBeErr(Cl.uint(StackflowError.InvalidOtherSignature));
 
     // Verify the balances
     const stxBalances = simnet.getAssetsMap().get("STX")!;
@@ -2285,7 +2059,7 @@ describe("force-close", () => {
       ],
       address1
     );
-    expect(result).toBeErr(Cl.uint(TxError.InvalidTotalBalance));
+    expect(result).toBeErr(Cl.uint(StackflowError.InvalidTotalBalance));
 
     // Verify the balances
     const stxBalances = simnet.getAssetsMap().get("STX")!;
@@ -2367,7 +2141,7 @@ describe("force-close", () => {
       address1
     );
 
-    expect(result).toBeErr(Cl.uint(TxError.NotValidYet));
+    expect(result).toBeErr(Cl.uint(StackflowError.NotValidYet));
   });
 
   it("cannot force-close with deposit signatures that were never applied", () => {
@@ -2438,7 +2212,7 @@ describe("force-close", () => {
       address1
     );
 
-    expect(result).toBeErr(Cl.uint(TxError.InvalidTotalBalance));
+    expect(result).toBeErr(Cl.uint(StackflowError.InvalidTotalBalance));
   });
 
   it("cannot force-close with withdraw signatures that were never applied", () => {
@@ -2509,7 +2283,7 @@ describe("force-close", () => {
       address1
     );
 
-    expect(result).toBeErr(Cl.uint(TxError.InvalidTotalBalance));
+    expect(result).toBeErr(Cl.uint(StackflowError.InvalidTotalBalance));
   });
 });
 
@@ -2575,7 +2349,7 @@ describe("dispute-closure", () => {
       ],
       address3
     );
-    expect(result).toBeErr(Cl.uint(TxError.NoSuchPipe));
+    expect(result).toBeErr(Cl.uint(StackflowError.NoSuchPipe));
   });
 
   it("disputing a pipe that is not closing gives an error", () => {
@@ -2644,7 +2418,7 @@ describe("dispute-closure", () => {
       ],
       address2
     );
-    expect(disputeResult).toBeErr(Cl.uint(TxError.NoCloseInProgress));
+    expect(disputeResult).toBeErr(Cl.uint(StackflowError.NoCloseInProgress));
 
     // Verify that the map entry is unchanged
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
@@ -2971,7 +2745,7 @@ describe("dispute-closure", () => {
       ],
       address1
     );
-    expect(disputeResult).toBeErr(Cl.uint(TxError.SelfDispute));
+    expect(disputeResult).toBeErr(Cl.uint(StackflowError.SelfDispute));
 
     // Verify that the map entry is unchanged
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
@@ -3185,7 +2959,7 @@ describe("agent-dispute-closure", () => {
       ],
       address3
     );
-    expect(result).toBeErr(Cl.uint(TxError.NoSuchPipe));
+    expect(result).toBeErr(Cl.uint(StackflowError.NoSuchPipe));
   });
 
   it("disputing a pipe that is not closing gives an error", () => {
@@ -3263,7 +3037,7 @@ describe("agent-dispute-closure", () => {
       ],
       address3
     );
-    expect(disputeResult).toBeErr(Cl.uint(TxError.NoCloseInProgress));
+    expect(disputeResult).toBeErr(Cl.uint(StackflowError.NoCloseInProgress));
 
     // Verify that the map entry is unchanged
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
@@ -3617,7 +3391,7 @@ describe("agent-dispute-closure", () => {
       ],
       address3
     );
-    expect(disputeResult).toBeErr(Cl.uint(TxError.SelfDispute));
+    expect(disputeResult).toBeErr(Cl.uint(StackflowError.SelfDispute));
 
     // Verify that the map entry is unchanged
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
@@ -3675,7 +3449,7 @@ describe("finalize", () => {
       [Cl.none(), Cl.principal(address1)],
       address3
     );
-    expect(result).toBeErr(Cl.uint(TxError.NoSuchPipe));
+    expect(result).toBeErr(Cl.uint(StackflowError.NoSuchPipe));
   });
 
   it("finalizing a pipe that is not closing gives an error", () => {
@@ -3710,7 +3484,7 @@ describe("finalize", () => {
       [Cl.none(), Cl.principal(address1)],
       address2
     );
-    expect(disputeResult).toBeErr(Cl.uint(TxError.NoCloseInProgress));
+    expect(disputeResult).toBeErr(Cl.uint(StackflowError.NoCloseInProgress));
 
     // Verify that the map entry is unchanged
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
@@ -4038,7 +3812,7 @@ describe("finalize", () => {
       [Cl.none(), Cl.principal(address2)],
       address1
     );
-    expect(disputeResult).toBeErr(Cl.uint(TxError.NotExpired));
+    expect(disputeResult).toBeErr(Cl.uint(StackflowError.NotExpired));
 
     // Verify that the map entry is unchanged
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
@@ -4427,7 +4201,7 @@ describe("deposit", () => {
       ],
       address1
     );
-    expect(result1).toBeErr(Cl.uint(TxError.NoSuchPipe));
+    expect(result1).toBeErr(Cl.uint(StackflowError.NoSuchPipe));
 
     simnet.callPublicFn(
       "stackflow",
@@ -4461,7 +4235,7 @@ describe("deposit", () => {
       ],
       address1
     );
-    expect(result2).toBeErr(Cl.uint(TxError.NoSuchPipe));
+    expect(result2).toBeErr(Cl.uint(StackflowError.NoSuchPipe));
   });
 
   it("can not deposit with bad signatures", () => {
@@ -4529,7 +4303,7 @@ describe("deposit", () => {
       ],
       address2
     );
-    expect(result).toBeErr(Cl.uint(TxError.InvalidSenderSignature));
+    expect(result).toBeErr(Cl.uint(StackflowError.InvalidSenderSignature));
 
     // Verify the balances
     const stxBalances = simnet.getAssetsMap().get("STX")!;
@@ -4661,7 +4435,7 @@ describe("deposit", () => {
       address1
     );
 
-    expect(result2).toBeErr(Cl.uint(TxError.NonceTooLow));
+    expect(result2).toBeErr(Cl.uint(StackflowError.NonceTooLow));
 
     // Verify the balances did not change with the failed deposit
     const stxBalances = simnet.getAssetsMap().get("STX")!;
@@ -4754,7 +4528,7 @@ describe("deposit", () => {
       address1
     );
 
-    expect(result).toBeErr(Cl.uint(TxError.InvalidBalances));
+    expect(result).toBeErr(Cl.uint(StackflowError.InvalidBalances));
   });
 });
 
@@ -5027,7 +4801,7 @@ describe("withdraw", () => {
       address1
     );
 
-    expect(result).toBeErr(Cl.uint(TxError.InvalidSenderSignature));
+    expect(result).toBeErr(Cl.uint(StackflowError.InvalidSenderSignature));
 
     // Verify the balances
     const stxBalances = simnet.getAssetsMap().get("STX")!;
@@ -5132,7 +4906,7 @@ describe("withdraw", () => {
       address1
     );
 
-    expect(result).toBeErr(Cl.uint(TxError.InvalidOtherSignature));
+    expect(result).toBeErr(Cl.uint(StackflowError.InvalidOtherSignature));
 
     // Verify the balances
     const stxBalances = simnet.getAssetsMap().get("STX")!;
@@ -5237,7 +5011,7 @@ describe("withdraw", () => {
       address2
     );
 
-    expect(result).toBeErr(Cl.uint(TxError.InvalidSenderSignature));
+    expect(result).toBeErr(Cl.uint(StackflowError.InvalidSenderSignature));
 
     // Verify the balances
     const stxBalances = simnet.getAssetsMap().get("STX")!;
@@ -5391,7 +5165,7 @@ describe("withdraw", () => {
       address1
     );
 
-    expect(result).toBeErr(Cl.uint(TxError.NonceTooLow));
+    expect(result).toBeErr(Cl.uint(StackflowError.NonceTooLow));
 
     // Verify the balances
     const stxBalances = simnet.getAssetsMap().get("STX")!;
@@ -5661,7 +5435,7 @@ describe("agent-dispute additional tests", () => {
       address3
     );
 
-    expect(result).toBeErr(Cl.uint(TxError.Unauthorized));
+    expect(result).toBeErr(Cl.uint(StackflowError.Unauthorized));
   });
 });
 
@@ -5871,7 +5645,7 @@ describe("execute-withdraw", () => {
       [Cl.none(), Cl.uint(100)],
       address1
     );
-    expect(result).toBeErr(Cl.uint(TxError.WithdrawalFailed));
+    expect(result).toBeErr(Cl.uint(StackflowError.WithdrawalFailed));
   });
 
   it("passes when the contract has a sufficient balance", () => {
@@ -5926,7 +5700,7 @@ describe("execute-withdraw", () => {
       [Cl.none(), Cl.uint(101)],
       address1
     );
-    expect(result).toBeErr(Cl.uint(TxError.WithdrawalFailed));
+    expect(result).toBeErr(Cl.uint(StackflowError.WithdrawalFailed));
 
     // Verify the balances have not changed
     const stxBalances = simnet.getAssetsMap().get("STX")!;
@@ -6099,7 +5873,7 @@ describe("transfers with secrets", () => {
       ],
       address1
     );
-    expect(result).toBeErr(Cl.uint(TxError.InvalidSenderSignature));
+    expect(result).toBeErr(Cl.uint(StackflowError.InvalidSenderSignature));
 
     // Verify that the map has not changed
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
@@ -6381,7 +6155,7 @@ describe("transfers with valid-after", () => {
       ],
       address1
     );
-    expect(result).toBeErr(Cl.uint(TxError.NotValidYet));
+    expect(result).toBeErr(Cl.uint(StackflowError.NotValidYet));
 
     // Verify that the map has not changed
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);

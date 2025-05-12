@@ -1235,16 +1235,13 @@
     (is-eq (principal-of? (unwrap! (secp256k1-recover? hash signature) false))
       (ok signer)
     )
-    ;; If the signer is not the actor, then the agent can sign for the signer.
-    (and
-      (not (is-eq signer actor))
-      (match (map-get? agents signer)
-        agent (is-eq
-          (principal-of? (unwrap! (secp256k1-recover? hash signature) false))
-          (ok agent)
-        )
-        false
+    ;; Check if the signer is an agent of the actor
+    (match (map-get? agents signer)
+      agent (is-eq
+        (principal-of? (unwrap! (secp256k1-recover? hash signature) false))
+        (ok agent)
       )
+      false
     )
   )
 )
