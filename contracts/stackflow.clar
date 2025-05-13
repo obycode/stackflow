@@ -32,7 +32,7 @@
 ;; (impl-trait 'SP126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT6AD08RV.stackflow-token-0-6-0.stackflow-token)
 (impl-trait .stackflow-token.stackflow-token)
 
-(define-constant contract-deployer tx-sender)
+(define-constant CONTRACT_DEPLOYER tx-sender)
 (define-constant MAX_HEIGHT u340282366920938463463374607431768211455)
 (define-constant WAITING_PERIOD u144) ;; 24 hours in blocks
 
@@ -130,7 +130,7 @@
 (define-public (init (token (optional <sip-010>)))
   (begin
     (asserts! (not (var-get initialized)) ERR_ALREADY_INITIALIZED)
-    (asserts! (is-eq tx-sender contract-deployer) ERR_UNAUTHORIZED)
+    (asserts! (is-eq tx-sender CONTRACT_DEPLOYER) ERR_UNAUTHORIZED)
     (var-set supported-token (contract-of-optional token))
     (ok (var-set initialized true))
   )
