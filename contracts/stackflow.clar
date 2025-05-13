@@ -182,8 +182,7 @@
         (pipe-key (try! (get-pipe-key (contract-of-optional token) tx-sender with)))
         (existing-pipe (map-get? pipes pipe-key))
         (pipe (match existing-pipe
-          ch
-          ch
+          ch ch
           {
             balance-1: u0,
             balance-2: u0,

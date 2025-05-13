@@ -81,7 +81,7 @@ describe("reservoir", () => {
       // Fund initial tap
       simnet.callPublicFn(
         "reservoir",
-        "fund-tap",
+        "create-tap",
         [
           Cl.principal(stackflowContract),
           Cl.none(),
@@ -207,7 +207,7 @@ describe("reservoir", () => {
     it("can fund new tap", () => {
       const { result } = simnet.callPublicFn(
         "reservoir",
-        "fund-tap",
+        "create-tap",
         [
           Cl.principal(stackflowContract),
           Cl.none(),
@@ -250,7 +250,7 @@ describe("reservoir", () => {
       // Fund initial tap
       const { result } = simnet.callPublicFn(
         "reservoir",
-        "fund-tap",
+        "create-tap",
         [
           Cl.principal(stackflowContract),
           Cl.none(),
@@ -367,7 +367,7 @@ describe("reservoir", () => {
       // Fund initial tap
       simnet.callPublicFn(
         "reservoir",
-        "fund-tap",
+        "create-tap",
         [
           Cl.principal(stackflowContract),
           Cl.none(),
@@ -420,6 +420,130 @@ describe("reservoir", () => {
         address1
       );
       expect(result).toBeErr(Cl.uint(StackflowError.DepositFailed));
+    });
+  });
+
+  describe("adding funds to tap", () => {
+    beforeEach(() => {
+      // Create initial tap with some funds
+      simnet.callPublicFn(
+        "reservoir",
+        "create-tap",
+        [
+          Cl.principal(stackflowContract),
+          Cl.none(),
+          Cl.uint(1000000), // Initial balance
+          Cl.uint(0),
+        ],
+        address1
+      );
+
+      // Wait for the fund to confirm
+      simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+    });
+
+    it("can add funds to existing tap", () => {
+      const additionalAmount = 500000;
+      const nonce = 1;
+      const currentBalance = 1000000;
+
+      const mySignature = generateDepositSignature(
+        address1PK,
+        null,
+        address1,
+        reservoirContract,
+        currentBalance + additionalAmount,
+        0,
+        nonce,
+        address1
+      );
+
+      const reservoirSignature = generateDepositSignature(
+        deployerPK,
+        null,
+        reservoirContract,
+        address1,
+        0,
+        currentBalance + additionalAmount,
+        nonce,
+        address1
+      );
+
+      const { result } = simnet.callPublicFn(
+        "reservoir",
+        "add-funds",
+        [
+          Cl.principal(stackflowContract),
+          Cl.uint(additionalAmount),
+          Cl.none(),
+          Cl.uint(currentBalance + additionalAmount),
+          Cl.uint(0),
+          Cl.buffer(mySignature),
+          Cl.buffer(reservoirSignature),
+          Cl.uint(nonce),
+        ],
+        address1
+      );
+
+      expect(result).toBeOk(
+        Cl.tuple({
+          token: Cl.none(),
+          "principal-1": Cl.principal(address1),
+          "principal-2": Cl.principal(reservoirContract),
+        })
+      );
+
+      // Verify the updated balance in the tap
+      const stxBalances = simnet.getAssetsMap().get("STX")!;
+      const tapBalance = stxBalances.get(stackflowContract);
+      expect(tapBalance).toBe(1500000n); // Initial 1000000 + additional 500000
+    });
+
+    it("fails with invalid signatures", () => {
+      const additionalAmount = 500000;
+      const nonce = 1;
+      const currentBalance = 1000000;
+
+      // Generate invalid signature by using wrong nonce
+      const mySignature = generateDepositSignature(
+        address1PK,
+        null,
+        address1,
+        reservoirContract,
+        currentBalance + additionalAmount,
+        0,
+        nonce + 1, // Wrong nonce
+        address1
+      );
+
+      const reservoirSignature = generateDepositSignature(
+        deployerPK,
+        null,
+        reservoirContract,
+        address1,
+        0,
+        currentBalance + additionalAmount,
+        nonce,
+        address1
+      );
+
+      const { result } = simnet.callPublicFn(
+        "reservoir",
+        "add-funds",
+        [
+          Cl.principal(stackflowContract),
+          Cl.uint(additionalAmount),
+          Cl.none(),
+          Cl.uint(currentBalance + additionalAmount),
+          Cl.uint(0),
+          Cl.buffer(mySignature),
+          Cl.buffer(reservoirSignature),
+          Cl.uint(nonce),
+        ],
+        address1
+      );
+
+      expect(result).toBeErr(Cl.uint(StackflowError.InvalidSenderSignature));
     });
   });
 });

@@ -54,13 +54,6 @@
 ;;; The StackFlow contract that this Reservoir is registered with.
 (define-data-var stackflow-contract (optional principal) none)
 
-;;; Track the open taps
-;; The key is the principal and the value is the height at which it was opened.
-(define-map taps
-  principal
-  uint
-)
-
 (define-public (init
     (stackflow <stackflow-token>)
     (token (optional <sip-010>))
@@ -87,19 +80,20 @@
   )
 )
 
-;;; Deposit `amount` funds into an unfunded tap for FT `token` (`none`
-;;; indicates STX). Create the tap if one does not already exist.
+;;; Create a new tap for FT `token` (`none` indicates STX) and deposit
+;;; `amount` funds into it.
 ;;; Returns:
 ;;; - The pipe key on success
 ;;;   ```
 ;;;   { token: (optional principal), principal-1: principal, principal-2: principal }
 ;;;   ```
 ;;; - `ERR_NOT_INITIALIZED` if the contract has not been initialized
+;;; - `ERR_INCORRECT_STACKFLOW` if the StackFlow contract is not the correct one
 ;;; - `ERR_UNAPPROVED_TOKEN` if the token is not the correct token
 ;;; - `ERR_NONCE_TOO_LOW` if the nonce is less than the pipe's saved nonce
 ;;; - `ERR_CLOSE_IN_PROGRESS` if a forced closure is in progress
 ;;; - `ERR_ALREADY_FUNDED` if the pipe has already been funded
-(define-public (fund-tap
+(define-public (create-tap
     (stackflow <stackflow-token>)
     (token (optional <sip-010>))
     (amount uint)
@@ -108,6 +102,40 @@
   (begin
     (try! (check-valid stackflow token))
     (contract-call? stackflow fund-pipe token amount RESERVOIR nonce)
+  )
+)
+
+;;; Deposit `amount` additional funds into an existing pipe between
+;;; `tx-sender` and `with` for FT `token` (`none` indicates STX). Signatures
+;;; must confirm the deposit and the new balances.
+;;; Returns:
+;;; -`(ok pipe-key)` on success
+;;; - `ERR_NOT_INITIALIZED` if the contract has not been initialized
+;;; - `ERR_INCORRECT_STACKFLOW` if the StackFlow contract is not the correct one
+;;; - `ERR_UNAPPROVED_TOKEN` if the token is not the correct token
+;;; - `ERR_NO_SUCH_PIPE` if the pipe does not exist
+;;; - `ERR_CLOSE_IN_PROGRESS` if a forced closure is in progress
+;;; - `ERR_NONCE_TOO_LOW` if the nonce is less than the pipe's saved nonce
+;;; - `ERR_INVALID_TOTAL_BALANCE` if the total balance of the pipe is not
+;;;   equal to the sum of the balances provided and the deposit amount
+;;; - `ERR_INVALID_SENDER_SIGNATURE` if the sender's signature is invalid
+;;; - `ERR_INVALID_OTHER_SIGNATURE` if the other party's signature is invalid
+;;; - `ERR_DEPOSIT_FAILED` if the deposit fails
+(define-public (add-funds
+    (stackflow <stackflow-token>)
+    (amount uint)
+    (token (optional <sip-010>))
+    (my-balance uint)
+    (their-balance uint)
+    (my-signature (buff 65))
+    (their-signature (buff 65))
+    (nonce uint)
+  )
+  (begin
+    (try! (check-valid stackflow token))
+    (contract-call? .stackflow deposit amount token RESERVOIR my-balance
+      their-balance my-signature their-signature nonce
+    )
   )
 )
 
@@ -242,9 +270,7 @@
 )
 
 ;;; Check if the Reservoir is initialized and the correct token is passed.
-(define-private (check-valid-token
-    (token (optional <sip-010>))
-  )
+(define-private (check-valid-token (token (optional <sip-010>)))
   (begin
     (asserts! (var-get initialized) ERR_NOT_INITIALIZED)
     (asserts! (is-eq (contract-of-optional token) (var-get supported-token))

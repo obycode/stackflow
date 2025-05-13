@@ -86,13 +86,13 @@ plan:
             path: contracts/stackflow-token.clar
             clarity-version: 3
         - emulated-contract-publish:
-            contract-name: reservoir
-            emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
-            path: contracts/reservoir.clar
-            clarity-version: 3
-        - emulated-contract-publish:
             contract-name: stackflow
             emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
             path: contracts/stackflow.clar
+            clarity-version: 3
+        - emulated-contract-publish:
+            contract-name: reservoir
+            emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
+            path: contracts/reservoir.clar
             clarity-version: 3
       epoch: "3.1"
