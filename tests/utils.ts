@@ -75,6 +75,10 @@ export enum ReservoirError {
   FundingFailed = 202,
   TransferFailed = 203,
   InvalidFee = 204,
+  AlreadyInitialized = 205,
+  NotInitialized = 206,
+  UnapprovedToken = 207,
+  IncorrectStackflow = 208,
 }
 
 const structuredDataPrefix = Buffer.from([0x53, 0x49, 0x50, 0x30, 0x31, 0x38]);
@@ -129,7 +133,9 @@ export function generatePipeSignature(
   secret: string | null = null,
   valid_after: number | null = null
 ): Buffer {
-  const meFirst = serializeCV(Cl.principal(myPrincipal)) < serializeCV(Cl.principal(theirPrincipal));
+  const meFirst =
+    serializeCV(Cl.principal(myPrincipal)) <
+    serializeCV(Cl.principal(theirPrincipal));
   const principal1 = meFirst ? myPrincipal : theirPrincipal;
   const principal2 = meFirst ? theirPrincipal : myPrincipal;
   const balance1 = meFirst ? myBalance : theirBalance;
