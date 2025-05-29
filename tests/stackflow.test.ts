@@ -1,5 +1,10 @@
-import { Cl, ClarityType, ResponseOkCV } from "@stacks/transactions";
-import { describe, expect, it } from "vitest";
+import {
+  Cl,
+  ClarityType,
+  ClarityValue,
+  ResponseOkCV,
+} from "@stacks/transactions";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   deployer,
   StackflowError,
@@ -6191,5 +6196,301 @@ describe("transfers with valid-after", () => {
 
     const contractBalance = stxBalances.get(stackflowContract);
     expect(contractBalance).toBe(3000000n);
+  });
+});
+
+// `verify-signature` is the read-only function that users can call off-chain
+// to validate a signature.
+describe("verify-signature", () => {
+  var pipeKey: ClarityValue;
+
+  // Setup - ensure contract is initialized
+  beforeEach(() => {
+    // Initialize the contract
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
+    // Fund a pipe
+    let { result } = simnet.callPublicFn(
+      "stackflow",
+      "fund-pipe",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(10)],
+      address1
+    );
+    expect(result.type).toBe(ClarityType.ResponseOk);
+    pipeKey = (result as ResponseOkCV).value;
+
+    // Mine blocks to confirm the transaction
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+  });
+
+  it("validates a valid signature", () => {
+    const balance1 = 600000;
+    const balance2 = 400000;
+    const nonce = 11;
+
+    const signature = generateTransferSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      balance1,
+      balance2,
+      nonce,
+      address2
+    );
+    const { result } = simnet.callReadOnlyFn(
+      "stackflow",
+      "verify-signature",
+      [
+        Cl.buffer(signature),
+        Cl.principal(address1),
+        pipeKey,
+        Cl.uint(balance1),
+        Cl.uint(balance2),
+        Cl.uint(nonce),
+        Cl.uint(PipeAction.Transfer),
+        Cl.principal(address2),
+        Cl.none(),
+        Cl.none(),
+      ],
+      address1
+    );
+
+    expect(result).toBeOk(Cl.none());
+  });
+
+  it("rejects signature from wrong signer", () => {
+    const balance1 = 500000;
+    const balance2 = 500000;
+    const nonce = 21;
+
+    const signature1 = generateClosePipeSignature(
+      address3PK, // Wrong signer
+      null,
+      address1,
+      address2,
+      balance1,
+      balance2,
+      nonce,
+      address1
+    );
+
+    // Using the wrong signer for the signature
+    const { result } = simnet.callReadOnlyFn(
+      "stackflow",
+      "verify-signature",
+      [
+        Cl.buffer(signature1),
+        Cl.principal(address1),
+        pipeKey,
+        Cl.uint(balance1),
+        Cl.uint(balance2),
+        Cl.uint(nonce),
+        Cl.uint(PipeAction.Close),
+        Cl.principal(address1),
+        Cl.none(),
+        Cl.none(),
+      ],
+      address1
+    );
+
+    expect(result).toBeErr(Cl.uint(StackflowError.InvalidSignature));
+  });
+
+  it("rejects signature over the wrong data", () => {
+    const balance1 = 500000;
+    const balance2 = 500000;
+    const nonce = 21;
+
+    const signature1 = generateClosePipeSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      balance1,
+      balance2,
+      nonce,
+      address1
+    );
+
+    // Using the wrong signer for the signature
+    const { result } = simnet.callReadOnlyFn(
+      "stackflow",
+      "verify-signature",
+      [
+        Cl.buffer(signature1),
+        Cl.principal(address1),
+        pipeKey,
+        Cl.uint(balance1),
+        Cl.uint(balance2),
+        Cl.uint(nonce + 1), // Different nonce
+        Cl.uint(PipeAction.Close),
+        Cl.principal(address1),
+        Cl.none(),
+        Cl.none(),
+      ],
+      address1
+    );
+
+    expect(result).toBeErr(Cl.uint(StackflowError.InvalidSignature));
+  });
+
+  it("rejects signature with invalid balances", () => {
+    const balance1 = 600000;
+    const balance2 = 500000;
+    const nonce = 21;
+
+    const signature1 = generateTransferSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      balance1,
+      balance2,
+      nonce,
+      address1
+    );
+
+    const { result } = simnet.callReadOnlyFn(
+      "stackflow",
+      "verify-signature",
+      [
+        Cl.buffer(signature1),
+        Cl.principal(address1),
+        pipeKey,
+        Cl.uint(balance1),
+        Cl.uint(balance2),
+        Cl.uint(nonce),
+        Cl.uint(PipeAction.Close),
+        Cl.principal(address1),
+        Cl.none(),
+        Cl.none(),
+      ],
+      address1
+    );
+
+    expect(result).toBeErr(Cl.uint(StackflowError.InvalidTotalBalance));
+  });
+
+  it("rejects signature with invalid nonce", () => {
+    const balance1 = 700000;
+    const balance2 = 300000;
+    const nonce = 10; // Nonce is too low, should be > 10
+
+    const signature1 = generateTransferSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      balance1,
+      balance2,
+      nonce,
+      address1
+    );
+
+    // Using the wrong signer for the signature
+    const { result } = simnet.callReadOnlyFn(
+      "stackflow",
+      "verify-signature",
+      [
+        Cl.buffer(signature1),
+        Cl.principal(address1),
+        pipeKey,
+        Cl.uint(balance1),
+        Cl.uint(balance2),
+        Cl.uint(nonce),
+        Cl.uint(PipeAction.Close),
+        Cl.principal(address1),
+        Cl.none(),
+        Cl.none(),
+      ],
+      address1
+    );
+
+    expect(result).toBeErr(Cl.uint(StackflowError.NonceTooLow));
+  });
+
+  it("accepts valid signature with past `valid-after`", () => {
+    const balance1 = 1000000;
+    const balance2 = 0;
+    const nonce = 11;
+    const validAfter = simnet.burnBlockHeight - 2; // Past block height
+
+    const signature1 = generateTransferSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      balance1,
+      balance2,
+      nonce,
+      address1,
+      null,
+      validAfter
+    );
+
+    // Using the wrong signer for the signature
+    const { result } = simnet.callReadOnlyFn(
+      "stackflow",
+      "verify-signature",
+      [
+        Cl.buffer(signature1),
+        Cl.principal(address1),
+        pipeKey,
+        Cl.uint(balance1),
+        Cl.uint(balance2),
+        Cl.uint(nonce),
+        Cl.uint(PipeAction.Transfer),
+        Cl.principal(address1),
+        Cl.none(),
+        Cl.some(Cl.uint(validAfter)),
+      ],
+      address1
+    );
+
+    expect(result).toBeOk(Cl.none());
+  });
+
+  it("accepts valid signature with future `valid-after`", () => {
+    const balance1 = 1000000;
+    const balance2 = 0;
+    const nonce = 11;
+    const validAfter = simnet.burnBlockHeight + 2; // Future block height
+
+    const signature1 = generateTransferSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      balance1,
+      balance2,
+      nonce,
+      address1,
+      null,
+      validAfter
+    );
+
+    // Using the wrong signer for the signature
+    const { result } = simnet.callReadOnlyFn(
+      "stackflow",
+      "verify-signature",
+      [
+        Cl.buffer(signature1),
+        Cl.principal(address1),
+        pipeKey,
+        Cl.uint(balance1),
+        Cl.uint(balance2),
+        Cl.uint(nonce),
+        Cl.uint(PipeAction.Transfer),
+        Cl.principal(address1),
+        Cl.none(),
+        Cl.some(Cl.uint(validAfter)),
+      ],
+      address1
+    );
+
+    expect(result).toBeOk(
+      Cl.some(Cl.uint(validAfter - simnet.burnBlockHeight))
+    );
   });
 });

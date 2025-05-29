@@ -66,6 +66,7 @@ export enum StackflowError {
   AlreadyPending = 122,
   Pending = 123,
   InvalidBalances = 124,
+  InvalidSignature = 125,
   InvalidFee = 204,
 }
 
@@ -111,7 +112,7 @@ export function structuredDataHashWithPrefix(
   return sha256(Buffer.concat([structuredDataPrefix, domainHash, messageHash]));
 }
 
-function signStructuredData(
+export function signStructuredData(
   privateKey: StacksPrivateKey,
   structuredData: ClarityValue
 ): Buffer {

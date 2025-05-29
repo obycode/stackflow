@@ -77,6 +77,7 @@
 (define-constant ERR_ALREADY_PENDING (err u122))
 (define-constant ERR_PENDING (err u123))
 (define-constant ERR_INVALID_BALANCES (err u124))
+(define-constant ERR_INVALID_SIGNATURE (err u125))
 
 ;; Number of burn blocks to wait before considering an on-chain action finalized.
 (define-constant CONFIRMATION_DEPTH u6)
@@ -851,11 +852,19 @@
   )
 )
 
-;;; Validates that `signature` is a valid signature from `signer for the
-;;; structured data constructed from the other arguments.
+;;; Validates that the specified data is valid for the pipe and that
+;;; `signature` is a valid signature from `signer` for this data.
 ;;; Returns:
-;;; - `true` if the signature is valid.
-;;; - `false` if the signature is invalid.
+;;; - `(ok none)` if the signature is valid now
+;;; - `(ok (some burn-block))` if the signature will be valid at `burn-block`
+;;; - `ERR_CONSENSUS_BUFF` if the structured data cannot be converted to a
+;;;   consensus buff
+;;; - `ERR_NO_SUCH_PIPE` if the pipe does not exist
+;;; - `ERR_NONCE_TOO_LOW` if the nonce is less than the pipe's saved nonce
+;;; - `ERR_INVALID_TOTAL_BALANCE` if the total balance is invalid
+;;; - `ERR_INVALID_BALANCES` if the balances would require spending pending
+;;;   deposits
+;;; - `ERR_INVALID_SENDER_SIGNATURE` if the signature is invalid
 (define-read-only (verify-signature
     (signature (buff 65))
     (signer principal)
@@ -872,13 +881,59 @@
     (hashed-secret (optional (buff 32)))
     (valid-after (optional uint))
   )
-  (let ((hash (unwrap!
-      (make-structured-data-hash pipe-key balance-1 balance-2 nonce action actor
+  (let (
+      (hash (try! (make-structured-data-hash pipe-key balance-1 balance-2 nonce action actor
         hashed-secret valid-after
-      )
-      false
+      )))
+      (after (default-to burn-block-height valid-after))
+    )
+    (try! (balance-check pipe-key balance-1 balance-2 valid-after))
+    (try! (nonce-check pipe-key nonce))
+    (try! (verify-hash-signature hash signature signer actor))
+    (if (> after burn-block-height)
+      (ok (some (- after burn-block-height)))
+      (ok none)
+    )
+  )
+)
+
+;;; Validates that the specified data is valid for the pipe and that
+;;; `signature` is a valid signature from `signer` for this data with the
+;;; provided `secret`.
+;;; Returns:
+;;; - `(ok none)` if the signature is valid now
+;;; - `(ok (some burn-block))` if the signature will be valid at `burn-block`
+;;; - `ERR_CONSENSUS_BUFF` if the structured data cannot be converted to a
+;;;   consensus buff
+;;; - `ERR_NO_SUCH_PIPE` if the pipe does not exist
+;;; - `ERR_NONCE_TOO_LOW` if the nonce is less than the pipe's saved nonce
+;;; - `ERR_INVALID_TOTAL_BALANCE` if the total balance is invalid
+;;; - `ERR_INVALID_BALANCES` if the balances would require spending pending
+;;;   deposits
+;;; - `ERR_INVALID_SENDER_SIGNATURE` if the signature is invalid
+(define-read-only (verify-signature-with-secret
+    (signature (buff 65))
+    (signer principal)
+    (pipe-key {
+      token: (optional principal),
+      principal-1: principal,
+      principal-2: principal,
+    })
+    (balance-1 uint)
+    (balance-2 uint)
+    (nonce uint)
+    (action uint)
+    (actor principal)
+    (secret (optional (buff 32)))
+    (valid-after (optional uint))
+  )
+  (let ((hashed-secret (match secret
+      s (some (sha256 s))
+      none
     )))
-    (verify-hash-signature hash signature signer actor)
+    (verify-signature signature signer pipe-key balance-1 balance-2 nonce action
+      actor hashed-secret valid-after
+    )
   )
 )
 
@@ -886,9 +941,10 @@
 ;;; `signer-1` and `signer-2`, respectively, for the structured data
 ;;; constructed from the other arguments.
 ;;; Returns:
-;;; - `(ok true)` if both signatures are valid.
-;;; - `ERR_INVALID_SENDER_SIGNATURE` if the first signature is invalid.
-;;; - `ERR_INVALID_OTHER_SIGNATURE` if the second signature is invalid.
+;;; - `(ok true)` if both signatures are valid
+;;; - `ERR_NO_SUCH_PIPE` if the pipe does not exist
+;;; - `ERR_INVALID_SENDER_SIGNATURE` if the first signature is invalid
+;;; - `ERR_INVALID_OTHER_SIGNATURE` if the second signature is invalid
 (define-read-only (verify-signatures
     (signature-1 (buff 65))
     (signer-1 principal)
@@ -917,10 +973,10 @@
       )))
     )
     (try! (balance-check pipe-key balance-1 balance-2 valid-after))
-    (asserts! (verify-hash-signature hash signature-1 signer-1 actor)
+    (unwrap! (verify-hash-signature hash signature-1 signer-1 actor)
       ERR_INVALID_SENDER_SIGNATURE
     )
-    (asserts! (verify-hash-signature hash signature-2 signer-2 actor)
+    (unwrap! (verify-hash-signature hash signature-2 signer-2 actor)
       ERR_INVALID_OTHER_SIGNATURE
     )
     (ok true)
@@ -1223,25 +1279,31 @@
 )
 
 ;;; Verify a signature for a hash.
-;;; Returns `true` if the signature is valid, `false` otherwise.
+;;; Returns:
+;;; - `(ok true)` if the signature is valid
+;;; - `ERR_INVALID_SIGNATURE` if the signature is invalid
 (define-private (verify-hash-signature
     (hash (buff 32))
     (signature (buff 65))
     (signer principal)
     (actor principal)
   )
-  (or
-    (is-eq (principal-of? (unwrap! (secp256k1-recover? hash signature) false))
-      (ok signer)
-    )
-    ;; Check if the signer is an agent of the actor
-    (match (map-get? agents signer)
-      agent (is-eq
-        (principal-of? (unwrap! (secp256k1-recover? hash signature) false))
-        (ok agent)
+  (let ((recovered (unwrap!
+      (principal-of? (unwrap! (secp256k1-recover? hash signature) ERR_INVALID_SIGNATURE))
+      ERR_INVALID_SIGNATURE
+    )))
+    (asserts!
+      (or
+        (is-eq recovered signer)
+        ;; Check if the signer is an agent of the actor
+        (match (map-get? agents signer)
+          agent (is-eq recovered agent)
+          false
+        )
       )
-      false
+      ERR_INVALID_SIGNATURE
     )
+    (ok true)
   )
 )
 
@@ -1399,5 +1461,21 @@
       confirmed: confirmed,
       pending: u0,
     }
+  )
+)
+
+;;; Check that the nonce is valid for the pipe.
+(define-private (nonce-check
+    (pipe-key {
+      token: (optional principal),
+      principal-1: principal,
+      principal-2: principal,
+    })
+    (nonce uint)
+  )
+  (let ((pipe (unwrap! (map-get? pipes pipe-key) ERR_NO_SUCH_PIPE)))
+    ;; Nonce must be greater than the pipe nonce
+    (asserts! (> nonce (get nonce pipe)) ERR_NONCE_TOO_LOW)
+    (ok true)
   )
 )
