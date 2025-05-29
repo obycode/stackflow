@@ -24,6 +24,7 @@ import {
   generateWithdrawSignature,
   address3PK,
   structuredDataHashWithPrefix,
+  sha256,
 } from "./utils";
 
 describe("init", () => {
@@ -6492,5 +6493,107 @@ describe("verify-signature", () => {
     expect(result).toBeOk(
       Cl.some(Cl.uint(validAfter - simnet.burnBlockHeight))
     );
+  });
+});
+
+// `verify-signature-with-secret` is the read-only function that users can call
+// off-chain to validate a signature and the corresponding secret.
+describe("verify-signature-with-secret", () => {
+  var pipeKey: ClarityValue;
+
+  // Setup - ensure contract is initialized
+  beforeEach(() => {
+    // Initialize the contract
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
+    // Fund a pipe
+    let { result } = simnet.callPublicFn(
+      "stackflow",
+      "fund-pipe",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(10)],
+      address1
+    );
+    expect(result.type).toBe(ClarityType.ResponseOk);
+    pipeKey = (result as ResponseOkCV).value;
+
+    // Mine blocks to confirm the transaction
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+  });
+
+  it("validates a valid signature with valid secret", () => {
+    const balance1 = 600000;
+    const balance2 = 400000;
+    const nonce = 11;
+    const secret = "01234567890abcdef";
+
+    const signature = generateTransferSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      balance1,
+      balance2,
+      nonce,
+      address2,
+      secret
+    );
+    const { result } = simnet.callReadOnlyFn(
+      "stackflow",
+      "verify-signature-with-secret",
+      [
+        Cl.buffer(signature),
+        Cl.principal(address1),
+        pipeKey,
+        Cl.uint(balance1),
+        Cl.uint(balance2),
+        Cl.uint(nonce),
+        Cl.uint(PipeAction.Transfer),
+        Cl.principal(address2),
+        Cl.some(Cl.buffer(Buffer.from(secret, "hex"))),
+        Cl.none(),
+      ],
+      address1
+    );
+
+    expect(result).toBeOk(Cl.none());
+  });
+
+  it("fails with an invalid secret", () => {
+    const balance1 = 600000;
+    const balance2 = 400000;
+    const nonce = 11;
+    const secret = "0123456789abcdef";
+    const invalid = "0123456789abcdee";
+
+    const signature = generateTransferSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      balance1,
+      balance2,
+      nonce,
+      address2,
+      secret
+    );
+    const { result } = simnet.callReadOnlyFn(
+      "stackflow",
+      "verify-signature-with-secret",
+      [
+        Cl.buffer(signature),
+        Cl.principal(address1),
+        pipeKey,
+        Cl.uint(balance1),
+        Cl.uint(balance2),
+        Cl.uint(nonce),
+        Cl.uint(PipeAction.Transfer),
+        Cl.principal(address2),
+        Cl.some(Cl.buffer(Buffer.from(invalid, "hex"))),
+        Cl.none(),
+      ],
+      address1
+    );
+
+    expect(result).toBeErr(Cl.uint(StackflowError.InvalidSignature));
   });
 });

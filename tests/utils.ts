@@ -89,7 +89,7 @@ const chainIds = {
   testnet: 2147483648,
 };
 
-function sha256(data: Buffer): Buffer {
+export function sha256(data: Buffer): Buffer {
   return createHash("sha256").update(data).digest();
 }
 
