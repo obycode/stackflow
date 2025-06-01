@@ -291,6 +291,7 @@
     (try! (verify-signatures my-signature tx-sender their-signature with pipe-key
       balance-1 balance-2 nonce ACTION_CLOSE tx-sender none none
     ))
+
     ;; Reset the pipe in the map.
     (reset-pipe pipe-key nonce)
 
@@ -338,6 +339,7 @@
       )
       ERR_PENDING
     )
+
     ;; Set the waiting period for this pipe.
     (map-set pipes pipe-key
       (merge settled-pipe {
@@ -609,11 +611,11 @@
       (pipe (unwrap! (map-get? pipes pipe-key) ERR_NO_SUCH_PIPE))
       (pipe-nonce (get nonce pipe))
       (closer (get closer pipe))
+      (principal-1 (get principal-1 pipe-key))
 
       ;; Ensure that the balance of the caller is not less than the deposit
       ;; amount, since that would indicate an invalid deposit.
       (balance-ok (asserts! (>= my-balance amount) ERR_INVALID_BALANCES))
-      (principal-1 (get principal-1 pipe-key))
 
       ;; These are the balances that both parties have signed off on, including
       ;; the deposit amount.
@@ -627,6 +629,25 @@
       ))
 
       (settled-pipe (settle-pending pipe-key pipe))
+
+      ;; If the new balance of the pipe is not equal to the sum of the
+      ;; existing balances and the deposit amount, the deposit is invalid.
+      ;; Previously pending balances are included in the calculation.
+      (total-ok (asserts!
+        (is-eq (+ my-balance their-balance)
+          (+ (get balance-1 settled-pipe) (get balance-2 settled-pipe)
+            (match (get pending-1 settled-pipe)
+              pending (get amount pending)
+              u0
+            )
+            (match (get pending-2 settled-pipe)
+              pending (get amount pending)
+              u0
+            )
+            amount
+          ))
+        ERR_INVALID_TOTAL_BALANCE
+      ))
 
       ;; These are the settled balances that actually exist in the pipe while
       ;; the deposit is pending.
@@ -696,6 +717,7 @@
       my-signature: my-signature,
       their-signature: their-signature,
     })
+
     (ok pipe-key)
   )
 )
@@ -786,6 +808,7 @@
       my-signature: my-signature,
       their-signature: their-signature,
     })
+
     (ok pipe-key)
   )
 )
@@ -1171,6 +1194,7 @@
       (try! (verify-signatures my-signature for their-signature with pipe-key balance-1
         balance-2 nonce action actor secret valid-after
       ))
+
       ;; Reset the pipe in the map.
       (reset-pipe pipe-key nonce)
 

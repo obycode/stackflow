@@ -80,6 +80,8 @@ export enum ReservoirError {
   NotInitialized = 206,
   UnapprovedToken = 207,
   IncorrectStackflow = 208,
+  AmountTooLow = 209,
+  LiquidityPoolFull = 210,
 }
 
 const structuredDataPrefix = Buffer.from([0x53, 0x49, 0x50, 0x30, 0x31, 0x38]);

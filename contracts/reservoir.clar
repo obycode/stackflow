@@ -39,13 +39,19 @@
 (define-constant ERR_NOT_INITIALIZED (err u206))
 (define-constant ERR_UNAPPROVED_TOKEN (err u207))
 (define-constant ERR_INCORRECT_STACKFLOW (err u208))
+(define-constant ERR_AMOUNT_TOO_LOW (err u209))
+(define-constant ERR_LIQUIDITY_POOL_FULL (err u210))
 
 ;;; Has this contract been initialized?
 (define-data-var initialized bool false)
 
-;; Current borrow rate in basis points (1 = 0.01%)
-;; For example, 1000 = 10%
+;;; Current borrow rate in basis points (1 = 0.01%)
+;;; For example, 1000 = 10%
 (define-data-var borrow-rate uint u0)
+
+;;; Current minimum amount for liquidity providers to add to the reservoir
+;;; Initially set to 1,000 STX
+(define-data-var min-liquidity-amount uint u1000000000)
 
 ;;; The token supported by this instance of the Reservoir contract.
 ;;; If `none`, only STX is supported.
@@ -53,6 +59,16 @@
 
 ;;; The StackFlow contract that this Reservoir is registered with.
 (define-data-var stackflow-contract (optional principal) none)
+
+;;; The list of providers funding the Reservoir.
+(define-data-var providers (list 256 principal) (list))
+(define-constant MAX_PROVIDERS u256)
+
+;;; Map of the liquidity provided by each provider.
+(define-map liquidity
+  principal
+  uint
+)
 
 (define-public (init
     (stackflow <stackflow-token>)
@@ -196,19 +212,21 @@
   (/ (* amount (var-get borrow-rate)) u10000)
 )
 
-;;; As the operator, add `amount` of STX or FT `token` to the reservoir for
-;;; borrowing.
+;;; As a provider, add `amount` of STX or FT `token` to the reservoir for
+;;; borrowing. Providers must add at least min-liquidity-amount.
 ;;; Returns:
 ;;; - `(ok true)` on success
-;;; - `ERR_UNAUTHORIZED` if the caller is not the operator
+;;; - `ERR_AMOUNT_TOO_LOW` if the amount is less than min-liquidity-amount
+;;; - `ERR_LIQUIDITY_POOL_FULL` if the maximum number of providers is reached
 ;;; - `ERR_FUNDING_FAILED` if the funding failed
 (define-public (add-liquidity
     (token (optional <sip-010>))
     (amount uint)
   )
   (begin
-    (asserts! (is-eq contract-caller OPERATOR) ERR_UNAUTHORIZED)
     (try! (check-valid-token token))
+    (asserts! (>= amount (var-get min-liquidity-amount)) ERR_AMOUNT_TOO_LOW)
+    (asserts! (< (len (var-get providers)) MAX_PROVIDERS) ERR_LIQUIDITY_POOL_FULL)
     (unwrap!
       (match token
         t (contract-call? t transfer amount tx-sender (as-contract tx-sender) none)
@@ -216,31 +234,98 @@
       )
       ERR_FUNDING_FAILED
     )
+
+    ;; Credit this provider with the amount of liquidity they added.
+    (match (map-get? liquidity tx-sender)
+      ;; If the provider already exists, update their liquidity.
+      current
+      (map-set liquidity tx-sender (+ current amount))
+      ;; If the provider does not exist, add them to the list of providers.
+      (begin
+        (map-set liquidity tx-sender amount)
+        (var-set providers
+          (unwrap! (as-max-len? (append (var-get providers) tx-sender) u256)
+            ERR_LIQUIDITY_POOL_FULL
+          ))
+      )
+    )
     (ok true)
   )
 )
 
-;;; As the operator, remove `amount` of STX or FT `token` from the reservoir.
+;;; As a liquidity provider, remove `amount` of STX or FT `token` from the
+;;; reservoir. If this would leave the provider with less than
+;;; `min-liquidity-amount`, then the full amount will be removed.
 ;;; Returns:
-;;; - `(ok true)` on success
-;;; - `ERR_UNAUTHORIZED` if the caller is not the operator
+;;; - `(ok uint)` on success, where `uint` is the amount removed
+;;; - `ERR_UNAUTHORIZED` if the caller is not a liquidity provider
 ;;; - `ERR_TRANSFER_FAILED` if the transfer failed
-(define-public (remove-liquidity
+(define-public (remove-liquidity-from-reservoir
     (token (optional <sip-010>))
     (amount uint)
   )
-  (begin
-    (asserts! (is-eq contract-caller OPERATOR) ERR_UNAUTHORIZED)
-    (asserts! (var-get initialized) ERR_NOT_INITIALIZED)
+  (let (
+      (provider tx-sender)
+      (provider-liquidity (default-to u0 (map-get? liquidity provider)))
+      (adjusted-amount (if (and (<= amount provider-liquidity)
+                                (< (- provider-liquidity amount) (var-get min-liquidity-amount)))
+                          provider-liquidity
+                          amount
+      ))
+    )
+    (try! (check-valid-token token))
+    ;; Ensure the provider has enough liquidity.
+    (asserts! (<= amount provider-liquidity) ERR_UNAUTHORIZED)
+
+    ;; Update provider's liquidity
+    (let (
+        (new-liquidity (- provider-liquidity adjusted-amount))
+      )
+      (if (is-eq new-liquidity u0)
+        ;; If provider is removing all liquidity, remove them from the list
+        (begin
+          (map-delete liquidity provider)
+          (var-set providers (filter remove-provider (var-get providers)))
+        )
+        ;; Otherwise, just update their balance
+        (map-set liquidity provider new-liquidity)
+      )
+    )
+
+    ;; Transfer the funds
     (unwrap!
       (as-contract (match token
-        t (contract-call? t transfer amount tx-sender OPERATOR none)
-        (stx-transfer? amount tx-sender OPERATOR)
+        t (contract-call? t transfer adjusted-amount tx-sender provider none)
+        (stx-transfer? adjusted-amount tx-sender provider)
       ))
       ERR_TRANSFER_FAILED
     )
-    (ok true)
+    (ok adjusted-amount)
   )
+)
+
+;; Filter function to remove a provider from the list
+(define-private (remove-provider (p principal))
+  (not (is-eq p tx-sender))
+)
+
+;; Set the minimum liquidity amount
+(define-public (set-min-liquidity-amount (amount uint))
+  (begin
+    (asserts! (is-eq contract-caller OPERATOR) ERR_UNAUTHORIZED)
+    (asserts! (var-get initialized) ERR_NOT_INITIALIZED)
+    (ok (var-set min-liquidity-amount amount))
+  )
+)
+
+;; Get the total liquidity in the reservoir
+(define-read-only (get-total-liquidity)
+  (fold + (map get-provider-liquidity (var-get providers)) u0)
+)
+
+;; Get the liquidity for a provider
+(define-private (get-provider-liquidity (provider principal))
+  (default-to u0 (map-get? liquidity provider))
 )
 
 ;;; Given an optional trait, return an optional principal for the trait.
