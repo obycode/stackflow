@@ -1,5 +1,12 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import { Cl, ClarityType, ResponseOkCV, UIntCV } from "@stacks/transactions";
+import {
+  Cl,
+  ClarityType,
+  getAddressFromPrivateKey,
+  makeRandomPrivKey,
+  ResponseOkCV,
+  UIntCV,
+} from "@stacks/transactions";
 import {
   deployer,
   address1,
@@ -13,6 +20,8 @@ import {
   deployerPK,
   MAX_HEIGHT,
   CONFIRMATION_DEPTH,
+  address2,
+  accounts,
 } from "./utils";
 
 describe("reservoir", () => {
@@ -25,14 +34,6 @@ describe("reservoir", () => {
       "reservoir",
       "init",
       [Cl.principal(stackflowContract), Cl.none(), Cl.uint(0)],
-      deployer
-    );
-
-    // Set minimum liquidity amount to a lower value for testing
-    simnet.callPublicFn(
-      "reservoir",
-      "set-min-liquidity-amount",
-      [Cl.uint(100000)],
       deployer
     );
   });
@@ -141,6 +142,94 @@ describe("reservoir", () => {
     });
   });
 
+  describe("get-min-liquidity", () => {
+    it("returns correct floor minimum liquidity amount", () => {
+      const { result } = simnet.callReadOnlyFn(
+        "reservoir",
+        "get-min-liquidity",
+        [],
+        deployer
+      );
+      expect(result).toBeUint(1000000000n);
+    });
+
+    it("increases as liquidity is added", () => {
+      // Add some liquidity
+      simnet.callPublicFn(
+        "reservoir",
+        "add-liquidity",
+        [Cl.none(), Cl.uint(512000000000n)],
+        deployer
+      );
+
+      // Check new minimum liquidity
+      const { result } = simnet.callReadOnlyFn(
+        "reservoir",
+        "get-min-liquidity",
+        [],
+        deployer
+      );
+      expect(result).toBeUint(4000000000n);
+
+      // Add more liquidity (2 providers)
+      simnet.callPublicFn(
+        "reservoir",
+        "add-liquidity",
+        [Cl.none(), Cl.uint(4000000000n)],
+        address1
+      );
+      const { result: result2 } = simnet.callReadOnlyFn(
+        "reservoir",
+        "get-min-liquidity",
+        [],
+        deployer
+      );
+      expect(result2).toBeUint(4031250000n);
+
+      // Add more liquidity (3 providers)
+      simnet.callPublicFn(
+        "reservoir",
+        "add-liquidity",
+        [Cl.none(), Cl.uint(4031250000n)],
+        address2
+      );
+      const { result: result3 } = simnet.callReadOnlyFn(
+        "reservoir",
+        "get-min-liquidity",
+        [],
+        deployer
+      );
+      expect(result3).toBeUint(6094116210n);
+
+      // Add more liquidity (7 providers)
+      let prev_min = 6094116210n;
+      for (let i = 3; i < 8; i++) {
+        const address = accounts.get(`wallet_${i}`)!;
+        const { result } = simnet.callPublicFn(
+          "reservoir",
+          "add-liquidity",
+          [Cl.none(), Cl.uint(prev_min)],
+          address
+        );
+        expect(result).toBeOk(Cl.bool(true));
+
+        const amount = (
+          simnet.callReadOnlyFn("reservoir", "get-min-liquidity", [], deployer)
+            .result as UIntCV
+        ).value as bigint;
+        expect(amount).toBeGreaterThan(prev_min);
+        prev_min = amount;
+      }
+      const { result: result7 } = simnet.callReadOnlyFn(
+        "reservoir",
+        "get-min-liquidity",
+        [],
+        deployer
+      );
+      expect(result7).toBeUint(8646135668n);
+    });
+  });
+
   describe("liquidity management", () => {
     it("provider can add STX liquidity", () => {
       const { result } = simnet.callPublicFn(
@@ -155,6 +244,25 @@ describe("reservoir", () => {
       const stxBalances = simnet.getAssetsMap().get("STX")!;
       const reservoirBalance = stxBalances.get(reservoirContract);
       expect(reservoirBalance).toBe(1000000000n);
+
+      // Verify provider is added
+      const providers = simnet.getDataVar(reservoirContract, "providers");
+      expect(providers).toBeList([Cl.principal(deployer)]);
+
+      // Verify liquidity entry is created
+      const liquidity = simnet.getMapEntry(
+        reservoirContract,
+        "liquidity",
+        Cl.principal(deployer)
+      );
+      expect(liquidity).toBeSome(Cl.uint(1000000000));
+
+      // Verify total-liquidity
+      const totalLiquidity = simnet.getDataVar(
+        reservoirContract,
+        "total-liquidity"
+      );
+      expect(totalLiquidity).toBeUint(1000000000n);
     });
 
     it("provider can remove their own STX liquidity", () => {
@@ -162,7 +270,7 @@ describe("reservoir", () => {
       simnet.callPublicFn(
         "reservoir",
         "add-liquidity",
-        [Cl.none(), Cl.uint(1000000000)],
+        [Cl.none(), Cl.uint(10000000000)],
         deployer
       );
 
@@ -178,7 +286,14 @@ describe("reservoir", () => {
       // Verify balances
       const stxBalances = simnet.getAssetsMap().get("STX")!;
       const reservoirBalance = stxBalances.get(reservoirContract);
-      expect(reservoirBalance).toBe(999200000n);
+      expect(reservoirBalance).toBe(9999200000n);
+
+      // Verify total-liquidity
+      const totalLiquidity = simnet.getDataVar(
+        reservoirContract,
+        "total-liquidity"
+      );
+      expect(totalLiquidity).toBeUint(9999200000n);
     });
 
     it("multiple providers can add liquidity", () => {
@@ -203,6 +318,34 @@ describe("reservoir", () => {
       const stxBalances = simnet.getAssetsMap().get("STX")!;
       const reservoirBalance = stxBalances.get(reservoirContract);
       expect(reservoirBalance).toBe(3000000000n);
+
+      // Verify providers
+      const providers = simnet.getDataVar(reservoirContract, "providers");
+      expect(providers).toBeList([
+        Cl.principal(deployer),
+        Cl.principal(address1),
+      ]);
+
+      // Verify liquidity entries
+      const liquidityDeployer = simnet.getMapEntry(
+        reservoirContract,
+        "liquidity",
+        Cl.principal(deployer)
+      );
+      expect(liquidityDeployer).toBeSome(Cl.uint(2000000000));
+      const liquidityAddress1 = simnet.getMapEntry(
+        reservoirContract,
+        "liquidity",
+        Cl.principal(address1)
+      );
+      expect(liquidityAddress1).toBeSome(Cl.uint(1000000000));
+
+      // Verify total-liquidity
+      const totalLiquidity = simnet.getDataVar(
+        reservoirContract,
+        "total-liquidity"
+      );
+      expect(totalLiquidity).toBeUint(3000000000n);
     });
 
     it("provider cannot remove more than they provided", () => {
@@ -222,6 +365,30 @@ describe("reservoir", () => {
         deployer
       );
       expect(result).toBeErr(Cl.uint(ReservoirError.Unauthorized));
+
+      // Verify reservoir balance remains unchanged
+      const stxBalances = simnet.getAssetsMap().get("STX")!;
+      const reservoirBalance = stxBalances.get(reservoirContract);
+      expect(reservoirBalance).toBe(1000000000n);
+
+      // Verify provider is still listed
+      const providers = simnet.getDataVar(reservoirContract, "providers");
+      expect(providers).toBeList([Cl.principal(deployer)]);
+
+      // Verify liquidity entry remains unchanged
+      const liquidity = simnet.getMapEntry(
+        reservoirContract,
+        "liquidity",
+        Cl.principal(deployer)
+      );
+      expect(liquidity).toBeSome(Cl.uint(1000000000));
+
+      // Verify total-liquidity remains unchanged
+      const totalLiquidity = simnet.getDataVar(
+        reservoirContract,
+        "total-liquidity"
+      );
+      expect(totalLiquidity).toBeUint(1000000000n);
     });
 
     it("provider cannot remove below min-liquidity-amount", () => {
@@ -229,7 +396,7 @@ describe("reservoir", () => {
       simnet.callPublicFn(
         "reservoir",
         "add-liquidity",
-        [Cl.none(), Cl.uint(150000)],
+        [Cl.none(), Cl.uint(1500000000)],
         deployer
       );
 
@@ -237,11 +404,11 @@ describe("reservoir", () => {
       const { result } = simnet.callPublicFn(
         "reservoir",
         "remove-liquidity-from-reservoir",
-        [Cl.none(), Cl.uint(100000)],
+        [Cl.none(), Cl.uint(1000000000)],
         deployer
       );
       // Should return the full remaining balance
-      expect(result).toBeOk(Cl.uint(150000));
+      expect(result).toBeOk(Cl.uint(1500000000));
 
       // Verify reservoir balance
       const stxBalances = simnet.getAssetsMap().get("STX")!;
@@ -259,6 +426,13 @@ describe("reservoir", () => {
         Cl.principal(deployer)
       );
       expect(liquidity).toBeNone();
+
+      // Verify total-liquidity is now 0
+      const totalLiquidity = simnet.getDataVar(
+        reservoirContract,
+        "total-liquidity"
+      );
+      expect(totalLiquidity).toBeUint(0n);
     });
 
     it("provider is removed when they withdraw all liquidity", () => {
@@ -266,7 +440,7 @@ describe("reservoir", () => {
       simnet.callPublicFn(
         "reservoir",
         "add-liquidity",
-        [Cl.none(), Cl.uint(200000)],
+        [Cl.none(), Cl.uint(2000000000)],
         deployer
       );
 
@@ -274,7 +448,7 @@ describe("reservoir", () => {
       simnet.callPublicFn(
         "reservoir",
         "add-liquidity",
-        [Cl.none(), Cl.uint(500000)],
+        [Cl.none(), Cl.uint(5000000000)],
         address1
       );
 
@@ -282,10 +456,10 @@ describe("reservoir", () => {
       const { result } = simnet.callPublicFn(
         "reservoir",
         "remove-liquidity-from-reservoir",
-        [Cl.none(), Cl.uint(200000)],
+        [Cl.none(), Cl.uint(2000000000)],
         deployer
       );
-      expect(result).toBeOk(Cl.uint(200000));
+      expect(result).toBeOk(Cl.uint(2000000000));
 
       // Verify provider is removed
       const providers = simnet.getDataVar(reservoirContract, "providers");
@@ -299,12 +473,19 @@ describe("reservoir", () => {
       );
       expect(liquidity).toBeNone();
 
+      // Verify total-liquidity is now only from the second provider
+      const totalLiquidity = simnet.getDataVar(
+        reservoirContract,
+        "total-liquidity"
+      );
+      expect(totalLiquidity).toBeUint(5000000000n);
+
       // Second provider should now be the only one
       // Try a second provider to remove more than they have - should fail
       const result2 = simnet.callPublicFn(
         "reservoir",
         "remove-liquidity-from-reservoir",
-        [Cl.none(), Cl.uint(600000)],
+        [Cl.none(), Cl.uint(6000000000)],
         address1
       );
       expect(result2.result).toBeErr(Cl.uint(ReservoirError.Unauthorized));
@@ -313,10 +494,22 @@ describe("reservoir", () => {
       const result3 = simnet.callPublicFn(
         "reservoir",
         "remove-liquidity-from-reservoir",
-        [Cl.none(), Cl.uint(400000)],
+        [Cl.none(), Cl.uint(4000000000)],
         address1
       );
-      expect(result3.result).toBeOk(Cl.uint(400000));
+      expect(result3.result).toBeOk(Cl.uint(4000000000));
+
+      // Verify reservoir balance after second provider's removal
+      const stxBalances = simnet.getAssetsMap().get("STX")!;
+      const reservoirBalance = stxBalances.get(reservoirContract);
+      expect(reservoirBalance).toBe(1000000000n); // 5000000000 - 4000000000
+
+      // Verify total-liquidity after second provider's removal
+      const totalLiquidityAfter = simnet.getDataVar(
+        reservoirContract,
+        "total-liquidity"
+      );
+      expect(totalLiquidityAfter).toBeUint(1000000000n);
     });
 
     it("non-provider cannot remove liquidity", () => {
@@ -343,7 +536,7 @@ describe("reservoir", () => {
       simnet.callPublicFn(
         "reservoir",
         "add-liquidity",
-        [Cl.none(), Cl.uint(200000)],
+        [Cl.none(), Cl.uint(2000000000)],
         deployer
       );
 
@@ -354,13 +547,13 @@ describe("reservoir", () => {
         [],
         deployer
       );
-      expect(result1).toBeUint(200000);
+      expect(result1).toBeUint(2000000000);
 
       // Add liquidity from second provider
       simnet.callPublicFn(
         "reservoir",
         "add-liquidity",
-        [Cl.none(), Cl.uint(150000)],
+        [Cl.none(), Cl.uint(1500000000)],
         address1
       );
 
@@ -371,13 +564,13 @@ describe("reservoir", () => {
         [],
         deployer
       );
-      expect(result2).toBeUint(350000);
+      expect(result2).toBeUint(3500000000);
 
       // Remove some liquidity
       simnet.callPublicFn(
         "reservoir",
         "remove-liquidity-from-reservoir",
-        [Cl.none(), Cl.uint(50000)],
+        [Cl.none(), Cl.uint(500000000)],
         deployer
       );
 
@@ -388,7 +581,7 @@ describe("reservoir", () => {
         [],
         deployer
       );
-      expect(result3).toBeUint(300000);
+      expect(result3).toBeUint(3000000000);
     });
   });
 
@@ -432,7 +625,7 @@ describe("reservoir", () => {
       simnet.callPublicFn(
         "reservoir",
         "add-liquidity",
-        [Cl.none(), Cl.uint(500000)],
+        [Cl.none(), Cl.uint(5000000000)],
         deployer
       );
 
@@ -503,8 +696,8 @@ describe("reservoir", () => {
       // Verify balances
       const stxBalances = simnet.getAssetsMap().get("STX")!;
       const reservoirBalance = stxBalances.get(reservoirContract);
-      // 500000 - 50000 (borrowed) + 5000 (fee)
-      expect(reservoirBalance).toBe(455000n);
+      // 5000000000 - 50000 (borrowed) + 5000 (fee)
+      expect(reservoirBalance).toBe(4999955000n);
       const tapBalance = stxBalances.get(stackflowContract);
       // 1000000 (initial) + 50000 (borrowed)
       expect(tapBalance).toBe(1050000n);
@@ -551,7 +744,7 @@ describe("reservoir", () => {
       simnet.callPublicFn(
         "reservoir",
         "add-liquidity",
-        [Cl.none(), Cl.uint(100000)],
+        [Cl.none(), Cl.uint(1000000000)],
         deployer
       );
 
@@ -569,8 +762,8 @@ describe("reservoir", () => {
       );
 
       // Try to borrow more than available
-      const amount = 1000000;
-      const fee = 100000;
+      const amount = 10000000000;
+      const fee = 1000000000;
 
       const mySignature = generateDepositSignature(
         address1PK,
@@ -578,7 +771,7 @@ describe("reservoir", () => {
         address1,
         reservoirContract,
         50000,
-        1000000,
+        amount,
         1,
         address1
       );
@@ -588,7 +781,7 @@ describe("reservoir", () => {
         null,
         reservoirContract,
         address1,
-        1000000,
+        amount,
         50000,
         1,
         address1
@@ -603,7 +796,7 @@ describe("reservoir", () => {
           Cl.uint(fee),
           Cl.none(),
           Cl.uint(50000),
-          Cl.uint(1000000),
+          Cl.uint(amount),
           Cl.buffer(mySignature),
           Cl.buffer(reservoirSignature),
           Cl.uint(1),

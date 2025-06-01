@@ -49,9 +49,9 @@
 ;;; For example, 1000 = 10%
 (define-data-var borrow-rate uint u0)
 
-;;; Current minimum amount for liquidity providers to add to the reservoir
-;;; Initially set to 1,000 STX
-(define-data-var min-liquidity-amount uint u1000000000)
+;;; Absolute minimum amount for liquidity providers to add to the reservoir
+;;; 1000 STX
+(define-constant MIN_LIQUIDITY_FLOOR u1000000000)
 
 ;;; The token supported by this instance of the Reservoir contract.
 ;;; If `none`, only STX is supported.
@@ -59,6 +59,9 @@
 
 ;;; The StackFlow contract that this Reservoir is registered with.
 (define-data-var stackflow-contract (optional principal) none)
+
+;;; Total liquidity in the Reservoir.
+(define-data-var total-liquidity uint u0)
 
 ;;; The list of providers funding the Reservoir.
 (define-data-var providers (list 256 principal) (list))
@@ -194,10 +197,10 @@
   )
 )
 
-;; Set the borrow rate for the contract (in basis points).
-;; Returns:
-;; - `(ok true)` on success
-;; - `ERR_UNAUTHORIZED` if the caller is not the operator
+;;; Set the borrow rate for the contract (in basis points).
+;;; Returns:
+;;; - `(ok true)` on success
+;;; - `ERR_UNAUTHORIZED` if the caller is not the operator
 (define-public (set-borrow-rate (new-rate uint))
   (begin
     (asserts! (is-eq contract-caller OPERATOR) ERR_UNAUTHORIZED)
@@ -206,17 +209,35 @@
   )
 )
 
-;; Calculate the fee for borrowing a given amount.
-;; Returns the fee amount in the smallest unit of the token.
+;;; Calculate the fee for borrowing a given amount.
+;;; Returns the fee amount in the smallest unit of the token.
 (define-read-only (get-borrow-fee (amount uint))
   (/ (* amount (var-get borrow-rate)) u10000)
 )
 
+;;; Get the minimum liquidity amount that providers must add to the reservoir.
+;;; The minumum liquidity amount is based on the total liquidity in the
+;;; reservoir and the number of providers, scaling up as we approach the
+;;; maximum number of providers.
+(define-read-only (get-min-liquidity)
+  (let (
+      (total (var-get total-liquidity))
+      (base (/ total MAX_PROVIDERS))
+      (multiplier (+ u1 (log2 (+ (len (var-get providers)) u1))))
+      (min-liquidity (* base multiplier))
+    )
+    (if (< min-liquidity MIN_LIQUIDITY_FLOOR)
+      MIN_LIQUIDITY_FLOOR
+      min-liquidity
+    )
+  )
+)
+
 ;;; As a provider, add `amount` of STX or FT `token` to the reservoir for
-;;; borrowing. Providers must add at least min-liquidity-amount.
+;;; borrowing. Providers must add at least the minimum liquidity amount.
 ;;; Returns:
 ;;; - `(ok true)` on success
-;;; - `ERR_AMOUNT_TOO_LOW` if the amount is less than min-liquidity-amount
+;;; - `ERR_AMOUNT_TOO_LOW` if the amount is less than minimum liquidity amount
 ;;; - `ERR_LIQUIDITY_POOL_FULL` if the maximum number of providers is reached
 ;;; - `ERR_FUNDING_FAILED` if the funding failed
 (define-public (add-liquidity
@@ -225,7 +246,7 @@
   )
   (begin
     (try! (check-valid-token token))
-    (asserts! (>= amount (var-get min-liquidity-amount)) ERR_AMOUNT_TOO_LOW)
+    (asserts! (>= amount (get-min-liquidity)) ERR_AMOUNT_TOO_LOW)
     (asserts! (< (len (var-get providers)) MAX_PROVIDERS) ERR_LIQUIDITY_POOL_FULL)
     (unwrap!
       (match token
@@ -249,13 +270,17 @@
           ))
       )
     )
+
+    ;; Update the total liquidity in the reservoir.
+    (var-set total-liquidity (+ (var-get total-liquidity) amount))
+
     (ok true)
   )
 )
 
 ;;; As a liquidity provider, remove `amount` of STX or FT `token` from the
-;;; reservoir. If this would leave the provider with less than
-;;; `min-liquidity-amount`, then the full amount will be removed.
+;;; reservoir. If this would leave the provider with less than the minimum
+;;; liquidity amount, then the full amount will be removed.
 ;;; Returns:
 ;;; - `(ok uint)` on success, where `uint` is the amount removed
 ;;; - `ERR_UNAUTHORIZED` if the caller is not a liquidity provider
@@ -268,7 +293,7 @@
       (provider tx-sender)
       (provider-liquidity (default-to u0 (map-get? liquidity provider)))
       (adjusted-amount (if (and (<= amount provider-liquidity)
-                                (< (- provider-liquidity amount) (var-get min-liquidity-amount)))
+                                (< (- provider-liquidity amount) (get-min-liquidity)))
                           provider-liquidity
                           amount
       ))
@@ -300,30 +325,25 @@
       ))
       ERR_TRANSFER_FAILED
     )
+
+    ;; Update the total liquidity in the reservoir.
+    (var-set total-liquidity (- (var-get total-liquidity) adjusted-amount))
+
     (ok adjusted-amount)
   )
 )
 
-;; Filter function to remove a provider from the list
+;;; Filter function to remove a provider from the list
 (define-private (remove-provider (p principal))
   (not (is-eq p tx-sender))
 )
 
-;; Set the minimum liquidity amount
-(define-public (set-min-liquidity-amount (amount uint))
-  (begin
-    (asserts! (is-eq contract-caller OPERATOR) ERR_UNAUTHORIZED)
-    (asserts! (var-get initialized) ERR_NOT_INITIALIZED)
-    (ok (var-set min-liquidity-amount amount))
-  )
-)
-
-;; Get the total liquidity in the reservoir
+;;; Get the total liquidity in the reservoir
 (define-read-only (get-total-liquidity)
   (fold + (map get-provider-liquidity (var-get providers)) u0)
 )
 
-;; Get the liquidity for a provider
+;;; Get the liquidity for a provider
 (define-private (get-provider-liquidity (provider principal))
   (default-to u0 (map-get? liquidity provider))
 )

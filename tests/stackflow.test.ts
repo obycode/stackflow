@@ -24,7 +24,6 @@ import {
   generateWithdrawSignature,
   address3PK,
   structuredDataHashWithPrefix,
-  sha256,
 } from "./utils";
 
 describe("init", () => {
