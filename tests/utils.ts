@@ -1,10 +1,9 @@
 import {
   Cl,
   ClarityValue,
-  createStacksPrivateKey,
   serializeCV,
+  serializeCVBytes,
   signWithKey,
-  StacksPrivateKey,
 } from "@stacks/transactions";
 import { createHash } from "crypto";
 
@@ -16,18 +15,14 @@ export const address3 = accounts.get("wallet_3")!;
 export const stackflowContract = `${deployer}.stackflow`;
 export const reservoirContract = `${deployer}.reservoir`;
 
-export const deployerPK = createStacksPrivateKey(
-  "753b7cc01a1a2e86221266a154af739463fce51219d97e4f856cd7200c3bd2a601"
-);
-export const address1PK = createStacksPrivateKey(
-  "7287ba251d44a4d3fd9276c88ce34c5c52a038955511cccaf77e61068649c17801"
-);
-export const address2PK = createStacksPrivateKey(
-  "530d9f61984c888536871c6573073bdfc0058896dc1adfe9a6a10dfacadc209101"
-);
-export const address3PK = createStacksPrivateKey(
-  "d655b2523bcd65e34889725c73064feb17ceb796831c0e111ba1a552b0f31b3901"
-);
+export const deployerPK =
+  "753b7cc01a1a2e86221266a154af739463fce51219d97e4f856cd7200c3bd2a601";
+export const address1PK =
+  "7287ba251d44a4d3fd9276c88ce34c5c52a038955511cccaf77e61068649c17801";
+export const address2PK =
+  "530d9f61984c888536871c6573073bdfc0058896dc1adfe9a6a10dfacadc209101";
+export const address3PK =
+  "d655b2523bcd65e34889725c73064feb17ceb796831c0e111ba1a552b0f31b3901";
 
 export const WAITING_PERIOD = 144;
 export const MAX_HEIGHT = 340282366920938463463374607431768211455n;
@@ -96,7 +91,7 @@ export function sha256(data: Buffer): Buffer {
 }
 
 function structuredDataHash(structuredData: ClarityValue): Buffer {
-  return sha256(Buffer.from(serializeCV(structuredData)));
+  return sha256(Buffer.from(serializeCVBytes(structuredData)));
 }
 
 const domainHash = structuredDataHash(
@@ -115,16 +110,16 @@ export function structuredDataHashWithPrefix(
 }
 
 export function signStructuredData(
-  privateKey: StacksPrivateKey,
+  privateKey: string,
   structuredData: ClarityValue
 ): Buffer {
   const hash = structuredDataHashWithPrefix(structuredData);
-  const data = signWithKey(privateKey, hash.toString("hex")).data;
+  const data = signWithKey(privateKey, hash.toString("hex"));
   return Buffer.from(data.slice(2) + data.slice(0, 2), "hex");
 }
 
 export function generatePipeSignature(
-  privateKey: StacksPrivateKey,
+  privateKey: string,
   token: [string, string] | null,
   myPrincipal: string,
   theirPrincipal: string,
@@ -171,7 +166,7 @@ export function generatePipeSignature(
 }
 
 export function generateClosePipeSignature(
-  privateKey: StacksPrivateKey,
+  privateKey: string,
   token: [string, string] | null,
   myPrincipal: string,
   theirPrincipal: string,
@@ -194,7 +189,7 @@ export function generateClosePipeSignature(
 }
 
 export function generateTransferSignature(
-  privateKey: StacksPrivateKey,
+  privateKey: string,
   token: [string, string] | null,
   myPrincipal: string,
   theirPrincipal: string,
@@ -221,7 +216,7 @@ export function generateTransferSignature(
 }
 
 export function generateDepositSignature(
-  privateKey: StacksPrivateKey,
+  privateKey: string,
   token: [string, string] | null,
   myPrincipal: string,
   theirPrincipal: string,
@@ -244,7 +239,7 @@ export function generateDepositSignature(
 }
 
 export function generateWithdrawSignature(
-  privateKey: StacksPrivateKey,
+  privateKey: string,
   token: [string, string] | null,
   myPrincipal: string,
   theirPrincipal: string,
