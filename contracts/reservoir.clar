@@ -73,6 +73,17 @@
   uint
 )
 
+;;; Map tracking the borrowed liquidity for each tap holder.
+(define-map borrowed-liquidity
+  principal
+  {
+    ;;; Amount borrowed
+    amount: uint,
+    ;;; Burn block height when the borrow expires
+    until: uint,
+  }
+)
+
 (define-public (init
     (stackflow <stackflow-token>)
     (token (optional <sip-010>))
@@ -278,14 +289,14 @@
   )
 )
 
-;;; As a liquidity provider, remove `amount` of STX or FT `token` from the
+;;; As a liquidity provider, withdraw `amount` of STX or FT `token` from the
 ;;; reservoir. If this would leave the provider with less than the minimum
 ;;; liquidity amount, then the full amount will be removed.
 ;;; Returns:
 ;;; - `(ok uint)` on success, where `uint` is the amount removed
 ;;; - `ERR_UNAUTHORIZED` if the caller is not a liquidity provider
 ;;; - `ERR_TRANSFER_FAILED` if the transfer failed
-(define-public (remove-liquidity-from-reservoir
+(define-public (withdraw-liquidity-from-reservoir
     (token (optional <sip-010>))
     (amount uint)
   )
@@ -333,14 +344,41 @@
   )
 )
 
+;;; Return liquidity to the reservoir a withdrawal as the reservoir. Tap
+;;; holders can call this function to return liquidity back to the reservoir
+;;; after the reservoir's balance has reached a certain threshold. If the user
+;;; does not perform this action in certain scenarios, the reservoir will
+;;; refuse further transfers to/from the tap holder and eventually force-close
+;;; the tap.
+;;; Returns:
+;;; - `(ok pipe-key)` on success
+;;; - `ERR_NOT_INITIALIZED` if the contract has not been initialized
+;;; - `ERR_INCORRECT_STACKFLOW` if the StackFlow contract is not the correct one
+;;; - `ERR_UNAPPROVED_TOKEN` if the token is not the correct token
+(define-public (return-liquidity-to-reservoir
+    (stackflow <stackflow-token>)
+    (token (optional <sip-010>))
+    (amount uint)
+    (my-balance uint)
+    (reservoir-balance uint)
+    (my-signature (buff 65))
+    (reservoir-signature (buff 65))
+    (nonce uint)
+  )
+  (let (
+      (tap-holder tx-sender)
+    )
+    (try! (check-valid stackflow token))
+
+    (as-contract (contract-call? stackflow withdraw amount token tap-holder reservoir-balance
+      my-balance reservoir-signature my-signature nonce
+    ))
+  )
+)
+
 ;;; Filter function to remove a provider from the list
 (define-private (remove-provider (p principal))
   (not (is-eq p tx-sender))
-)
-
-;;; Get the total liquidity in the reservoir
-(define-read-only (get-total-liquidity)
-  (fold + (map get-provider-liquidity (var-get providers)) u0)
 )
 
 ;;; Get the liquidity for a provider

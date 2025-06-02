@@ -1,12 +1,5 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import {
-  Cl,
-  ClarityType,
-  getAddressFromPrivateKey,
-  makeRandomPrivKey,
-  ResponseOkCV,
-  UIntCV,
-} from "@stacks/transactions";
+import { Cl, ClarityType, ResponseOkCV, UIntCV } from "@stacks/transactions";
 import {
   deployer,
   address1,
@@ -22,6 +15,7 @@ import {
   CONFIRMATION_DEPTH,
   address2,
   accounts,
+  generateWithdrawSignature,
 } from "./utils";
 
 describe("reservoir", () => {
@@ -277,7 +271,7 @@ describe("reservoir", () => {
       // Then remove some (leaving more than the minimum)
       const { result } = simnet.callPublicFn(
         "reservoir",
-        "remove-liquidity-from-reservoir",
+        "withdraw-liquidity-from-reservoir",
         [Cl.none(), Cl.uint(800000)],
         deployer
       );
@@ -360,7 +354,7 @@ describe("reservoir", () => {
       // Try to remove more than provided
       const { result } = simnet.callPublicFn(
         "reservoir",
-        "remove-liquidity-from-reservoir",
+        "withdraw-liquidity-from-reservoir",
         [Cl.none(), Cl.uint(2000000000)],
         deployer
       );
@@ -403,7 +397,7 @@ describe("reservoir", () => {
       // Try to leave less than min-liquidity-amount
       const { result } = simnet.callPublicFn(
         "reservoir",
-        "remove-liquidity-from-reservoir",
+        "withdraw-liquidity-from-reservoir",
         [Cl.none(), Cl.uint(1000000000)],
         deployer
       );
@@ -455,7 +449,7 @@ describe("reservoir", () => {
       // First provider removes all their liquidity
       const { result } = simnet.callPublicFn(
         "reservoir",
-        "remove-liquidity-from-reservoir",
+        "withdraw-liquidity-from-reservoir",
         [Cl.none(), Cl.uint(2000000000)],
         deployer
       );
@@ -484,7 +478,7 @@ describe("reservoir", () => {
       // Try a second provider to remove more than they have - should fail
       const result2 = simnet.callPublicFn(
         "reservoir",
-        "remove-liquidity-from-reservoir",
+        "withdraw-liquidity-from-reservoir",
         [Cl.none(), Cl.uint(6000000000)],
         address1
       );
@@ -493,7 +487,7 @@ describe("reservoir", () => {
       // But they should be able to remove part of what they put in, leaving the minimum
       const result3 = simnet.callPublicFn(
         "reservoir",
-        "remove-liquidity-from-reservoir",
+        "withdraw-liquidity-from-reservoir",
         [Cl.none(), Cl.uint(4000000000)],
         address1
       );
@@ -524,7 +518,7 @@ describe("reservoir", () => {
       // Try to remove as non-provider
       const { result } = simnet.callPublicFn(
         "reservoir",
-        "remove-liquidity-from-reservoir",
+        "withdraw-liquidity-from-reservoir",
         [Cl.none(), Cl.uint(500000)],
         address1
       );
@@ -541,13 +535,8 @@ describe("reservoir", () => {
       );
 
       // Check total liquidity
-      let { result: result1 } = simnet.callReadOnlyFn(
-        "reservoir",
-        "get-total-liquidity",
-        [],
-        deployer
-      );
-      expect(result1).toBeUint(2000000000);
+      let liquidity = simnet.getDataVar(reservoirContract, "total-liquidity");
+      expect(liquidity).toBeUint(2000000000);
 
       // Add liquidity from second provider
       simnet.callPublicFn(
@@ -558,30 +547,20 @@ describe("reservoir", () => {
       );
 
       // Check updated total liquidity
-      const { result: result2 } = simnet.callReadOnlyFn(
-        "reservoir",
-        "get-total-liquidity",
-        [],
-        deployer
-      );
-      expect(result2).toBeUint(3500000000);
+      liquidity = simnet.getDataVar(reservoirContract, "total-liquidity");
+      expect(liquidity).toBeUint(3500000000);
 
       // Remove some liquidity
       simnet.callPublicFn(
         "reservoir",
-        "remove-liquidity-from-reservoir",
+        "withdraw-liquidity-from-reservoir",
         [Cl.none(), Cl.uint(500000000)],
         deployer
       );
 
       // Check updated total liquidity after removal
-      const { result: result3 } = simnet.callReadOnlyFn(
-        "reservoir",
-        "get-total-liquidity",
-        [],
-        deployer
-      );
-      expect(result3).toBeUint(3000000000);
+      liquidity = simnet.getDataVar(reservoirContract, "total-liquidity");
+      expect(liquidity).toBeUint(3000000000);
     });
   });
 
@@ -928,6 +907,143 @@ describe("reservoir", () => {
       );
 
       expect(result).toBeErr(Cl.uint(StackflowError.InvalidSenderSignature));
+    });
+  });
+
+  describe("return-liquidity-to-reservoir", () => {
+    let pipeKey;
+    beforeEach(() => {
+      // Add liquidity to reservoir
+      simnet.callPublicFn(
+        "reservoir",
+        "add-liquidity",
+        [Cl.none(), Cl.uint(1000000000)],
+        deployer
+      );
+
+      // Create initial tap with some funds
+      const { result } = simnet.callPublicFn(
+        "reservoir",
+        "create-tap",
+        [
+          Cl.principal(stackflowContract),
+          Cl.none(),
+          Cl.uint(1000000), // Initial balance
+          Cl.uint(0),
+        ],
+        address1
+      );
+      expect(result.type).toBe(ClarityType.ResponseOk);
+      pipeKey = (result as ResponseOkCV).value;
+
+      // Wait for the fund to confirm
+      simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+    });
+
+    it("can return liquidity to reservoir", () => {
+      const amount = 50000;
+      const fee = 5000; // 10% of amount
+
+      const mySignature = generateDepositSignature(
+        address1PK,
+        null,
+        address1,
+        reservoirContract,
+        1000000,
+        50000,
+        1,
+        reservoirContract
+      );
+
+      const reservoirSignature = generateDepositSignature(
+        deployerPK,
+        null,
+        reservoirContract,
+        address1,
+        50000,
+        1000000,
+        1,
+        reservoirContract
+      );
+
+      const borrow = simnet.callPublicFn(
+        "reservoir",
+        "borrow-liquidity",
+        [
+          Cl.principal(stackflowContract),
+          Cl.uint(amount),
+          Cl.uint(fee),
+          Cl.none(),
+          Cl.uint(1000000),
+          Cl.uint(50000),
+          Cl.buffer(mySignature),
+          Cl.buffer(reservoirSignature),
+          Cl.uint(1),
+        ],
+        address1
+      );
+      expect(borrow.result).toBeOk(
+        Cl.tuple({
+          token: Cl.none(),
+          "principal-1": Cl.principal(address1),
+          "principal-2": Cl.principal(reservoirContract),
+        })
+      );
+      simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
+      // Generate signature for returning liquidity
+      const myReturnSignature = generateWithdrawSignature(
+        address1PK,
+        null,
+        address1,
+        reservoirContract,
+        1000000,
+        0,
+        2,
+        reservoirContract
+      );
+      const reservoirReturnSignature = generateWithdrawSignature(
+        deployerPK,
+        null,
+        reservoirContract,
+        address1,
+        0,
+        1000000,
+        2,
+        reservoirContract
+      );
+
+      const returnLiquidity = simnet.callPublicFn(
+        "reservoir",
+        "return-liquidity-to-reservoir",
+        [
+          Cl.principal(stackflowContract),
+          Cl.none(), // No token
+          Cl.uint(50000), // Amount to return
+          Cl.uint(1000000), // My balance
+          Cl.uint(0), // Reservoir balance
+          Cl.buffer(myReturnSignature),
+          Cl.buffer(reservoirReturnSignature),
+          Cl.uint(2), // Nonce
+        ],
+        address1
+      );
+      expect(returnLiquidity.result).toBeOk(
+        Cl.tuple({
+          token: Cl.none(),
+          "principal-1": Cl.principal(address1),
+          "principal-2": Cl.principal(reservoirContract),
+        })
+      );
+
+      // Verify the tap balance after returning liquidity
+      const stxBalances = simnet.getAssetsMap().get("STX")!;
+      const tapBalance = stxBalances.get(stackflowContract);
+      expect(tapBalance).toBe(1000000n);
+
+      // Verify the reservoir balance after returning liquidity
+      const reservoirBalance = stxBalances.get(reservoirContract);
+      expect(reservoirBalance).toBe(1000000000n + 5000n);
     });
   });
 });
