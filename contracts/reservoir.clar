@@ -73,6 +73,12 @@
   uint
 )
 
+;;; Queue of liquidity providers waiting to withdraw their liquidity.
+(define-data-var withdraw-queue (list 256 {
+  provider: principal,
+  amount: uint,
+}) (list))
+
 ;;; Map tracking the borrowed liquidity for each tap holder.
 (define-map borrowed-liquidity
   principal
@@ -328,20 +334,108 @@
       )
     )
 
-    ;; Transfer the funds
-    (unwrap!
-      (as-contract (match token
-        t (contract-call? t transfer adjusted-amount tx-sender provider none)
-        (stx-transfer? adjusted-amount tx-sender provider)
-      ))
-      ERR_TRANSFER_FAILED
+    ;; Add this withdrawal to the queue for processing.
+    (var-set withdraw-queue
+      (unwrap! (as-max-len? (append (var-get withdraw-queue) {
+        provider: provider,
+        amount: adjusted-amount,
+      }) u256)
+        ERR_LIQUIDITY_POOL_FULL
+      )
     )
 
-    ;; Update the total liquidity in the reservoir.
-    (var-set total-liquidity (- (var-get total-liquidity) adjusted-amount))
+    ;; Process the withdrawal queue.
+    (let (
+        (acc 
+          (fold withdraw-liquidity-to-fold (var-get withdraw-queue) {
+            token: token,
+            remaining: (list),
+          })
+        )
+        (r (get remaining acc))
+      )
+      (var-set withdraw-queue r)
 
-    (ok adjusted-amount)
+      ;; If the queue is empty, return the amount withdrawn.
+      (if (is-eq (len r) u0)
+        (ok (some adjusted-amount))
+        ;; If there are still remaining withdrawals, return none.
+        (ok none)
+      )
+    )
   )
+)
+
+;;; Process the withdrawal queue, attempting to withdraw liquidity for each
+;;; provider in the queue. If a withdrawal fails, the provider is added back
+;;; to the remaining list to try again later.
+;;; Returns:
+;;; - `(ok (list { provider: principal, amount: uint }))` on success, where
+;;;   the list contains the withdrawals left on the queue.
+(define-private (process-withdrawals
+    (token (optional <sip-010>))
+  )
+  (let (
+      (acc {
+        token: token,
+        remaining: (list),
+      })
+    )
+    ;; Process the withdrawal queue.
+    (let (
+        (r (fold withdraw-liquidity-to-fold (var-get withdraw-queue) acc))
+      )
+      (var-set withdraw-queue (get remaining r))
+      ;; Return the updated accumulator.
+      (get remaining r)
+    )
+  )
+)
+
+(define-private (withdraw-liquidity-to-fold
+    (withdraw {
+      provider: principal,
+      amount: uint,
+    })
+    (acc {
+      token: (optional <sip-010>),
+      remaining: (list 256 {
+        provider: principal,
+        amount: uint,
+      }),
+    })
+  )
+  (if (is-ok (withdraw-liquidity-to (get token acc) (get provider withdraw) (get amount withdraw)))
+    ;; If successful, update the total liquidity in the reservoir.
+    (begin
+      (var-set total-liquidity
+        (- (var-get total-liquidity) (get amount withdraw))
+      )
+      acc
+    )
+    ;; Else, add the provider back to the remaining list to try again later.
+    {
+      token: (get token acc),
+      remaining: (unwrap-panic (as-max-len?
+        (append (get remaining acc) {
+          provider: (get provider withdraw),
+          amount: (get amount withdraw),
+        })
+        u256
+      )),
+    }
+  )
+)
+
+(define-private (withdraw-liquidity-to
+    (token (optional <sip-010>))
+    (provider principal)
+    (amount uint)
+  )
+  (as-contract (match token
+    t (contract-call? t transfer amount tx-sender provider none)
+    (stx-transfer? amount tx-sender provider)
+  ))
 )
 
 ;;; Return liquidity to the reservoir a withdrawal as the reservoir. Tap
@@ -351,7 +445,7 @@
 ;;; refuse further transfers to/from the tap holder and eventually force-close
 ;;; the tap.
 ;;; Returns:
-;;; - `(ok pipe-key)` on success
+;;; - `(ok true)` on success
 ;;; - `ERR_NOT_INITIALIZED` if the contract has not been initialized
 ;;; - `ERR_INCORRECT_STACKFLOW` if the StackFlow contract is not the correct one
 ;;; - `ERR_UNAPPROVED_TOKEN` if the token is not the correct token
@@ -370,9 +464,16 @@
     )
     (try! (check-valid stackflow token))
 
-    (as-contract (contract-call? stackflow withdraw amount token tap-holder reservoir-balance
+    (print {
+      topic: "return-liquidity-to-reservoir",
+      amount: amount,
+    })
+    (try! (as-contract (contract-call? stackflow withdraw amount token tap-holder reservoir-balance
       my-balance reservoir-signature my-signature nonce
-    ))
+    )))
+
+    (process-withdrawals token)
+    (ok true)
   )
 )
 

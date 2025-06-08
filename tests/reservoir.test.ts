@@ -1,8 +1,17 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import { Cl, ClarityType, ResponseOkCV, UIntCV } from "@stacks/transactions";
+import {
+  Cl,
+  ClarityType,
+  ResponseOkCV,
+  UIntCV,
+  ListCV,
+} from "@stacks/transactions";
 import {
   deployer,
   address1,
+  address2,
+  address3,
+  address4,
   address1PK,
   address2PK,
   reservoirContract,
@@ -13,7 +22,6 @@ import {
   deployerPK,
   MAX_HEIGHT,
   CONFIRMATION_DEPTH,
-  address2,
   accounts,
   generateWithdrawSignature,
 } from "./utils";
@@ -275,7 +283,7 @@ describe("reservoir", () => {
         [Cl.none(), Cl.uint(800000)],
         deployer
       );
-      expect(result).toBeOk(Cl.uint(800000));
+      expect(result).toBeOk(Cl.some(Cl.uint(800000)));
 
       // Verify balances
       const stxBalances = simnet.getAssetsMap().get("STX")!;
@@ -402,7 +410,7 @@ describe("reservoir", () => {
         deployer
       );
       // Should return the full remaining balance
-      expect(result).toBeOk(Cl.uint(1500000000));
+      expect(result).toBeOk(Cl.some(Cl.uint(1500000000)));
 
       // Verify reservoir balance
       const stxBalances = simnet.getAssetsMap().get("STX")!;
@@ -453,7 +461,7 @@ describe("reservoir", () => {
         [Cl.none(), Cl.uint(2000000000)],
         deployer
       );
-      expect(result).toBeOk(Cl.uint(2000000000));
+      expect(result).toBeOk(Cl.some(Cl.uint(2000000000)));
 
       // Verify provider is removed
       const providers = simnet.getDataVar(reservoirContract, "providers");
@@ -491,7 +499,7 @@ describe("reservoir", () => {
         [Cl.none(), Cl.uint(4000000000)],
         address1
       );
-      expect(result3.result).toBeOk(Cl.uint(4000000000));
+      expect(result3.result).toBeOk(Cl.some(Cl.uint(4000000000)));
 
       // Verify reservoir balance after second provider's removal
       const stxBalances = simnet.getAssetsMap().get("STX")!;
@@ -1028,13 +1036,7 @@ describe("reservoir", () => {
         ],
         address1
       );
-      expect(returnLiquidity.result).toBeOk(
-        Cl.tuple({
-          token: Cl.none(),
-          "principal-1": Cl.principal(address1),
-          "principal-2": Cl.principal(reservoirContract),
-        })
-      );
+      expect(returnLiquidity.result).toBeOk(Cl.bool(true));
 
       // Verify the tap balance after returning liquidity
       const stxBalances = simnet.getAssetsMap().get("STX")!;
@@ -1044,6 +1046,508 @@ describe("reservoir", () => {
       // Verify the reservoir balance after returning liquidity
       const reservoirBalance = stxBalances.get(reservoirContract);
       expect(reservoirBalance).toBe(1000000000n + 5000n);
+    });
+  });
+
+  describe("withdraw-queue", () => {
+    const provider1 = address2;
+    const provider2 = address3;
+    const provider3 = address4;
+
+    // Initialize contracts before tests
+    beforeEach(() => {
+      // Initialize stackflow contract
+      simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
+      // Initialize reservoir contract with test token
+      simnet.callPublicFn(
+        "reservoir",
+        "init",
+        [
+          Cl.principal(stackflowContract),
+          Cl.none(),
+          Cl.uint(100), // initial borrow rate (1%)
+        ],
+        deployer
+      );
+    });
+
+    it("successfully adds a withdrawal to the queue", () => {
+      // First, providers need to add liquidity
+      // Add liquidity with provider1
+      const addLiquidity1 = simnet.callPublicFn(
+        "reservoir",
+        "add-liquidity",
+        [
+          Cl.none(),
+          Cl.uint(1000000000), // 1000 tokens
+        ],
+        provider1
+      );
+      expect(addLiquidity1.result).toBeOk(Cl.bool(true));
+
+      // Fund initial tap
+      const createTap = simnet.callPublicFn(
+        "reservoir",
+        "create-tap",
+        [
+          Cl.principal(stackflowContract),
+          Cl.none(),
+          Cl.uint(1000000),
+          Cl.uint(0),
+        ],
+        address1
+      );
+      expect(createTap.result.type).toBe(ClarityType.ResponseOk);
+
+      const amount = 50000;
+      const fee = 5000; // 10% of amount
+
+      const mySignature = generateDepositSignature(
+        address1PK,
+        null,
+        address1,
+        reservoirContract,
+        1000000,
+        50000,
+        1,
+        reservoirContract
+      );
+
+      const reservoirSignature = generateDepositSignature(
+        deployerPK,
+        null,
+        reservoirContract,
+        address1,
+        50000,
+        1000000,
+        1,
+        reservoirContract
+      );
+
+      const borrow = simnet.callPublicFn(
+        "reservoir",
+        "borrow-liquidity",
+        [
+          Cl.principal(stackflowContract),
+          Cl.uint(amount),
+          Cl.uint(fee),
+          Cl.none(),
+          Cl.uint(1000000),
+          Cl.uint(50000),
+          Cl.buffer(mySignature),
+          Cl.buffer(reservoirSignature),
+          Cl.uint(1),
+        ],
+        address1
+      );
+      expect(borrow.result.type).toBe(ClarityType.ResponseOk);
+
+      // Request withdrawal of full amount from provider1, but it should be
+      // queued because the liquidity is not available.
+      const { result: withdraw1 } = simnet.callPublicFn(
+        "reservoir",
+        "withdraw-liquidity-from-reservoir",
+        [Cl.none(), Cl.uint(1000000000)],
+        provider1
+      );
+      expect(withdraw1).toBeOk(Cl.none());
+
+      // Check balances
+      const stxBalances = simnet.getAssetsMap().get("STX")!;
+      const reservoirBalance = stxBalances.get(reservoirContract);
+      // 1000000000 - 50000 (borrowed) + 5000 (fee)
+      expect(reservoirBalance).toBe(999955000n);
+      const tapBalance = stxBalances.get(stackflowContract);
+      // 1000000 (initial) + 50000 (borrowed)
+      expect(tapBalance).toBe(1050000n);
+
+      // Check that the withdrawal request was added to the queue
+      const withdrawQueue = simnet.getDataVar(
+        reservoirContract,
+        "withdraw-queue"
+      );
+      expect(withdrawQueue).toBeList([
+        Cl.tuple({
+          provider: Cl.principal(provider1),
+          amount: Cl.uint(1000000000),
+        }),
+      ]);
+    });
+
+    it("successfully processes a withdrawal from the queue", () => {
+      // First, providers need to add liquidity
+      // Add liquidity with provider1
+      const addLiquidity1 = simnet.callPublicFn(
+        "reservoir",
+        "add-liquidity",
+        [
+          Cl.none(),
+          Cl.uint(1000000000), // 1000 tokens
+        ],
+        provider1
+      );
+      expect(addLiquidity1.result).toBeOk(Cl.bool(true));
+
+      // Fund initial tap
+      const createTap = simnet.callPublicFn(
+        "reservoir",
+        "create-tap",
+        [
+          Cl.principal(stackflowContract),
+          Cl.none(),
+          Cl.uint(1000000),
+          Cl.uint(0),
+        ],
+        address1
+      );
+      expect(createTap.result.type).toBe(ClarityType.ResponseOk);
+
+      const amount = 50000;
+      const fee = 5000; // 10% of amount
+
+      const mySignature = generateDepositSignature(
+        address1PK,
+        null,
+        address1,
+        reservoirContract,
+        1000000,
+        50000,
+        1,
+        reservoirContract
+      );
+
+      const reservoirSignature = generateDepositSignature(
+        deployerPK,
+        null,
+        reservoirContract,
+        address1,
+        50000,
+        1000000,
+        1,
+        reservoirContract
+      );
+
+      const borrow = simnet.callPublicFn(
+        "reservoir",
+        "borrow-liquidity",
+        [
+          Cl.principal(stackflowContract),
+          Cl.uint(amount),
+          Cl.uint(fee),
+          Cl.none(),
+          Cl.uint(1000000),
+          Cl.uint(50000),
+          Cl.buffer(mySignature),
+          Cl.buffer(reservoirSignature),
+          Cl.uint(1),
+        ],
+        address1
+      );
+      expect(borrow.result.type).toBe(ClarityType.ResponseOk);
+
+      simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
+      // Request withdrawal of full amount from provider1, but it should be
+      // queued because the liquidity is not available.
+      const { result: withdraw1 } = simnet.callPublicFn(
+        "reservoir",
+        "withdraw-liquidity-from-reservoir",
+        [Cl.none(), Cl.uint(1000000000)],
+        provider1
+      );
+      expect(withdraw1).toBeOk(Cl.none());
+
+      // Return the borrowed liquidity to the reservoir
+      // Generate signature for returning liquidity
+      const myReturnSignature = generateWithdrawSignature(
+        address1PK,
+        null,
+        address1,
+        reservoirContract,
+        1000000,
+        0,
+        2,
+        reservoirContract
+      );
+      const reservoirReturnSignature = generateWithdrawSignature(
+        deployerPK,
+        null,
+        reservoirContract,
+        address1,
+        0,
+        1000000,
+        2,
+        reservoirContract
+      );
+
+      const returnLiquidity = simnet.callPublicFn(
+        reservoirContract,
+        "return-liquidity-to-reservoir",
+        [
+          Cl.principal(stackflowContract),
+          Cl.none(),
+          Cl.uint(50000), // Return the borrowed amount
+          Cl.uint(1000000),
+          Cl.uint(0),
+          Cl.buffer(myReturnSignature),
+          Cl.buffer(reservoirReturnSignature),
+          Cl.uint(2),
+        ],
+        address1
+      );
+      expect(returnLiquidity.result.type).toBe(ClarityType.ResponseOk);
+
+      // Now try to process the withdrawal queue
+      const { result: processQueue } = simnet.callPrivateFn(
+        reservoirContract,
+        "process-withdrawals",
+        [Cl.none()],
+        deployer
+      );
+      expect(processQueue).toBeList([]);
+
+      // Check balances
+      const stxBalances = simnet.getAssetsMap().get("STX")!;
+      const reservoirBalance = stxBalances.get(reservoirContract);
+      // 5000 (fee)
+      expect(reservoirBalance).toBe(5000n);
+      const tapBalance = stxBalances.get(stackflowContract);
+      // 1000000 (initial)
+      expect(tapBalance).toBe(1000000n);
+
+      // Check that the withdrawal request was removed from the queue
+      const withdrawQueue = simnet.getDataVar(
+        reservoirContract,
+        "withdraw-queue"
+      );
+      expect(withdrawQueue).toBeList([]);
+    });
+
+    it("successfully queues multiple withdrawals", () => {
+      const stxBalancesInitial = simnet.getAssetsMap().get("STX")!;
+      const provider1BalanceInitial = stxBalancesInitial.get(provider1);
+
+      // First, providers need to add liquidity
+      // Add liquidity with provider1
+      const addLiquidity1 = simnet.callPublicFn(
+        "reservoir",
+        "add-liquidity",
+        [
+          Cl.none(),
+          Cl.uint(1_000_000_000), // 1000 tokens
+        ],
+        provider1
+      );
+      expect(addLiquidity1.result).toBeOk(Cl.bool(true));
+
+      const addLiquidity2 = simnet.callPublicFn(
+        "reservoir",
+        "add-liquidity",
+        [
+          Cl.none(),
+          Cl.uint(1_000_000_000), // 1000 tokens
+        ],
+        provider2
+      );
+      expect(addLiquidity2.result).toBeOk(Cl.bool(true));
+
+      const addLiquidity3 = simnet.callPublicFn(
+        "reservoir",
+        "add-liquidity",
+        [
+          Cl.none(),
+          Cl.uint(1_000_000_000), // 1000 tokens
+        ],
+        provider3
+      );
+      expect(addLiquidity3.result).toBeOk(Cl.bool(true));
+
+      // Reservoir balance should be 3,000
+      const stxBalances = simnet.getAssetsMap().get("STX")!;
+      const reservoirBalance = stxBalances.get(reservoirContract);
+      expect(reservoirBalance).toBe(3000000000n);
+
+      // Fund initial tap
+      const createTap = simnet.callPublicFn(
+        "reservoir",
+        "create-tap",
+        [
+          Cl.principal(stackflowContract),
+          Cl.none(),
+          Cl.uint(1_000_000),
+          Cl.uint(0),
+        ],
+        address1
+      );
+      expect(createTap.result.type).toBe(ClarityType.ResponseOk);
+
+      const amount = 2_500_000_000;
+      const fee = 250_000_000; // 10% of amount
+
+      const mySignature = generateDepositSignature(
+        address1PK,
+        null,
+        address1,
+        reservoirContract,
+        1_000_000,
+        amount,
+        1,
+        reservoirContract
+      );
+
+      const reservoirSignature = generateDepositSignature(
+        deployerPK,
+        null,
+        reservoirContract,
+        address1,
+        amount,
+        1_000_000,
+        1,
+        reservoirContract
+      );
+
+      const borrow = simnet.callPublicFn(
+        "reservoir",
+        "borrow-liquidity",
+        [
+          Cl.principal(stackflowContract),
+          Cl.uint(amount),
+          Cl.uint(fee),
+          Cl.none(),
+          Cl.uint(1_000_000),
+          Cl.uint(amount),
+          Cl.buffer(mySignature),
+          Cl.buffer(reservoirSignature),
+          Cl.uint(1),
+        ],
+        address1
+      );
+      expect(borrow.result.type).toBe(ClarityType.ResponseOk);
+
+      simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
+      const stxBalances0 = simnet.getAssetsMap().get("STX")!;
+      const reservoirBalance0 = stxBalances0.get(reservoirContract);
+      const tapBalance0 = stxBalances0.get(stackflowContract);
+      expect(reservoirBalance0).toBe(750_000_000n);
+      expect(tapBalance0).toBe(2_501_000_000n);
+
+      // Request withdrawal of full amount from provider1, but it should be
+      // queued because the liquidity is not available.
+      const { result: withdraw1 } = simnet.callPublicFn(
+        "reservoir",
+        "withdraw-liquidity-from-reservoir",
+        [Cl.none(), Cl.uint(1_000_000_000)],
+        provider1
+      );
+      expect(withdraw1).toBeOk(Cl.none());
+
+      // Request withdrawal of a partial amount from provider2, but it should be
+      // queued because there is a pending withdrawal in the queue that cannot be
+      // processed yet.
+      const { result: withdraw2 } = simnet.callPublicFn(
+        "reservoir",
+        "withdraw-liquidity-from-reservoir",
+        [Cl.none(), Cl.uint(500_000_000)],
+        provider2
+      );
+      expect(withdraw2).toBeOk(Cl.none());
+
+      // Request withdrawal of full amount from provider3, but it should be
+      // queued because there is a pending withdrawal in the queue that cannot be
+      // processed yet (and there is not enough liquidity).
+      const { result: withdraw3 } = simnet.callPublicFn(
+        "reservoir",
+        "withdraw-liquidity-from-reservoir",
+        [Cl.none(), Cl.uint(1_000_000_000)],
+        provider3
+      );
+      expect(withdraw3).toBeOk(Cl.none());
+
+      // Return 1,100 of the borrowed liquidity to the reservoir, enough to
+      // process the first withdrawal in the queue.
+      const myReturnSignature = generateWithdrawSignature(
+        address1PK,
+        null,
+        address1,
+        reservoirContract,
+        1_000_000,
+        1_400_000_000,
+        2,
+        reservoirContract
+      );
+      const reservoirReturnSignature = generateWithdrawSignature(
+        deployerPK,
+        null,
+        reservoirContract,
+        address1,
+        1_400_000_000,
+        1_000_000,
+        2,
+        reservoirContract
+      );
+
+      const returnLiquidity = simnet.callPublicFn(
+        reservoirContract,
+        "return-liquidity-to-reservoir",
+        [
+          Cl.principal(stackflowContract),
+          Cl.none(),
+          Cl.uint(1_100_000_000),
+          Cl.uint(1_000_000),
+          Cl.uint(1_400_000_000),
+          Cl.buffer(myReturnSignature),
+          Cl.buffer(reservoirReturnSignature),
+          Cl.uint(2),
+        ],
+        address1
+      );
+      expect(returnLiquidity.result.type).toBe(ClarityType.ResponseOk);
+
+      // Check that this completed the first withdrawal in the queue
+      const stxBalances1 = simnet.getAssetsMap().get("STX")!;
+      const reservoirBalance1 = stxBalances1.get(reservoirContract);
+      // 750 (previously) + 1,100 (returned) - 1,000 (withdrawn)
+      expect(reservoirBalance1).toBe(850_000_000n);
+      const tapBalance1 = stxBalances1.get(stackflowContract);
+      // 2,501,000,000 (initial) - 1,100,000,000 (returned)
+      expect(tapBalance1).toBe(1_401_000_000n);
+      const provider1Balance = stxBalances1.get(provider1);
+      expect(provider1Balance).toBe(provider1BalanceInitial);
+
+      // Check that the withdrawal request was removed from the queue
+      const withdrawQueue1 = simnet.getDataVar(
+        reservoirContract,
+        "withdraw-queue"
+      );
+      expect(withdrawQueue1.type).toBe(ClarityType.List);
+      expect((withdrawQueue1 as ListCV).value.length).toBe(2);
+
+      // Now try to process the withdrawal queue
+      const { result: processQueue } = simnet.callPrivateFn(
+        reservoirContract,
+        "process-withdrawals",
+        [Cl.none()],
+        deployer
+      );
+      expect(processQueue.type).toBe(ClarityType.List);
+      expect((processQueue as ListCV).value.length).toBe(2);
+
+      // Check balances: should be unchanged from previous check
+      const stxBalances2 = simnet.getAssetsMap().get("STX")!;
+      const reservoirBalance2 = stxBalances2.get(reservoirContract);
+      expect(reservoirBalance2).toBe(850_000_000n);
+      const tapBalance2 = stxBalances2.get(stackflowContract);
+      expect(tapBalance2).toBe(1_401_000_000n);
+
+      // Check that the withdrawal request was removed from the queue
+      const withdrawQueue = simnet.getDataVar(
+        reservoirContract,
+        "withdraw-queue"
+      );
+      expect(withdrawQueue.type).toBe(ClarityType.List);
+      expect((withdrawQueue as ListCV).value.length).toBe(2);
     });
   });
 });

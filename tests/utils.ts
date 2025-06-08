@@ -12,6 +12,7 @@ export const deployer = accounts.get("deployer")!;
 export const address1 = accounts.get("wallet_1")!;
 export const address2 = accounts.get("wallet_2")!;
 export const address3 = accounts.get("wallet_3")!;
+export const address4 = accounts.get("wallet_4")!;
 export const stackflowContract = `${deployer}.stackflow`;
 export const reservoirContract = `${deployer}.reservoir`;
 
@@ -23,6 +24,8 @@ export const address2PK =
   "530d9f61984c888536871c6573073bdfc0058896dc1adfe9a6a10dfacadc209101";
 export const address3PK =
   "d655b2523bcd65e34889725c73064feb17ceb796831c0e111ba1a552b0f31b3901";
+export const address4PK =
+  "f9d7206a47f14d2870c163ebab4bf3e70d18f5d14ce1031f3902fbbc894fe4c701";
 
 export const WAITING_PERIOD = 144;
 export const MAX_HEIGHT = 340282366920938463463374607431768211455n;
