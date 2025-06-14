@@ -501,6 +501,80 @@
   )
 )
 
+;;; Force-cancel a tap with the specified user. This will close the pipe and
+;;; return the last balances to the user and the reservoir. This should only
+;;; be called by the operator of the reservoir when the tap holder has failed
+;;; to provide the needed signatures for a withdrawal.
+(define-public (force-cancel-tap
+    (stackflow <stackflow-token>)
+    (token (optional <sip-010>))
+    (user principal)
+  )
+  (let (
+      (borrow (default-to {
+        amount: u0,
+        until: u0,
+      }
+        (map-get? borrowed-liquidity user)
+      ))
+      (borrowed-amount (if (> burn-block-height (get until borrow))
+        u0
+        (get amount borrow)
+      ))
+    )
+    (try! (check-valid stackflow token))
+
+    ;; The reservoir cannot attempt to force-cancel a tap that has borrowed liquidity.
+    (asserts! (is-eq borrowed-amount u0) ERR_UNAUTHORIZED)
+
+    ;; Call the StackFlow contract to force-cancel the tap.
+    (as-contract (contract-call? stackflow force-cancel token user))
+  )
+)
+
+;;; Force-close a tap with the specified user. This will close the pipe and
+;;; return the signed balances to the user and the reservoir. This should only
+;;; be called by the operator of the reservoir when the tap holder has failed
+;;; to provide the needed signatures for a withdrawal.
+(define-public (force-close-tap
+    (stackflow <stackflow-token>)
+    (token (optional <sip-010>))
+    (user principal)
+    (user-balance uint)
+    (reservoir-balance uint)
+    (user-signature (buff 65))
+    (reservoir-signature (buff 65))
+    (nonce uint)
+    (action uint)
+    (actor principal)
+    (secret (optional (buff 32)))
+    (valid-after (optional uint))
+  )
+  (let (
+      (borrow (default-to {
+        amount: u0,
+        until: u0,
+      }
+        (map-get? borrowed-liquidity user)
+      ))
+      (borrowed-amount (if (> burn-block-height (get until borrow))
+        u0
+        (get amount borrow)
+      ))
+    )
+    (try! (check-valid stackflow token))
+
+    ;; The reservoir cannot attempt to force-close a tap that has borrowed liquidity.
+    (asserts! (is-eq borrowed-amount u0) ERR_UNAUTHORIZED)
+
+    ;; Call the StackFlow contract to force-close the tap.
+    (as-contract (contract-call? stackflow force-close token user reservoir-balance
+      user-balance reservoir-signature user-signature nonce action actor
+      secret valid-after
+    ))
+  )
+)
+
 ;;; Filter function to remove a provider from the list
 (define-private (remove-provider (p principal))
   (not (is-eq p tx-sender))
