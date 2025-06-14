@@ -53,6 +53,9 @@
 ;;; 1000 STX
 (define-constant MIN_LIQUIDITY_FLOOR u1000000000)
 
+;;; Term length for borrowed liquidity in blocks (roughly 4 weeks).
+(define-constant BORROW_TERM_BLOCKS u4000)
+
 ;;; The token supported by this instance of the Reservoir contract.
 ;;; If `none`, only STX is supported.
 (define-data-var supported-token (optional principal) none)
@@ -181,7 +184,7 @@
 ;;; they obtained from the reservoir, confirming the resulting balances in the
 ;;; tap.
 ;;; Returns:
-;;; -`(ok pipe-key)` on success
+;;; -`(ok expire-block)` on success
 ;;; - `ERR_BORROW_FEE_PAYMENT_FAILED` if the fee payment failed
 ;;; - Errors passed through from the StackFlow `deposit` function
 (define-public (borrow-liquidity
@@ -198,6 +201,7 @@
   (let (
       (borrower tx-sender)
       (expected-fee (get-borrow-fee amount))
+      (until (+ burn-block-height BORROW_TERM_BLOCKS))
     )
     (try! (check-valid stackflow token))
     (asserts! (>= fee expected-fee) ERR_INVALID_FEE)
@@ -208,9 +212,17 @@
       )
       ERR_BORROW_FEE_PAYMENT_FAILED
     )
-    (as-contract (contract-call? stackflow deposit amount token borrower reservoir-balance
+    (try! (as-contract (contract-call? stackflow deposit amount token borrower reservoir-balance
       my-balance reservoir-signature my-signature nonce
-    ))
+    )))
+
+    ;; Record the borrowed liquidity for the borrower.
+    (map-set borrowed-liquidity borrower {
+      amount: amount,
+      until: until,
+    })
+
+    (ok until)
   )
 )
 
@@ -438,10 +450,10 @@
   ))
 )
 
-;;; Return liquidity to the reservoir a withdrawal as the reservoir. Tap
-;;; holders can call this function to return liquidity back to the reservoir
-;;; after the reservoir's balance has reached a certain threshold. If the user
-;;; does not perform this action in certain scenarios, the reservoir will
+;;; Return liquidity to the reservoir via a withdrawal as the reservoir. The
+;;; reservoir operator will request signatures from the tap holder when the
+;;; reservoir's balance has reached a certain threshold. If the user fails to
+;;; provide the needed signatures for this withdrawal, then the reservoir will
 ;;; refuse further transfers to/from the tap holder and eventually force-close
 ;;; the tap.
 ;;; Returns:
@@ -452,24 +464,36 @@
 (define-public (return-liquidity-to-reservoir
     (stackflow <stackflow-token>)
     (token (optional <sip-010>))
+    (user principal)
     (amount uint)
-    (my-balance uint)
+    (user-balance uint)
     (reservoir-balance uint)
-    (my-signature (buff 65))
+    (user-signature (buff 65))
     (reservoir-signature (buff 65))
     (nonce uint)
   )
   (let (
-      (tap-holder tx-sender)
+      (borrow (default-to {
+        amount: u0,
+        until: u0,
+      }
+        (map-get? borrowed-liquidity user)
+      ))
+      (borrowed-amount (if (> burn-block-height (get until borrow))
+        u0
+        (get amount borrow)
+      ))
     )
     (try! (check-valid stackflow token))
+    ;; The reservoir cannot attempt to return liquidity that is still borrowed.
+    (asserts! (>= reservoir-balance borrowed-amount) ERR_UNAUTHORIZED)
 
     (print {
       topic: "return-liquidity-to-reservoir",
       amount: amount,
     })
-    (try! (as-contract (contract-call? stackflow withdraw amount token tap-holder reservoir-balance
-      my-balance reservoir-signature my-signature nonce
+    (try! (as-contract (contract-call? stackflow withdraw amount token user reservoir-balance
+      user-balance reservoir-signature user-signature nonce
     )))
 
     (process-withdrawals token)

@@ -30,6 +30,7 @@ export const address4PK =
 export const WAITING_PERIOD = 144;
 export const MAX_HEIGHT = 340282366920938463463374607431768211455n;
 export const CONFIRMATION_DEPTH = 6;
+export const BORROW_TERM_BLOCKS = 4000;
 
 export enum PipeAction {
   Close = 0,

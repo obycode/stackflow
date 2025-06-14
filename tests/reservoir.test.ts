@@ -24,6 +24,7 @@ import {
   CONFIRMATION_DEPTH,
   accounts,
   generateWithdrawSignature,
+  BORROW_TERM_BLOCKS,
 } from "./utils";
 
 describe("reservoir", () => {
@@ -673,11 +674,7 @@ describe("reservoir", () => {
         address1
       );
       expect(borrow.result).toBeOk(
-        Cl.tuple({
-          token: Cl.none(),
-          "principal-1": Cl.principal(address1),
-          "principal-2": Cl.principal(reservoirContract),
-        })
+        Cl.uint(simnet.burnBlockHeight + BORROW_TERM_BLOCKS)
       );
 
       // Verify balances
@@ -919,7 +916,6 @@ describe("reservoir", () => {
   });
 
   describe("return-liquidity-to-reservoir", () => {
-    let pipeKey;
     beforeEach(() => {
       // Add liquidity to reservoir
       simnet.callPublicFn(
@@ -942,7 +938,6 @@ describe("reservoir", () => {
         address1
       );
       expect(result.type).toBe(ClarityType.ResponseOk);
-      pipeKey = (result as ResponseOkCV).value;
 
       // Wait for the fund to confirm
       simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
@@ -991,12 +986,107 @@ describe("reservoir", () => {
         address1
       );
       expect(borrow.result).toBeOk(
-        Cl.tuple({
-          token: Cl.none(),
-          "principal-1": Cl.principal(address1),
-          "principal-2": Cl.principal(reservoirContract),
-        })
+        Cl.uint(simnet.burnBlockHeight + BORROW_TERM_BLOCKS)
       );
+      simnet.mineEmptyBlocks(BORROW_TERM_BLOCKS + 1);
+
+      // Generate signature for returning liquidity
+      const myReturnSignature = generateWithdrawSignature(
+        address1PK,
+        null,
+        address1,
+        reservoirContract,
+        1000000,
+        0,
+        2,
+        reservoirContract
+      );
+      const reservoirReturnSignature = generateWithdrawSignature(
+        deployerPK,
+        null,
+        reservoirContract,
+        address1,
+        0,
+        1000000,
+        2,
+        reservoirContract
+      );
+
+      const returnLiquidity = simnet.callPublicFn(
+        "reservoir",
+        "return-liquidity-to-reservoir",
+        [
+          Cl.principal(stackflowContract),
+          Cl.none(), // No token
+          Cl.principal(address1),
+          Cl.uint(50000), // Amount to return
+          Cl.uint(1000000), // My balance
+          Cl.uint(0), // Reservoir balance
+          Cl.buffer(myReturnSignature),
+          Cl.buffer(reservoirReturnSignature),
+          Cl.uint(2), // Nonce
+        ],
+        deployer
+      );
+      expect(returnLiquidity.result).toBeOk(Cl.bool(true));
+
+      // Verify the tap balance after returning liquidity
+      const stxBalances = simnet.getAssetsMap().get("STX")!;
+      const tapBalance = stxBalances.get(stackflowContract);
+      expect(tapBalance).toBe(1000000n);
+
+      // Verify the reservoir balance after returning liquidity
+      const reservoirBalance = stxBalances.get(reservoirContract);
+      expect(reservoirBalance).toBe(1000000000n + 5000n);
+    });
+
+    it("cannot return liquidity before borrow term ends", () => {
+      const amount = 50000;
+      const fee = 5000; // 10% of amount
+
+      const mySignature = generateDepositSignature(
+        address1PK,
+        null,
+        address1,
+        reservoirContract,
+        1000000,
+        50000,
+        1,
+        reservoirContract
+      );
+
+      const reservoirSignature = generateDepositSignature(
+        deployerPK,
+        null,
+        reservoirContract,
+        address1,
+        50000,
+        1000000,
+        1,
+        reservoirContract
+      );
+
+      const borrow = simnet.callPublicFn(
+        "reservoir",
+        "borrow-liquidity",
+        [
+          Cl.principal(stackflowContract),
+          Cl.uint(amount),
+          Cl.uint(fee),
+          Cl.none(),
+          Cl.uint(1000000),
+          Cl.uint(50000),
+          Cl.buffer(mySignature),
+          Cl.buffer(reservoirSignature),
+          Cl.uint(1),
+        ],
+        address1
+      );
+      expect(borrow.result).toBeOk(
+        Cl.uint(simnet.burnBlockHeight + BORROW_TERM_BLOCKS)
+      );
+      // Mine enough blocks for the deposit to be confirmed, but not enough for
+      // the borrow term to end
       simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
 
       // Generate signature for returning liquidity
@@ -1027,6 +1117,7 @@ describe("reservoir", () => {
         [
           Cl.principal(stackflowContract),
           Cl.none(), // No token
+          Cl.principal(address1),
           Cl.uint(50000), // Amount to return
           Cl.uint(1000000), // My balance
           Cl.uint(0), // Reservoir balance
@@ -1034,18 +1125,20 @@ describe("reservoir", () => {
           Cl.buffer(reservoirReturnSignature),
           Cl.uint(2), // Nonce
         ],
-        address1
+        deployer
       );
-      expect(returnLiquidity.result).toBeOk(Cl.bool(true));
+      expect(returnLiquidity.result).toBeErr(
+        Cl.uint(ReservoirError.Unauthorized)
+      );
 
       // Verify the tap balance after returning liquidity
       const stxBalances = simnet.getAssetsMap().get("STX")!;
       const tapBalance = stxBalances.get(stackflowContract);
-      expect(tapBalance).toBe(1000000n);
+      expect(tapBalance).toBe(1000000n + 50000n);
 
       // Verify the reservoir balance after returning liquidity
       const reservoirBalance = stxBalances.get(reservoirContract);
-      expect(reservoirBalance).toBe(1000000000n + 5000n);
+      expect(reservoirBalance).toBe(1000000000n - 50000n + 5000n);
     });
   });
 
@@ -1246,7 +1339,7 @@ describe("reservoir", () => {
       );
       expect(borrow.result.type).toBe(ClarityType.ResponseOk);
 
-      simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+      simnet.mineEmptyBlocks(BORROW_TERM_BLOCKS + 1);
 
       // Request withdrawal of full amount from provider1, but it should be
       // queued because the liquidity is not available.
@@ -1287,6 +1380,7 @@ describe("reservoir", () => {
         [
           Cl.principal(stackflowContract),
           Cl.none(),
+          Cl.principal(address1),
           Cl.uint(50000), // Return the borrowed amount
           Cl.uint(1000000),
           Cl.uint(0),
@@ -1294,7 +1388,7 @@ describe("reservoir", () => {
           Cl.buffer(reservoirReturnSignature),
           Cl.uint(2),
         ],
-        address1
+        deployer
       );
       expect(returnLiquidity.result.type).toBe(ClarityType.ResponseOk);
 
@@ -1425,7 +1519,7 @@ describe("reservoir", () => {
       );
       expect(borrow.result.type).toBe(ClarityType.ResponseOk);
 
-      simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+      simnet.mineEmptyBlocks(BORROW_TERM_BLOCKS + 1);
 
       const stxBalances0 = simnet.getAssetsMap().get("STX")!;
       const reservoirBalance0 = stxBalances0.get(reservoirContract);
@@ -1494,6 +1588,7 @@ describe("reservoir", () => {
         [
           Cl.principal(stackflowContract),
           Cl.none(),
+          Cl.principal(address1),
           Cl.uint(1_100_000_000),
           Cl.uint(1_000_000),
           Cl.uint(1_400_000_000),
@@ -1501,7 +1596,7 @@ describe("reservoir", () => {
           Cl.buffer(reservoirReturnSignature),
           Cl.uint(2),
         ],
-        address1
+        deployer
       );
       expect(returnLiquidity.result.type).toBe(ClarityType.ResponseOk);
 
