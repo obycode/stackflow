@@ -27,7 +27,7 @@
 ;; (use-trait stackflow-token 'SP126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT6AD08RV.stackflow-token-0-6-0.stackflow-token)
 
 (define-constant OPERATOR tx-sender)
-(define-constant RESERVOIR (as-contract tx-sender))
+(define-constant RESERVOIR current-contract)
 
 ;; Error code
 (define-constant ERR_BORROW_FEE_PAYMENT_FAILED (err u200))
@@ -109,7 +109,7 @@
     (var-set stackflow-contract (some (contract-of stackflow)))
 
     ;; Authorize the operator as a StackFlow agent for this contract.
-    (try! (as-contract (contract-call? stackflow register-agent OPERATOR)))
+    (try! (as-contract? () (try! (contract-call? stackflow register-agent OPERATOR))))
 
     ;; Set the initial borrow rate.
     (var-set borrow-rate initial-borrow-rate)
@@ -212,9 +212,18 @@
       )
       ERR_BORROW_FEE_PAYMENT_FAILED
     )
-    (try! (as-contract (contract-call? stackflow deposit amount token borrower reservoir-balance
-      my-balance reservoir-signature my-signature nonce
-    )))
+    (try! (match token
+      t (as-contract? ((with-ft (contract-of t) "*" amount))
+        (try! (contract-call? stackflow deposit amount token borrower reservoir-balance
+          my-balance reservoir-signature my-signature nonce
+        ))
+      )
+      (as-contract? ((with-stx amount))
+        (try! (contract-call? stackflow deposit amount token borrower reservoir-balance
+          my-balance reservoir-signature my-signature nonce
+        ))
+      )
+    ))
 
     ;; Record the borrowed liquidity for the borrower.
     (map-set borrowed-liquidity borrower {
@@ -279,8 +288,8 @@
     (asserts! (< (len (var-get providers)) MAX_PROVIDERS) ERR_LIQUIDITY_POOL_FULL)
     (unwrap!
       (match token
-        t (contract-call? t transfer amount tx-sender (as-contract tx-sender) none)
-        (stx-transfer? amount tx-sender (as-contract tx-sender))
+        t (contract-call? t transfer amount tx-sender current-contract none)
+        (stx-transfer? amount tx-sender current-contract)
       )
       ERR_FUNDING_FAILED
     )
@@ -321,10 +330,12 @@
   (let (
       (provider tx-sender)
       (provider-liquidity (default-to u0 (map-get? liquidity provider)))
-      (adjusted-amount (if (and (<= amount provider-liquidity)
-                                (< (- provider-liquidity amount) (get-min-liquidity)))
-                          provider-liquidity
-                          amount
+      (adjusted-amount (if (and
+          (<= amount provider-liquidity)
+          (< (- provider-liquidity amount) (get-min-liquidity))
+        )
+        provider-liquidity
+        amount
       ))
     )
     (try! (check-valid-token token))
@@ -332,9 +343,7 @@
     (asserts! (<= amount provider-liquidity) ERR_UNAUTHORIZED)
 
     ;; Update provider's liquidity
-    (let (
-        (new-liquidity (- provider-liquidity adjusted-amount))
-      )
+    (let ((new-liquidity (- provider-liquidity adjusted-amount)))
       (if (is-eq new-liquidity u0)
         ;; If provider is removing all liquidity, remove them from the list
         (begin
@@ -348,22 +357,23 @@
 
     ;; Add this withdrawal to the queue for processing.
     (var-set withdraw-queue
-      (unwrap! (as-max-len? (append (var-get withdraw-queue) {
-        provider: provider,
-        amount: adjusted-amount,
-      }) u256)
+      (unwrap!
+        (as-max-len?
+          (append (var-get withdraw-queue) {
+            provider: provider,
+            amount: adjusted-amount,
+          })
+          u256
+        )
         ERR_LIQUIDITY_POOL_FULL
-      )
-    )
+      ))
 
     ;; Process the withdrawal queue.
     (let (
-        (acc 
-          (fold withdraw-liquidity-to-fold (var-get withdraw-queue) {
-            token: token,
-            remaining: (list),
-          })
-        )
+        (acc (fold withdraw-liquidity-to-fold (var-get withdraw-queue) {
+          token: token,
+          remaining: (list),
+        }))
         (r (get remaining acc))
       )
       (var-set withdraw-queue r)
@@ -384,19 +394,13 @@
 ;;; Returns:
 ;;; - `(ok (list { provider: principal, amount: uint }))` on success, where
 ;;;   the list contains the withdrawals left on the queue.
-(define-private (process-withdrawals
-    (token (optional <sip-010>))
-  )
-  (let (
-      (acc {
-        token: token,
-        remaining: (list),
-      })
-    )
+(define-private (process-withdrawals (token (optional <sip-010>)))
+  (let ((acc {
+      token: token,
+      remaining: (list),
+    }))
     ;; Process the withdrawal queue.
-    (let (
-        (r (fold withdraw-liquidity-to-fold (var-get withdraw-queue) acc))
-      )
+    (let ((r (fold withdraw-liquidity-to-fold (var-get withdraw-queue) acc)))
       (var-set withdraw-queue (get remaining r))
       ;; Return the updated accumulator.
       (get remaining r)
@@ -417,7 +421,9 @@
       }),
     })
   )
-  (if (is-ok (withdraw-liquidity-to (get token acc) (get provider withdraw) (get amount withdraw)))
+  (if (is-ok (withdraw-liquidity-to (get token acc) (get provider withdraw)
+      (get amount withdraw)
+    ))
     ;; If successful, update the total liquidity in the reservoir.
     (begin
       (var-set total-liquidity
@@ -444,10 +450,14 @@
     (provider principal)
     (amount uint)
   )
-  (as-contract (match token
-    t (contract-call? t transfer amount tx-sender provider none)
-    (stx-transfer? amount tx-sender provider)
-  ))
+  (match token
+    t (as-contract? ((with-ft (contract-of t) "*" amount))
+      (try! (contract-call? t transfer amount tx-sender provider none))
+    )
+    (as-contract? ((with-stx amount))
+      (try! (stx-transfer? amount tx-sender provider))
+    )
+  )
 )
 
 ;;; Return liquidity to the reservoir via a withdrawal as the reservoir. The
@@ -492,9 +502,18 @@
       topic: "return-liquidity-to-reservoir",
       amount: amount,
     })
-    (try! (as-contract (contract-call? stackflow withdraw amount token user reservoir-balance
-      user-balance reservoir-signature user-signature nonce
-    )))
+    (try! (match token
+      t (as-contract? ((with-ft (contract-of t) "*" amount))
+        (try! (contract-call? stackflow withdraw amount token user reservoir-balance
+          user-balance reservoir-signature user-signature nonce
+        ))
+      )
+      (as-contract? ((with-stx amount))
+        (try! (contract-call? stackflow withdraw amount token user reservoir-balance
+          user-balance reservoir-signature user-signature nonce
+        ))
+      )
+    ))
 
     (process-withdrawals token)
     (ok true)
@@ -528,7 +547,7 @@
     (asserts! (is-eq borrowed-amount u0) ERR_UNAUTHORIZED)
 
     ;; Call the StackFlow contract to force-cancel the tap.
-    (as-contract (contract-call? stackflow force-cancel token user))
+    (as-contract? () (try! (contract-call? stackflow force-cancel token user)))
   )
 )
 
@@ -568,10 +587,12 @@
     (asserts! (is-eq borrowed-amount u0) ERR_UNAUTHORIZED)
 
     ;; Call the StackFlow contract to force-close the tap.
-    (as-contract (contract-call? stackflow force-close token user reservoir-balance
-      user-balance reservoir-signature user-signature nonce action actor
-      secret valid-after
-    ))
+    (as-contract? ()
+      (try! (contract-call? stackflow force-close token user reservoir-balance
+        user-balance reservoir-signature user-signature nonce action actor
+        secret valid-after
+      ))
+    )
   )
 )
 

@@ -78,6 +78,7 @@
 (define-constant ERR_PENDING (err u123))
 (define-constant ERR_INVALID_BALANCES (err u124))
 (define-constant ERR_INVALID_SIGNATURE (err u125))
+(define-constant ERR_ALLOWANCE_VIOLATION (err u126))
 
 ;; Number of burn blocks to wait before considering an on-chain action finalized.
 (define-constant CONFIRMATION_DEPTH u6)
@@ -197,7 +198,6 @@
         (updated-pipe (try! (increase-sender-balance pipe-key pipe token amount)))
         (closer (get closer pipe))
       )
-
       ;; If there was an existing pipe, the new nonce must be equal or greater
       (asserts! (>= (get nonce pipe) nonce) ERR_NONCE_TOO_LOW)
 
@@ -265,7 +265,6 @@
       })
       (settled-pipe (settle-pending pipe-key pipe))
     )
-
     ;; Cannot close a pipe while there is a pending deposit
     (asserts!
       (and
@@ -444,7 +443,6 @@
           nonce: nonce,
         })
       )
-
       ;; Verify the signatures of the two parties.
       (try! (verify-signatures my-signature tx-sender their-signature with pipe-key
         balance-1 balance-2 nonce action actor secret valid-after
@@ -612,11 +610,9 @@
       (pipe-nonce (get nonce pipe))
       (closer (get closer pipe))
       (principal-1 (get principal-1 pipe-key))
-
       ;; Ensure that the balance of the caller is not less than the deposit
       ;; amount, since that would indicate an invalid deposit.
       (balance-ok (asserts! (>= my-balance amount) ERR_INVALID_BALANCES))
-
       ;; These are the balances that both parties have signed off on, including
       ;; the deposit amount.
       (balance-1 (if (is-eq tx-sender principal-1)
@@ -627,9 +623,7 @@
         their-balance
         my-balance
       ))
-
       (settled-pipe (settle-pending pipe-key pipe))
-
       ;; If the new balance of the pipe is not equal to the sum of the
       ;; existing balances and the deposit amount, the deposit is invalid.
       ;; Previously pending balances are included in the calculation.
@@ -648,7 +642,6 @@
           ))
         ERR_INVALID_TOTAL_BALANCE
       ))
-
       ;; These are the settled balances that actually exist in the pipe while
       ;; the deposit is pending.
       (pre-balance-1 (if (is-eq tx-sender principal-1)
@@ -667,7 +660,6 @@
           ))
         (- my-balance amount)
       ))
-
       (updated-pipe (try! (increase-sender-balance pipe-key settled-pipe token amount)))
       (result-pipe (merge updated-pipe {
         balance-1: pre-balance-1,
@@ -1080,11 +1072,10 @@
       (settled-pipe (settle-pending pipe-key pipe))
     )
     (match token
-      t (unwrap!
-        (contract-call? t transfer amount tx-sender (as-contract tx-sender) none)
+      t (unwrap! (contract-call? t transfer amount tx-sender current-contract none)
         ERR_DEPOSIT_FAILED
       )
-      (unwrap! (stx-transfer? amount tx-sender (as-contract tx-sender))
+      (unwrap! (stx-transfer? amount tx-sender current-contract)
         ERR_DEPOSIT_FAILED
       )
     )
@@ -1119,10 +1110,17 @@
   (let ((sender tx-sender))
     (unwrap!
       (match token
-        t (as-contract (contract-call? t transfer amount tx-sender sender none))
-        (as-contract (stx-transfer? amount tx-sender sender))
+        t (as-contract? ((with-ft (contract-of t) "*" amount))
+          (unwrap!
+            (contract-call? t transfer amount current-contract sender none)
+            ERR_WITHDRAWAL_FAILED
+          ))
+        (as-contract? ((with-stx amount))
+          (unwrap! (stx-transfer? amount current-contract sender)
+            ERR_WITHDRAWAL_FAILED
+          ))
       )
-      ERR_WITHDRAWAL_FAILED
+      ERR_ALLOWANCE_VIOLATION
     )
     (ok true)
   )
@@ -1159,7 +1157,6 @@
         my-balance
       ))
     )
-
     ;; Exit early if this is an attempt to self-dispute
     (asserts! (not (is-eq for closer)) ERR_SELF_DISPUTE)
 
@@ -1268,14 +1265,19 @@
     ;; Don't try to transfer 0, this will cause an error
     (ok (is-some token))
     (begin
-      (match token
-        t (unwrap!
-          (as-contract (contract-call? t transfer amount tx-sender addr none))
-          ERR_WITHDRAWAL_FAILED
+      (unwrap!
+        (match token
+          t (as-contract? ((with-ft (contract-of t) "*" amount))
+            (unwrap!
+              (contract-call? t transfer amount current-contract addr none)
+              ERR_WITHDRAWAL_FAILED
+            ))
+          (as-contract? ((with-stx amount))
+            (unwrap! (stx-transfer? amount current-contract addr)
+              ERR_WITHDRAWAL_FAILED
+            ))
         )
-        (unwrap! (as-contract (stx-transfer? amount tx-sender addr))
-          ERR_WITHDRAWAL_FAILED
-        )
+        ERR_ALLOWANCE_VIOLATION
       )
       (ok (is-some token))
     )

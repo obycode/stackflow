@@ -45,16 +45,20 @@ genesis:
       balance: "100000000000000"
       sbtc-balance: "1000000000"
   contracts:
+    - genesis
+    - lockup
+    - bns
+    - cost-voting
     - costs
     - pox
+    - costs-2
     - pox-2
+    - costs-3
     - pox-3
     - pox-4
-    - lockup
-    - costs-2
-    - costs-3
-    - cost-voting
-    - bns
+    - signers
+    - signers-voting
+    - costs-4
 plan:
   batches:
     - id: 0
@@ -64,7 +68,7 @@ plan:
             emulated-sender: SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE
             path: "./.cache/requirements/SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE.sip-010-trait-ft-standard.clar"
             clarity-version: 1
-      epoch: "2.0"
+      epoch: "2.1"
     - id: 1
       transactions:
         - emulated-contract-publish:
@@ -72,27 +76,27 @@ plan:
             emulated-sender: ST126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT59ZTE2J
             path: "./.cache/requirements/ST126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT59ZTE2J.sip-010-trait-ft-standard.clar"
             clarity-version: 3
-        - emulated-contract-publish:
-            contract-name: test-token
-            emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
-            path: contracts/test-token.clar
-            clarity-version: 3
-      epoch: "3.0"
+      epoch: "3.1"
     - id: 2
       transactions:
         - emulated-contract-publish:
             contract-name: stackflow-token
             emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
             path: contracts/stackflow-token.clar
-            clarity-version: 3
+            clarity-version: 4
         - emulated-contract-publish:
             contract-name: stackflow
             emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
             path: contracts/stackflow.clar
-            clarity-version: 3
+            clarity-version: 4
         - emulated-contract-publish:
             contract-name: reservoir
             emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
             path: contracts/reservoir.clar
-            clarity-version: 3
-      epoch: "3.1"
+            clarity-version: 4
+        - emulated-contract-publish:
+            contract-name: test-token
+            emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
+            path: contracts/test-token.clar
+            clarity-version: 4
+      epoch: "3.3"
