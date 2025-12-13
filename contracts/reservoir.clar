@@ -39,8 +39,7 @@
 (define-constant ERR_NOT_INITIALIZED (err u206))
 (define-constant ERR_UNAPPROVED_TOKEN (err u207))
 (define-constant ERR_INCORRECT_STACKFLOW (err u208))
-(define-constant ERR_AMOUNT_TOO_LOW (err u209))
-(define-constant ERR_LIQUIDITY_POOL_FULL (err u210))
+(define-constant ERR_AMOUNT_NOT_AVAILABLE (err u209))
 
 ;;; Has this contract been initialized?
 (define-data-var initialized bool false)
@@ -48,10 +47,6 @@
 ;;; Current borrow rate in basis points (1 = 0.01%)
 ;;; For example, 1000 = 10%
 (define-data-var borrow-rate uint u0)
-
-;;; Absolute minimum amount for liquidity providers to add to the reservoir
-;;; 1000 STX
-(define-constant MIN_LIQUIDITY_FLOOR u1000000000)
 
 ;;; Term length for borrowed liquidity in blocks (roughly 4 weeks).
 (define-constant BORROW_TERM_BLOCKS u4000)
@@ -63,24 +58,8 @@
 ;;; The StackFlow contract that this Reservoir is registered with.
 (define-data-var stackflow-contract (optional principal) none)
 
-;;; Total liquidity in the Reservoir.
-(define-data-var total-liquidity uint u0)
-
-;;; The list of providers funding the Reservoir.
-(define-data-var providers (list 256 principal) (list))
-(define-constant MAX_PROVIDERS u256)
-
-;;; Map of the liquidity provided by each provider.
-(define-map liquidity
-  principal
-  uint
-)
-
-;;; Queue of liquidity providers waiting to withdraw their liquidity.
-(define-data-var withdraw-queue (list 256 {
-  provider: principal,
-  amount: uint,
-}) (list))
+;;; Available liquidity in the Reservoir.
+(define-data-var available-liquidity uint u0)
 
 ;;; Map tracking the borrowed liquidity for each tap holder.
 (define-map borrowed-liquidity
@@ -93,6 +72,10 @@
   }
 )
 
+;; ----- Functions called by the Reservoir operator -----
+
+;;; Initialize the Reservoir contract with the specified StackFlow contract,
+;;; supported token, and initial borrow rate.
 (define-public (init
     (stackflow <stackflow-token>)
     (token (optional <sip-010>))
@@ -118,6 +101,151 @@
     (ok (var-set initialized true))
   )
 )
+
+;;; Set the borrow rate for the contract (in basis points).
+;;; Returns:
+;;; - `(ok true)` on success
+;;; - `ERR_UNAUTHORIZED` if the caller is not the operator
+(define-public (set-borrow-rate (new-rate uint))
+  (begin
+    (asserts! (is-eq contract-caller OPERATOR) ERR_UNAUTHORIZED)
+    (asserts! (var-get initialized) ERR_NOT_INITIALIZED)
+    (ok (var-set borrow-rate new-rate))
+  )
+)
+
+;;; As the operator, add `amount` of STX or FT `token` to the reservoir for
+;;; borrowing. Providers must add at least the minimum liquidity amount.
+;;; Returns:
+;;; - `(ok true)` on success
+;;; - `ERR_FUNDING_FAILED` if the funding failed
+(define-public (add-liquidity
+    (token (optional <sip-010>))
+    (amount uint)
+  )
+  (begin
+    (try! (check-valid-token token))
+    (unwrap!
+      (match token
+        t (contract-call? t transfer amount tx-sender current-contract none)
+        (stx-transfer? amount tx-sender current-contract)
+      )
+      ERR_FUNDING_FAILED
+    )
+
+    ;; Update the total liquidity in the reservoir.
+    (var-set available-liquidity (+ (var-get available-liquidity) amount))
+
+    (ok true)
+  )
+)
+
+;;; As the operator, withdraw `amount` of STX or FT `token` from the Reservoir
+;;; to `recipient`.
+;;; Returns:
+;;; - `(ok uint)` on success, where `uint` is the amount removed
+;;; - `ERR_UNAUTHORIZED` if the caller is not a liquidity provider
+;;; - `ERR_NOT_INITIALIZED` if the contract has not been initialized
+;;; - `ERR_UNAPPROVED_TOKEN` if the token is not the correct token
+;;; - `ERR_AMOUNT_NOT_AVAILABLE` if the amount is greater than the available liquidity
+;;; - `ERR_TRANSFER_FAILED` if the transfer failed
+(define-public (withdraw-liquidity
+    (token (optional <sip-010>))
+    (amount uint)
+    (recipient principal)
+  )
+  (begin
+    (asserts! (is-eq contract-caller OPERATOR) ERR_UNAUTHORIZED)
+    (try! (check-valid-token token))
+    (asserts! (<= amount (var-get available-liquidity)) ERR_AMOUNT_NOT_AVAILABLE)
+
+    ;; Perform the withdrawal.
+    (unwrap! (withdraw-liquidity-to token amount recipient) ERR_TRANSFER_FAILED)
+
+    ;; Update the total liquidity in the reservoir.
+    (var-set available-liquidity (- (var-get available-liquidity) amount))
+
+    (ok amount)
+  )
+)
+
+;;; Force-cancel a tap with the specified user. This will close the pipe and
+;;; return the last balances to the user and the reservoir. This should only
+;;; be called by the operator of the reservoir when the tap holder has failed
+;;; to provide the needed signatures for a withdrawal.
+(define-public (force-cancel-tap
+    (stackflow <stackflow-token>)
+    (token (optional <sip-010>))
+    (user principal)
+  )
+  (let (
+      (borrow (default-to {
+        amount: u0,
+        until: u0,
+      }
+        (map-get? borrowed-liquidity user)
+      ))
+      (borrowed-amount (if (> burn-block-height (get until borrow))
+        u0
+        (get amount borrow)
+      ))
+    )
+    (try! (check-valid stackflow token))
+
+    ;; The reservoir cannot attempt to force-cancel a tap that has borrowed liquidity.
+    (asserts! (is-eq borrowed-amount u0) ERR_UNAUTHORIZED)
+
+    ;; Call the StackFlow contract to force-cancel the tap.
+    (as-contract? () (try! (contract-call? stackflow force-cancel token user)))
+  )
+)
+
+;;; Force-close a tap with the specified user. This will close the pipe and
+;;; return the signed balances to the user and the reservoir. This should only
+;;; be called by the operator of the reservoir when the tap holder has failed
+;;; to provide the needed signatures for a withdrawal.
+(define-public (force-close-tap
+    (stackflow <stackflow-token>)
+    (token (optional <sip-010>))
+    (user principal)
+    (user-balance uint)
+    (reservoir-balance uint)
+    (user-signature (buff 65))
+    (reservoir-signature (buff 65))
+    (nonce uint)
+    (action uint)
+    (actor principal)
+    (secret (optional (buff 32)))
+    (valid-after (optional uint))
+  )
+  (let (
+      (borrow (default-to {
+        amount: u0,
+        until: u0,
+      }
+        (map-get? borrowed-liquidity user)
+      ))
+      (borrowed-amount (if (> burn-block-height (get until borrow))
+        u0
+        (get amount borrow)
+      ))
+    )
+    (try! (check-valid stackflow token))
+
+    ;; The reservoir cannot attempt to force-close a tap that has borrowed liquidity.
+    (asserts! (is-eq borrowed-amount u0) ERR_UNAUTHORIZED)
+
+    ;; Call the StackFlow contract to force-close the tap.
+    (as-contract? ()
+      (try! (contract-call? stackflow force-close token user reservoir-balance
+        user-balance reservoir-signature user-signature nonce action actor
+        secret valid-after
+      ))
+    )
+  )
+)
+
+;; ----- Functions called by Tap holders -----
 
 ;;; Create a new tap for FT `token` (`none` indicates STX) and deposit
 ;;; `amount` funds into it.
@@ -231,232 +359,10 @@
       until: until,
     })
 
-    (ok until)
-  )
-)
-
-;;; Set the borrow rate for the contract (in basis points).
-;;; Returns:
-;;; - `(ok true)` on success
-;;; - `ERR_UNAUTHORIZED` if the caller is not the operator
-(define-public (set-borrow-rate (new-rate uint))
-  (begin
-    (asserts! (is-eq contract-caller OPERATOR) ERR_UNAUTHORIZED)
-    (asserts! (var-get initialized) ERR_NOT_INITIALIZED)
-    (ok (var-set borrow-rate new-rate))
-  )
-)
-
-;;; Calculate the fee for borrowing a given amount.
-;;; Returns the fee amount in the smallest unit of the token.
-(define-read-only (get-borrow-fee (amount uint))
-  (/ (* amount (var-get borrow-rate)) u10000)
-)
-
-;;; Get the minimum liquidity amount that providers must add to the reservoir.
-;;; The minumum liquidity amount is based on the total liquidity in the
-;;; reservoir and the number of providers, scaling up as we approach the
-;;; maximum number of providers.
-(define-read-only (get-min-liquidity)
-  (let (
-      (total (var-get total-liquidity))
-      (base (/ total MAX_PROVIDERS))
-      (multiplier (+ u1 (log2 (+ (len (var-get providers)) u1))))
-      (min-liquidity (* base multiplier))
-    )
-    (if (< min-liquidity MIN_LIQUIDITY_FLOOR)
-      MIN_LIQUIDITY_FLOOR
-      min-liquidity
-    )
-  )
-)
-
-;;; As a provider, add `amount` of STX or FT `token` to the reservoir for
-;;; borrowing. Providers must add at least the minimum liquidity amount.
-;;; Returns:
-;;; - `(ok true)` on success
-;;; - `ERR_AMOUNT_TOO_LOW` if the amount is less than minimum liquidity amount
-;;; - `ERR_LIQUIDITY_POOL_FULL` if the maximum number of providers is reached
-;;; - `ERR_FUNDING_FAILED` if the funding failed
-(define-public (add-liquidity
-    (token (optional <sip-010>))
-    (amount uint)
-  )
-  (begin
-    (try! (check-valid-token token))
-    (asserts! (>= amount (get-min-liquidity)) ERR_AMOUNT_TOO_LOW)
-    (asserts! (< (len (var-get providers)) MAX_PROVIDERS) ERR_LIQUIDITY_POOL_FULL)
-    (unwrap!
-      (match token
-        t (contract-call? t transfer amount tx-sender current-contract none)
-        (stx-transfer? amount tx-sender current-contract)
-      )
-      ERR_FUNDING_FAILED
-    )
-
-    ;; Credit this provider with the amount of liquidity they added.
-    (match (map-get? liquidity tx-sender)
-      ;; If the provider already exists, update their liquidity.
-      current
-      (map-set liquidity tx-sender (+ current amount))
-      ;; If the provider does not exist, add them to the list of providers.
-      (begin
-        (map-set liquidity tx-sender amount)
-        (var-set providers
-          (unwrap! (as-max-len? (append (var-get providers) tx-sender) u256)
-            ERR_LIQUIDITY_POOL_FULL
-          ))
-      )
-    )
-
     ;; Update the total liquidity in the reservoir.
-    (var-set total-liquidity (+ (var-get total-liquidity) amount))
+    (var-set available-liquidity (- (var-get available-liquidity) amount))
 
-    (ok true)
-  )
-)
-
-;;; As a liquidity provider, withdraw `amount` of STX or FT `token` from the
-;;; reservoir. If this would leave the provider with less than the minimum
-;;; liquidity amount, then the full amount will be removed.
-;;; Returns:
-;;; - `(ok uint)` on success, where `uint` is the amount removed
-;;; - `ERR_UNAUTHORIZED` if the caller is not a liquidity provider
-;;; - `ERR_TRANSFER_FAILED` if the transfer failed
-(define-public (withdraw-liquidity-from-reservoir
-    (token (optional <sip-010>))
-    (amount uint)
-  )
-  (let (
-      (provider tx-sender)
-      (provider-liquidity (default-to u0 (map-get? liquidity provider)))
-      (adjusted-amount (if (and
-          (<= amount provider-liquidity)
-          (< (- provider-liquidity amount) (get-min-liquidity))
-        )
-        provider-liquidity
-        amount
-      ))
-    )
-    (try! (check-valid-token token))
-    ;; Ensure the provider has enough liquidity.
-    (asserts! (<= amount provider-liquidity) ERR_UNAUTHORIZED)
-
-    ;; Update provider's liquidity
-    (let ((new-liquidity (- provider-liquidity adjusted-amount)))
-      (if (is-eq new-liquidity u0)
-        ;; If provider is removing all liquidity, remove them from the list
-        (begin
-          (map-delete liquidity provider)
-          (var-set providers (filter remove-provider (var-get providers)))
-        )
-        ;; Otherwise, just update their balance
-        (map-set liquidity provider new-liquidity)
-      )
-    )
-
-    ;; Add this withdrawal to the queue for processing.
-    (var-set withdraw-queue
-      (unwrap!
-        (as-max-len?
-          (append (var-get withdraw-queue) {
-            provider: provider,
-            amount: adjusted-amount,
-          })
-          u256
-        )
-        ERR_LIQUIDITY_POOL_FULL
-      ))
-
-    ;; Process the withdrawal queue.
-    (let (
-        (acc (fold withdraw-liquidity-to-fold (var-get withdraw-queue) {
-          token: token,
-          remaining: (list),
-        }))
-        (r (get remaining acc))
-      )
-      (var-set withdraw-queue r)
-
-      ;; If the queue is empty, return the amount withdrawn.
-      (if (is-eq (len r) u0)
-        (ok (some adjusted-amount))
-        ;; If there are still remaining withdrawals, return none.
-        (ok none)
-      )
-    )
-  )
-)
-
-;;; Process the withdrawal queue, attempting to withdraw liquidity for each
-;;; provider in the queue. If a withdrawal fails, the provider is added back
-;;; to the remaining list to try again later.
-;;; Returns:
-;;; - `(ok (list { provider: principal, amount: uint }))` on success, where
-;;;   the list contains the withdrawals left on the queue.
-(define-private (process-withdrawals (token (optional <sip-010>)))
-  (let ((acc {
-      token: token,
-      remaining: (list),
-    }))
-    ;; Process the withdrawal queue.
-    (let ((r (fold withdraw-liquidity-to-fold (var-get withdraw-queue) acc)))
-      (var-set withdraw-queue (get remaining r))
-      ;; Return the updated accumulator.
-      (get remaining r)
-    )
-  )
-)
-
-(define-private (withdraw-liquidity-to-fold
-    (withdraw {
-      provider: principal,
-      amount: uint,
-    })
-    (acc {
-      token: (optional <sip-010>),
-      remaining: (list 256 {
-        provider: principal,
-        amount: uint,
-      }),
-    })
-  )
-  (if (is-ok (withdraw-liquidity-to (get token acc) (get provider withdraw)
-      (get amount withdraw)
-    ))
-    ;; If successful, update the total liquidity in the reservoir.
-    (begin
-      (var-set total-liquidity
-        (- (var-get total-liquidity) (get amount withdraw))
-      )
-      acc
-    )
-    ;; Else, add the provider back to the remaining list to try again later.
-    {
-      token: (get token acc),
-      remaining: (unwrap-panic (as-max-len?
-        (append (get remaining acc) {
-          provider: (get provider withdraw),
-          amount: (get amount withdraw),
-        })
-        u256
-      )),
-    }
-  )
-)
-
-(define-private (withdraw-liquidity-to
-    (token (optional <sip-010>))
-    (provider principal)
-    (amount uint)
-  )
-  (match token
-    t (as-contract? ((with-ft (contract-of t) "*" amount))
-      (try! (contract-call? t transfer amount tx-sender provider none))
-    )
-    (as-contract? ((with-stx amount))
-      (try! (stx-transfer? amount tx-sender provider))
-    )
+    (ok until)
   )
 )
 
@@ -503,107 +409,45 @@
       amount: amount,
     })
     (try! (match token
-      t (as-contract? ((with-ft (contract-of t) "*" amount))
+      t (as-contract? ()
         (try! (contract-call? stackflow withdraw amount token user reservoir-balance
           user-balance reservoir-signature user-signature nonce
         ))
       )
-      (as-contract? ((with-stx amount))
+      (as-contract? ()
         (try! (contract-call? stackflow withdraw amount token user reservoir-balance
           user-balance reservoir-signature user-signature nonce
         ))
       )
     ))
 
-    (process-withdrawals token)
     (ok true)
   )
 )
 
-;;; Force-cancel a tap with the specified user. This will close the pipe and
-;;; return the last balances to the user and the reservoir. This should only
-;;; be called by the operator of the reservoir when the tap holder has failed
-;;; to provide the needed signatures for a withdrawal.
-(define-public (force-cancel-tap
-    (stackflow <stackflow-token>)
+;; ----- Read-only functions -----
+
+;;; Calculate the fee for borrowing a given amount.
+;;; Returns the fee amount in the smallest unit of the token.
+(define-read-only (get-borrow-fee (amount uint))
+  (/ (* amount (var-get borrow-rate)) u10000)
+)
+
+;; ---- Private helper functions -----
+
+(define-private (withdraw-liquidity-to
     (token (optional <sip-010>))
-    (user principal)
+    (amount uint)
+    (recipient principal)
   )
-  (let (
-      (borrow (default-to {
-        amount: u0,
-        until: u0,
-      }
-        (map-get? borrowed-liquidity user)
-      ))
-      (borrowed-amount (if (> burn-block-height (get until borrow))
-        u0
-        (get amount borrow)
-      ))
+  (match token
+    t (as-contract? ((with-ft (contract-of t) "*" amount))
+      (try! (contract-call? t transfer amount tx-sender recipient none))
     )
-    (try! (check-valid stackflow token))
-
-    ;; The reservoir cannot attempt to force-cancel a tap that has borrowed liquidity.
-    (asserts! (is-eq borrowed-amount u0) ERR_UNAUTHORIZED)
-
-    ;; Call the StackFlow contract to force-cancel the tap.
-    (as-contract? () (try! (contract-call? stackflow force-cancel token user)))
-  )
-)
-
-;;; Force-close a tap with the specified user. This will close the pipe and
-;;; return the signed balances to the user and the reservoir. This should only
-;;; be called by the operator of the reservoir when the tap holder has failed
-;;; to provide the needed signatures for a withdrawal.
-(define-public (force-close-tap
-    (stackflow <stackflow-token>)
-    (token (optional <sip-010>))
-    (user principal)
-    (user-balance uint)
-    (reservoir-balance uint)
-    (user-signature (buff 65))
-    (reservoir-signature (buff 65))
-    (nonce uint)
-    (action uint)
-    (actor principal)
-    (secret (optional (buff 32)))
-    (valid-after (optional uint))
-  )
-  (let (
-      (borrow (default-to {
-        amount: u0,
-        until: u0,
-      }
-        (map-get? borrowed-liquidity user)
-      ))
-      (borrowed-amount (if (> burn-block-height (get until borrow))
-        u0
-        (get amount borrow)
-      ))
-    )
-    (try! (check-valid stackflow token))
-
-    ;; The reservoir cannot attempt to force-close a tap that has borrowed liquidity.
-    (asserts! (is-eq borrowed-amount u0) ERR_UNAUTHORIZED)
-
-    ;; Call the StackFlow contract to force-close the tap.
-    (as-contract? ()
-      (try! (contract-call? stackflow force-close token user reservoir-balance
-        user-balance reservoir-signature user-signature nonce action actor
-        secret valid-after
-      ))
+    (as-contract? ((with-stx amount))
+      (try! (stx-transfer? amount tx-sender recipient))
     )
   )
-)
-
-;;; Filter function to remove a provider from the list
-(define-private (remove-provider (p principal))
-  (not (is-eq p tx-sender))
-)
-
-;;; Get the liquidity for a provider
-(define-private (get-provider-liquidity (provider principal))
-  (default-to u0 (map-get? liquidity provider))
 )
 
 ;;; Given an optional trait, return an optional principal for the trait.
