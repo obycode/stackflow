@@ -1,17 +1,8 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import {
-  Cl,
-  ClarityType,
-  ResponseOkCV,
-  UIntCV,
-  ListCV,
-} from "@stacks/transactions";
+import { Cl, ClarityType, ResponseOkCV } from "@stacks/transactions";
 import {
   deployer,
   address1,
-  address2,
-  address3,
-  address4,
   address1PK,
   address2PK,
   reservoirContract,
@@ -22,13 +13,11 @@ import {
   deployerPK,
   MAX_HEIGHT,
   CONFIRMATION_DEPTH,
-  accounts,
   generateWithdrawSignature,
   BORROW_TERM_BLOCKS,
   PipeAction,
   generateTransferSignature,
 } from "./utils";
-import { a } from "vitest/dist/chunks/suite.d.FvehnV49.js";
 
 describe("reservoir", () => {
   beforeEach(() => {
@@ -463,6 +452,144 @@ describe("reservoir", () => {
               ),
             })
           ),
+        })
+      );
+    });
+
+    it("can borrow additional liquidity before previous term ends", () => {
+      // Set rate to 10% and fund the reservoir
+      simnet.callPublicFn(
+        "reservoir",
+        "set-borrow-rate",
+        [Cl.uint(1000)],
+        deployer
+      );
+      simnet.callPublicFn(
+        "reservoir",
+        "add-liquidity",
+        [Cl.none(), Cl.uint(5000000000)],
+        deployer
+      );
+
+      // Fund initial tap
+      const tap = simnet.callPublicFn(
+        "reservoir",
+        "create-tap",
+        [
+          Cl.principal(stackflowContract),
+          Cl.none(),
+          Cl.uint(1000000),
+          Cl.uint(0),
+        ],
+        address1
+      );
+      expect(tap.result.type).toBe(ClarityType.ResponseOk);
+
+      const amount1 = 50000;
+      const fee1 = 5000;
+      const nonce1 = 1;
+
+      const mySignature1 = generateDepositSignature(
+        address1PK,
+        null,
+        address1,
+        reservoirContract,
+        1000000,
+        amount1,
+        nonce1,
+        reservoirContract
+      );
+
+      const reservoirSignature1 = generateDepositSignature(
+        deployerPK,
+        null,
+        reservoirContract,
+        address1,
+        amount1,
+        1000000,
+        nonce1,
+        reservoirContract
+      );
+
+      const borrow1 = simnet.callPublicFn(
+        "reservoir",
+        "borrow-liquidity",
+        [
+          Cl.principal(stackflowContract),
+          Cl.uint(amount1),
+          Cl.uint(fee1),
+          Cl.none(),
+          Cl.uint(1000000),
+          Cl.uint(amount1),
+          Cl.buffer(mySignature1),
+          Cl.buffer(reservoirSignature1),
+          Cl.uint(nonce1),
+        ],
+        address1
+      );
+      expect(borrow1.result).toBeOk(
+        Cl.uint(simnet.burnBlockHeight + BORROW_TERM_BLOCKS)
+      );
+
+      // Wait for the first borrow deposit to confirm, but not for the term to expire
+      simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
+      const amount2 = 75000;
+      const fee2 = 7500;
+      const nonce2 = 2;
+      const userBalance = 1000000;
+      const reservoirBalance = amount1 + amount2;
+      const expectedUntil = simnet.burnBlockHeight + BORROW_TERM_BLOCKS;
+
+      const mySignature2 = generateDepositSignature(
+        address1PK,
+        null,
+        address1,
+        reservoirContract,
+        userBalance,
+        reservoirBalance,
+        nonce2,
+        reservoirContract
+      );
+
+      const reservoirSignature2 = generateDepositSignature(
+        deployerPK,
+        null,
+        reservoirContract,
+        address1,
+        reservoirBalance,
+        userBalance,
+        nonce2,
+        reservoirContract
+      );
+
+      const borrow2 = simnet.callPublicFn(
+        "reservoir",
+        "borrow-liquidity",
+        [
+          Cl.principal(stackflowContract),
+          Cl.uint(amount2),
+          Cl.uint(fee2),
+          Cl.none(),
+          Cl.uint(userBalance),
+          Cl.uint(reservoirBalance),
+          Cl.buffer(mySignature2),
+          Cl.buffer(reservoirSignature2),
+          Cl.uint(nonce2),
+        ],
+        address1
+      );
+      expect(borrow2.result).toBeOk(Cl.uint(expectedUntil));
+
+      const borrowEntry = simnet.getMapEntry(
+        reservoirContract,
+        "borrowed-liquidity",
+        Cl.principal(address1)
+      );
+      expect(borrowEntry).toBeSome(
+        Cl.tuple({
+          amount: Cl.uint(amount2),
+          until: Cl.uint(expectedUntil),
         })
       );
     });
