@@ -58,9 +58,6 @@
 ;;; The StackFlow contract that this Reservoir is registered with.
 (define-data-var stackflow-contract (optional principal) none)
 
-;;; Available liquidity in the Reservoir.
-(define-data-var available-liquidity uint u0)
-
 ;;; Map tracking the borrowed liquidity for each tap holder.
 (define-map borrowed-liquidity
   principal
@@ -125,17 +122,7 @@
   )
   (begin
     (try! (check-valid-token token))
-    (unwrap!
-      (match token
-        t (contract-call? t transfer amount tx-sender current-contract none)
-        (stx-transfer? amount tx-sender current-contract)
-      )
-      ERR_FUNDING_FAILED
-    )
-
-    ;; Update the total liquidity in the reservoir.
-    (var-set available-liquidity (+ (var-get available-liquidity) amount))
-
+    (unwrap! (transfer-to-contract token amount) ERR_FUNDING_FAILED)
     (ok true)
   )
 )
@@ -157,13 +144,12 @@
   (begin
     (asserts! (is-eq contract-caller OPERATOR) ERR_UNAUTHORIZED)
     (try! (check-valid-token token))
-    (asserts! (<= amount (var-get available-liquidity)) ERR_AMOUNT_NOT_AVAILABLE)
+    (asserts! (<= amount (unwrap-panic (get-available-liquidity token)))
+      ERR_AMOUNT_NOT_AVAILABLE
+    )
 
     ;; Perform the withdrawal.
-    (unwrap! (withdraw-liquidity-to token amount recipient) ERR_TRANSFER_FAILED)
-
-    ;; Update the total liquidity in the reservoir.
-    (var-set available-liquidity (- (var-get available-liquidity) amount))
+    (unwrap! (transfer-from-contract token amount recipient) ERR_TRANSFER_FAILED)
 
     (ok amount)
   )
@@ -242,6 +228,65 @@
         secret valid-after
       ))
     )
+  )
+)
+
+;;; Return liquidity to the reservoir via a withdrawal as the reservoir. The
+;;; reservoir operator will request signatures from the tap holder when the
+;;; reservoir's balance has reached a certain threshold. If the user fails to
+;;; provide the needed signatures for this withdrawal, then the reservoir will
+;;; refuse further transfers to/from the tap holder and eventually force-close
+;;; the tap.
+;;; Returns:
+;;; - `(ok true)` on success
+;;; - `ERR_NOT_INITIALIZED` if the contract has not been initialized
+;;; - `ERR_INCORRECT_STACKFLOW` if the StackFlow contract is not the correct one
+;;; - `ERR_UNAPPROVED_TOKEN` if the token is not the correct token
+(define-public (return-liquidity-to-reservoir
+    (stackflow <stackflow-token>)
+    (token (optional <sip-010>))
+    (user principal)
+    (amount uint)
+    (user-balance uint)
+    (reservoir-balance uint)
+    (user-signature (buff 65))
+    (reservoir-signature (buff 65))
+    (nonce uint)
+  )
+  (let (
+      (borrow (default-to {
+        amount: u0,
+        until: u0,
+      }
+        (map-get? borrowed-liquidity user)
+      ))
+      (borrowed-amount (if (> burn-block-height (get until borrow))
+        u0
+        (get amount borrow)
+      ))
+    )
+    (try! (check-valid stackflow token))
+    ;; The reservoir cannot attempt to return liquidity that is still borrowed.
+    (asserts! (>= reservoir-balance borrowed-amount) ERR_UNAUTHORIZED)
+
+    (print {
+      topic: "return-liquidity-to-reservoir",
+      amount: amount,
+    })
+    (try! (match token
+      t (as-contract? ()
+        (try! (contract-call? stackflow withdraw amount token user reservoir-balance
+          user-balance reservoir-signature user-signature nonce
+        ))
+      )
+      (as-contract? ()
+        (try! (contract-call? stackflow withdraw amount token user reservoir-balance
+          user-balance reservoir-signature user-signature nonce
+        ))
+      )
+    ))
+
+    (ok true)
   )
 )
 
@@ -333,13 +378,7 @@
     )
     (try! (check-valid stackflow token))
     (asserts! (>= fee expected-fee) ERR_INVALID_FEE)
-    (unwrap!
-      (match token
-        t (contract-call? t transfer fee tx-sender RESERVOIR none)
-        (stx-transfer? fee tx-sender RESERVOIR)
-      )
-      ERR_BORROW_FEE_PAYMENT_FAILED
-    )
+    (unwrap! (transfer-to-contract token fee) ERR_BORROW_FEE_PAYMENT_FAILED)
     (try! (match token
       t (as-contract? ((with-ft (contract-of t) "*" amount))
         (try! (contract-call? stackflow deposit amount token borrower reservoir-balance
@@ -359,69 +398,7 @@
       until: until,
     })
 
-    ;; Update the total liquidity in the reservoir.
-    (var-set available-liquidity (- (var-get available-liquidity) amount))
-
     (ok until)
-  )
-)
-
-;;; Return liquidity to the reservoir via a withdrawal as the reservoir. The
-;;; reservoir operator will request signatures from the tap holder when the
-;;; reservoir's balance has reached a certain threshold. If the user fails to
-;;; provide the needed signatures for this withdrawal, then the reservoir will
-;;; refuse further transfers to/from the tap holder and eventually force-close
-;;; the tap.
-;;; Returns:
-;;; - `(ok true)` on success
-;;; - `ERR_NOT_INITIALIZED` if the contract has not been initialized
-;;; - `ERR_INCORRECT_STACKFLOW` if the StackFlow contract is not the correct one
-;;; - `ERR_UNAPPROVED_TOKEN` if the token is not the correct token
-(define-public (return-liquidity-to-reservoir
-    (stackflow <stackflow-token>)
-    (token (optional <sip-010>))
-    (user principal)
-    (amount uint)
-    (user-balance uint)
-    (reservoir-balance uint)
-    (user-signature (buff 65))
-    (reservoir-signature (buff 65))
-    (nonce uint)
-  )
-  (let (
-      (borrow (default-to {
-        amount: u0,
-        until: u0,
-      }
-        (map-get? borrowed-liquidity user)
-      ))
-      (borrowed-amount (if (> burn-block-height (get until borrow))
-        u0
-        (get amount borrow)
-      ))
-    )
-    (try! (check-valid stackflow token))
-    ;; The reservoir cannot attempt to return liquidity that is still borrowed.
-    (asserts! (>= reservoir-balance borrowed-amount) ERR_UNAUTHORIZED)
-
-    (print {
-      topic: "return-liquidity-to-reservoir",
-      amount: amount,
-    })
-    (try! (match token
-      t (as-contract? ()
-        (try! (contract-call? stackflow withdraw amount token user reservoir-balance
-          user-balance reservoir-signature user-signature nonce
-        ))
-      )
-      (as-contract? ()
-        (try! (contract-call? stackflow withdraw amount token user reservoir-balance
-          user-balance reservoir-signature user-signature nonce
-        ))
-      )
-    ))
-
-    (ok true)
   )
 )
 
@@ -433,9 +410,25 @@
   (/ (* amount (var-get borrow-rate)) u10000)
 )
 
+;;; Get the available liquidity in the reservoir for `token`.
+;;; NB: This cannot be a read-only function because of the contract-call? in
+;;; the FT case. Instead, it must be a public function that returns a response
+;;; but it is written such that it only returns `ok` values. Users should use
+;;; `unwrap-panic` on its result.
+(define-public (get-available-liquidity (token (optional <sip-010>)))
+  (ok (match token
+    t (match (contract-call? t get-balance current-contract)
+      balance balance
+      e u0
+    )
+    (stx-get-balance current-contract)
+  ))
+)
+
 ;; ---- Private helper functions -----
 
-(define-private (withdraw-liquidity-to
+;;; Transfer `amount` of `token` from this contract to `recipient`.
+(define-private (transfer-from-contract
     (token (optional <sip-010>))
     (amount uint)
     (recipient principal)
@@ -447,6 +440,17 @@
     (as-contract? ((with-stx amount))
       (try! (stx-transfer? amount tx-sender recipient))
     )
+  )
+)
+
+;;; Transfer 'amount' of 'token' from `tx-sender` to this contract.
+(define-private (transfer-to-contract
+    (token (optional <sip-010>))
+    (amount uint)
+  )
+  (match token
+    t (contract-call? t transfer amount tx-sender current-contract none)
+    (stx-transfer? amount tx-sender current-contract)
   )
 )
 

@@ -152,12 +152,14 @@ describe("reservoir", () => {
       const reservoirBalance = stxBalances.get(reservoirContract);
       expect(reservoirBalance).toBe(1000000000n);
 
-      // Verify available-liquidity
-      const totalLiquidity = simnet.getDataVar(
-        reservoirContract,
-        "available-liquidity"
+      // Verify get-available-liquidity
+      const { result: available } = simnet.callPublicFn(
+        "reservoir",
+        "get-available-liquidity",
+        [Cl.none()],
+        deployer
       );
-      expect(totalLiquidity).toBeUint(1000000000n);
+      expect(available).toBeOk(Cl.uint(1000000000n));
     });
 
     it("operator can remove their own unused STX liquidity", () => {
@@ -183,12 +185,14 @@ describe("reservoir", () => {
       const reservoirBalance = stxBalances.get(reservoirContract);
       expect(reservoirBalance).toBe(9999200000n);
 
-      // Verify available-liquidity
-      const totalLiquidity = simnet.getDataVar(
-        reservoirContract,
-        "available-liquidity"
+      // Verify get-available-liquidity
+      const { result: available } = simnet.callPublicFn(
+        "reservoir",
+        "get-available-liquidity",
+        [Cl.none()],
+        deployer
       );
-      expect(totalLiquidity).toBeUint(9999200000n);
+      expect(available).toBeOk(Cl.uint(9999200000n));
     });
 
     it("operator can remove their own unused STX liquidity to another address", () => {
@@ -214,12 +218,14 @@ describe("reservoir", () => {
       const reservoirBalance = stxBalances.get(reservoirContract);
       expect(reservoirBalance).toBe(9999200000n);
 
-      // Verify available-liquidity
-      const totalLiquidity = simnet.getDataVar(
-        reservoirContract,
-        "available-liquidity"
+      // Verify get-available-liquidity
+      const { result: available } = simnet.callPublicFn(
+        "reservoir",
+        "get-available-liquidity",
+        [Cl.none()],
+        deployer
       );
-      expect(totalLiquidity).toBeUint(9999200000n);
+      expect(available).toBeOk(Cl.uint(9999200000n));
     });
 
     it("operator cannot remove more than the available liquidity", () => {
@@ -245,12 +251,14 @@ describe("reservoir", () => {
       const reservoirBalance = stxBalances.get(reservoirContract);
       expect(reservoirBalance).toBe(1000000000n);
 
-      // Verify available-liquidity remains unchanged
-      const totalLiquidity = simnet.getDataVar(
-        reservoirContract,
-        "available-liquidity"
+      // Verify get-available-liquidity remains unchanged
+      const { result: available } = simnet.callPublicFn(
+        "reservoir",
+        "get-available-liquidity",
+        [Cl.none()],
+        deployer
       );
-      expect(totalLiquidity).toBeUint(1000000000n);
+      expect(available).toBeOk(Cl.uint(1000000000n));
     });
 
     it("non-operator cannot remove liquidity", () => {
@@ -282,11 +290,13 @@ describe("reservoir", () => {
       );
 
       // Check total liquidity
-      let liquidity = simnet.getDataVar(
-        reservoirContract,
-        "available-liquidity"
+      const { result: available } = simnet.callPublicFn(
+        "reservoir",
+        "get-available-liquidity",
+        [Cl.none()],
+        deployer
       );
-      expect(liquidity).toBeUint(2000000000);
+      expect(available).toBeOk(Cl.uint(2000000000));
 
       // Add liquidity again
       simnet.callPublicFn(
@@ -297,8 +307,13 @@ describe("reservoir", () => {
       );
 
       // Check updated total liquidity
-      liquidity = simnet.getDataVar(reservoirContract, "available-liquidity");
-      expect(liquidity).toBeUint(3500000000);
+      const { result: availableAfterAdd } = simnet.callPublicFn(
+        "reservoir",
+        "get-available-liquidity",
+        [Cl.none()],
+        deployer
+      );
+      expect(availableAfterAdd).toBeOk(Cl.uint(3500000000));
 
       // Remove some liquidity
       simnet.callPublicFn(
@@ -309,8 +324,13 @@ describe("reservoir", () => {
       );
 
       // Check updated total liquidity after removal
-      liquidity = simnet.getDataVar(reservoirContract, "available-liquidity");
-      expect(liquidity).toBeUint(3000000000);
+      const { result: availableAfterWithdraw } = simnet.callPublicFn(
+        "reservoir",
+        "get-available-liquidity",
+        [Cl.none()],
+        deployer
+      );
+      expect(availableAfterWithdraw).toBeOk(Cl.uint(3000000000));
     });
   });
 
@@ -917,6 +937,15 @@ describe("reservoir", () => {
       // Verify the reservoir balance after returning liquidity
       const reservoirBalance = stxBalances.get(reservoirContract);
       expect(reservoirBalance).toBe(1000000000n + 5000n);
+
+      // get-available-liquidity returns actual tokens held by the reservoir
+      const { result: available } = simnet.callPublicFn(
+        "reservoir",
+        "get-available-liquidity",
+        [Cl.none()],
+        deployer
+      );
+      expect(available).toBeOk(Cl.uint(1000005000n));
     });
 
     it("cannot return liquidity before borrow term ends", () => {
