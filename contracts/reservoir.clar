@@ -345,7 +345,7 @@
   )
   (begin
     (try! (check-valid stackflow token))
-    (contract-call? .stackflow deposit amount token RESERVOIR my-balance
+    (contract-call? stackflow deposit amount token RESERVOIR my-balance
       their-balance my-signature their-signature nonce
     )
   )
