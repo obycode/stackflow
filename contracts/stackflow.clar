@@ -138,25 +138,26 @@
   )
 )
 
-;;; Register an agent to act on your behalf. Registering an agent allows you to
-;;; transfer the responsibility of maintaining an always-on server for managing
-;;; your pipes. The agent can perform all reactive actions on your behalf,
-;;; including signing off on incoming transfers, deposit, withdraw, and closure
-;;; requests from the other party, and disputing closures initiated by the
-;;; other party.
-;;; WARNING: An agent, collaborating with the other party, could potentially
-;;; steal your funds. Only register agents you trust.
+;;; Register a signing key for the calling contract principal. This is intended
+;;; for contract participants (e.g. Reservoir contracts) that cannot produce
+;;; signatures directly. Standard principals are not allowed to register agents.
 ;;; Returns `(ok true)`
 (define-public (register-agent (agent principal))
-  (ok (map-set agents tx-sender agent))
+  (begin
+    (asserts! (is-contract-principal contract-caller) ERR_UNAUTHORIZED)
+    (ok (map-set agents contract-caller agent))
+  )
 )
 
-;;; Deregister agent
+;;; Deregister the signing key for the calling contract principal.
 ;;; Returns:
 ;;; - `(ok true)` if an agent had been registered
 ;;; - `(ok false)` if there was no agent registered
 (define-public (deregister-agent)
-  (ok (map-delete agents tx-sender))
+  (begin
+    (asserts! (is-contract-principal contract-caller) ERR_UNAUTHORIZED)
+    (ok (map-delete agents contract-caller))
+  )
 )
 
 ;;; Deposit `amount` funds into an unfunded pipe between `tx-sender` and
@@ -499,14 +500,12 @@
   )
 )
 
-;;; As an agent of `for`, dispute the closing of a pipe that has been closed
-;;; early by submitting a dispute within the waiting period. If the dispute is
-;;; valid, the pipe will be closed and the new balances will be paid out to
-;;; the appropriate parties.
+;;; Dispute the closing of a pipe on behalf of `for` by submitting a dispute
+;;; within the waiting period. This function is permissionless: any principal
+;;; may submit valid signatures for `for`.
 ;;; Returns:
 ;;; - `(ok false)` on success if the pipe's token was STX
 ;;; - `(ok true)` on success if the pipe's token was a SIP-010 token
-;;; - `ERR_UNAUTHORIZED` if the sender is not an agent of `for`
 ;;; - `ERR_NO_SUCH_PIPE` if the pipe does not exist
 ;;; - `ERR_NO_CLOSE_IN_PROGRESS` if a forced closure is not in progress
 ;;; - `ERR_SELF_DISPUTE` if the sender is disputing their own force closure
@@ -517,7 +516,7 @@
 ;;; - `ERR_INVALID_SENDER_SIGNATURE` if the sender's signature is invalid
 ;;; - `ERR_INVALID_OTHER_SIGNATURE` if the other party's signature is invalid
 ;;; - `ERR_WITHDRAWAL_FAILED` if the withdrawal fails
-(define-public (agent-dispute-closure
+(define-public (dispute-closure-for
     (for principal)
     (token (optional <sip-010>))
     (with principal)
@@ -531,11 +530,8 @@
     (secret (optional (buff 32)))
     (valid-after (optional uint))
   )
-  (let ((agent (unwrap! (map-get? agents for) ERR_UNAUTHORIZED)))
-    (asserts! (is-eq tx-sender agent) ERR_UNAUTHORIZED)
-    (dispute-closure-inner for token with my-balance their-balance my-signature
-      their-signature nonce action actor secret valid-after
-    )
+  (dispute-closure-inner for token with my-balance their-balance my-signature
+    their-signature nonce action actor secret valid-after
   )
 )
 
@@ -552,8 +548,27 @@
     (token (optional <sip-010>))
     (with principal)
   )
+  (finalize-inner tx-sender token with)
+)
+
+;;; Finalize a pipe closure on behalf of `for`. This function is permissionless:
+;;; anyone may finalize an expired closure.
+(define-public (finalize-for
+    (for principal)
+    (token (optional <sip-010>))
+    (with principal)
+  )
+  (finalize-inner for token with)
+)
+
+;;; Finalize a pipe closure for the pair (`for`, `with`), if expired.
+(define-private (finalize-inner
+    (for principal)
+    (token (optional <sip-010>))
+    (with principal)
+  )
   (let (
-      (pipe-key (try! (get-pipe-key (contract-of-optional token) tx-sender with)))
+      (pipe-key (try! (get-pipe-key (contract-of-optional token) for with)))
       (pipe (unwrap! (map-get? pipes pipe-key) ERR_NO_SUCH_PIPE))
       (closer (get closer pipe))
       (expires-at (get expires-at pipe))
@@ -1126,7 +1141,7 @@
   )
 )
 
-;;; Inner function called by `dispute-closure` and `agent-dispute-closure`.
+;;; Inner function called by `dispute-closure` and `dispute-closure-for`.
 (define-private (dispute-closure-inner
     (for principal)
     (token (optional <sip-010>))
@@ -1321,16 +1336,26 @@
     (asserts!
       (or
         (is-eq recovered signer)
-        ;; Check if the signer is an agent of the actor
-        (match (map-get? agents signer)
-          agent (is-eq recovered agent)
-          false
+        ;; Contract principals may delegate signing to an agent key.
+        (and
+          (is-contract-principal signer)
+          (match (map-get? agents signer)
+            agent (is-eq recovered agent)
+            false
+          )
         )
       )
       ERR_INVALID_SIGNATURE
     )
     (ok true)
   )
+)
+
+;;; Determine whether a principal is a contract principal.
+;;; Standard principals serialize to 22 bytes; contract principals include a
+;;; contract-name suffix and therefore serialize to a longer buffer.
+(define-private (is-contract-principal (p principal))
+  (> (len (unwrap-panic (to-consensus-buff? p))) u22)
 )
 
 ;;; Check that the contract has been initialized and `token` is the supported token.

@@ -111,6 +111,39 @@
   )
 )
 
+;;; Set the signing agent used by this Reservoir contract for StackFlow
+;;; signatures.
+;;; Returns:
+;;; - `(ok true)` on success
+;;; - `ERR_UNAUTHORIZED` if the caller is not the operator
+;;; - `ERR_NOT_INITIALIZED` if the contract has not been initialized
+;;; - `ERR_INCORRECT_STACKFLOW` if the StackFlow contract is not the correct one
+(define-public (set-agent
+    (stackflow <stackflow-token>)
+    (agent principal)
+  )
+  (begin
+    (asserts! (is-eq contract-caller OPERATOR) ERR_UNAUTHORIZED)
+    (try! (check-valid-stackflow stackflow))
+    (ok (try! (as-contract? () (try! (contract-call? stackflow register-agent agent)))))
+  )
+)
+
+;;; Remove the signing agent used by this Reservoir contract.
+;;; Returns:
+;;; - `(ok true)` on success if an agent had been registered
+;;; - `(ok false)` on success if no agent was registered
+;;; - `ERR_UNAUTHORIZED` if the caller is not the operator
+;;; - `ERR_NOT_INITIALIZED` if the contract has not been initialized
+;;; - `ERR_INCORRECT_STACKFLOW` if the StackFlow contract is not the correct one
+(define-public (clear-agent (stackflow <stackflow-token>))
+  (begin
+    (asserts! (is-eq contract-caller OPERATOR) ERR_UNAUTHORIZED)
+    (try! (check-valid-stackflow stackflow))
+    (ok (try! (as-contract? () (try! (contract-call? stackflow deregister-agent)))))
+  )
+)
+
 ;;; As the operator, add `amount` of STX or FT `token` to the reservoir for
 ;;; borrowing. Providers must add at least the minimum liquidity amount.
 ;;; Returns:
@@ -473,12 +506,21 @@
     (token (optional <sip-010>))
   )
   (begin
+    (try! (check-valid-stackflow stackflow))
+    (asserts! (is-eq (contract-of-optional token) (var-get supported-token))
+      ERR_UNAPPROVED_TOKEN
+    )
+    (ok true)
+  )
+)
+
+;;; Check if the Reservoir is initialized and the correct StackFlow contract
+;;; is passed.
+(define-private (check-valid-stackflow (stackflow <stackflow-token>))
+  (begin
     (asserts! (var-get initialized) ERR_NOT_INITIALIZED)
     (asserts! (is-eq (some (contract-of stackflow)) (var-get stackflow-contract))
       ERR_INCORRECT_STACKFLOW
-    )
-    (asserts! (is-eq (contract-of-optional token) (var-get supported-token))
-      ERR_UNAPPROVED_TOKEN
     )
     (ok true)
   )

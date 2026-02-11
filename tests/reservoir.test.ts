@@ -34,6 +34,69 @@ describe("reservoir", () => {
     );
   });
 
+  describe("agent management", () => {
+    it("operator can set the reservoir agent", () => {
+      const { result } = simnet.callPublicFn(
+        "reservoir",
+        "set-agent",
+        [Cl.principal(stackflowContract), Cl.principal(address1)],
+        deployer
+      );
+      expect(result).toBeOk(Cl.bool(true));
+
+      const agent = simnet.getMapEntry(
+        stackflowContract,
+        "agents",
+        Cl.principal(reservoirContract)
+      );
+      expect(agent).toBeSome(Cl.principal(address1));
+    });
+
+    it("operator can clear the reservoir agent", () => {
+      simnet.callPublicFn(
+        "reservoir",
+        "set-agent",
+        [Cl.principal(stackflowContract), Cl.principal(address1)],
+        deployer
+      );
+
+      const { result } = simnet.callPublicFn(
+        "reservoir",
+        "clear-agent",
+        [Cl.principal(stackflowContract)],
+        deployer
+      );
+      expect(result).toBeOk(Cl.bool(true));
+
+      const agent = simnet.getMapEntry(
+        stackflowContract,
+        "agents",
+        Cl.principal(reservoirContract)
+      );
+      expect(agent).toBeNone();
+    });
+
+    it("non-operator cannot set the reservoir agent", () => {
+      const { result } = simnet.callPublicFn(
+        "reservoir",
+        "set-agent",
+        [Cl.principal(stackflowContract), Cl.principal(address1)],
+        address1
+      );
+      expect(result).toBeErr(Cl.uint(ReservoirError.Unauthorized));
+    });
+
+    it("non-operator cannot clear the reservoir agent", () => {
+      const { result } = simnet.callPublicFn(
+        "reservoir",
+        "clear-agent",
+        [Cl.principal(stackflowContract)],
+        address1
+      );
+      expect(result).toBeErr(Cl.uint(ReservoirError.Unauthorized));
+    });
+  });
+
   describe("borrow rate", () => {
     it("operator can set borrow rate", () => {
       const { result } = simnet.callPublicFn(

@@ -76,76 +76,26 @@ describe("init", () => {
 });
 
 describe("register-agent", () => {
-  it("can register an agent", () => {
+  it("standard principal cannot register an agent", () => {
     const { result } = simnet.callPublicFn(
       "stackflow",
       "register-agent",
       [Cl.principal(address3)],
       address1
     );
-    expect(result).toBeOk(Cl.bool(true));
-
-    // Verify the map has been updated
-    const agent = simnet.getMapEntry(
-      stackflowContract,
-      "agents",
-      Cl.principal(address1)
-    );
-    expect(agent).toBeSome(Cl.principal(address3));
-  });
-
-  it("can overwrite an agent", () => {
-    const { result: result1 } = simnet.callPublicFn(
-      "stackflow",
-      "register-agent",
-      [Cl.principal(address3)],
-      address1
-    );
-    expect(result1).toBeOk(Cl.bool(true));
-
-    const { result } = simnet.callPublicFn(
-      "stackflow",
-      "register-agent",
-      [Cl.principal(address2)],
-      address1
-    );
-    expect(result).toBeOk(Cl.bool(true));
-
-    // Verify the map has been updated
-    const agent = simnet.getMapEntry(
-      stackflowContract,
-      "agents",
-      Cl.principal(address1)
-    );
-    expect(agent).toBeSome(Cl.principal(address2));
+    expect(result).toBeErr(Cl.uint(StackflowError.Unauthorized));
   });
 });
 
 describe("deregister-agent", () => {
-  it("can deregister an agent", () => {
-    const { result: result1 } = simnet.callPublicFn(
-      "stackflow",
-      "register-agent",
-      [Cl.principal(address3)],
-      address1
-    );
-    expect(result1).toBeOk(Cl.bool(true));
-
+  it("standard principal cannot deregister an agent", () => {
     const { result } = simnet.callPublicFn(
       "stackflow",
       "deregister-agent",
       [],
       address1
     );
-    expect(result).toBeOk(Cl.bool(true));
-
-    // Verify the map has been updated
-    const agent = simnet.getMapEntry(
-      stackflowContract,
-      "agents",
-      Cl.principal(address1)
-    );
-    expect(agent).toBeNone();
+    expect(result).toBeErr(Cl.uint(StackflowError.Unauthorized));
   });
 });
 
@@ -2868,17 +2818,9 @@ describe("dispute-closure", () => {
     expect(contractBalance).toBe(3000000n);
   });
 
-  it("account 2 can dispute account 1's closure with an agent-signed transfer", () => {
+  it("account 2 cannot dispute with a standard-principal agent-signed transfer", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
-
-    // Register an agent for address 1
-    simnet.callPublicFn(
-      "stackflow",
-      "register-agent",
-      [Cl.principal(address3)],
-      address1
-    );
 
     // Setup the pipe and save the pipe key
     simnet.callPublicFn(
@@ -2952,37 +2894,37 @@ describe("dispute-closure", () => {
       ],
       address2
     );
-    expect(disputeResult).toBeOk(Cl.bool(false));
+    expect(disputeResult).toBeErr(Cl.uint(StackflowError.InvalidOtherSignature));
 
-    // Verify that the pipe has been reset
+    // Verify that the pipe is unchanged
     const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
     expect(pipe).toBeSome(
       Cl.tuple({
-        "balance-1": Cl.uint(0),
-        "balance-2": Cl.uint(0),
-        "expires-at": Cl.uint(MAX_HEIGHT),
-        nonce: Cl.uint(1),
-        closer: Cl.none(),
+        "balance-1": Cl.uint(1000000),
+        "balance-2": Cl.uint(2000000),
+        "expires-at": Cl.uint(cancel_height + WAITING_PERIOD),
+        nonce: Cl.uint(0),
+        closer: Cl.some(Cl.principal(address1)),
         "pending-1": Cl.none(),
         "pending-2": Cl.none(),
       })
     );
 
-    // Verify the balances have changed
+    // Verify the balances have not changed
     const stxBalances = simnet.getAssetsMap().get("STX")!;
 
     const balance1 = stxBalances.get(address1);
-    expect(balance1).toBe(100000000300000n);
+    expect(balance1).toBe(99999999000000n);
 
     const balance2 = stxBalances.get(address2);
-    expect(balance2).toBe(99999999700000n);
+    expect(balance2).toBe(99999998000000n);
 
     const contractBalance = stxBalances.get(stackflowContract);
-    expect(contractBalance).toBe(0n);
+    expect(contractBalance).toBe(3000000n);
   });
 });
 
-describe("agent-dispute-closure", () => {
+describe("dispute-closure-for", () => {
   it("disputing a non-existent pipe gives an error", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
@@ -3036,7 +2978,7 @@ describe("agent-dispute-closure", () => {
 
     const { result } = simnet.callPublicFn(
       "stackflow",
-      "agent-dispute-closure",
+      "dispute-closure-for",
       [
         Cl.principal(address1),
         Cl.none(),
@@ -3114,7 +3056,7 @@ describe("agent-dispute-closure", () => {
     // Account 2 disputes the closure
     const { result: disputeResult } = simnet.callPublicFn(
       "stackflow",
-      "agent-dispute-closure",
+      "dispute-closure-for",
       [
         Cl.principal(address2),
         Cl.none(),
@@ -3238,7 +3180,7 @@ describe("agent-dispute-closure", () => {
     // Account 2 disputes the closure
     const { result: disputeResult } = simnet.callPublicFn(
       "stackflow",
-      "agent-dispute-closure",
+      "dispute-closure-for",
       [
         Cl.principal(address2),
         Cl.none(),
@@ -3352,7 +3294,7 @@ describe("agent-dispute-closure", () => {
     // Account 1 disputes the closure
     const { result: disputeResult } = simnet.callPublicFn(
       "stackflow",
-      "agent-dispute-closure",
+      "dispute-closure-for",
       [
         Cl.principal(address1),
         Cl.none(),
@@ -3468,7 +3410,7 @@ describe("agent-dispute-closure", () => {
     // Account 1 disputes the closure
     const { result: disputeResult } = simnet.callPublicFn(
       "stackflow",
-      "agent-dispute-closure",
+      "dispute-closure-for",
       [
         Cl.principal(address1),
         Cl.none(),
@@ -3686,6 +3628,64 @@ describe("finalize", () => {
 
     const contractBalance = stxBalances.get(stackflowContract);
     expect(contractBalance).toBe(0n);
+  });
+
+  it("a third party can finalize-for after waiting period", () => {
+    // Initialize the contract for STX
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
+    // Setup the pipe
+    const { result: fundResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-pipe",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
+      address1
+    );
+    expect(fundResult.type).toBe(ClarityType.ResponseOk);
+    const pipeKey = (fundResult as ResponseOkCV).value;
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-pipe",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
+      address2
+    );
+
+    // Wait for the funds to confirm and force-cancel
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+    const cancelHeight = simnet.burnBlockHeight;
+    const { result: cancelResult } = simnet.callPublicFn(
+      "stackflow",
+      "force-cancel",
+      [Cl.none(), Cl.principal(address2)],
+      address1
+    );
+    expect(cancelResult).toBeOk(Cl.uint(cancelHeight + WAITING_PERIOD));
+
+    // Wait until finalize is valid
+    simnet.mineEmptyBurnBlocks(WAITING_PERIOD + 1);
+
+    // A third party finalizes the closure
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "finalize-for",
+      [Cl.principal(address1), Cl.none(), Cl.principal(address2)],
+      address3
+    );
+    expect(result).toBeOk(Cl.bool(false));
+
+    // Verify the pipe has been reset
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
+    expect(pipe).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(0),
+        "balance-2": Cl.uint(0),
+        "expires-at": Cl.uint(MAX_HEIGHT),
+        nonce: Cl.uint(0),
+        closer: Cl.none(),
+        "pending-1": Cl.none(),
+        "pending-2": Cl.none(),
+      })
+    );
   });
 
   it("account 1 can finalize account 2's cancel", () => {
@@ -5577,8 +5577,8 @@ describe("multiple deposits and withdrawals", () => {
   });
 });
 
-describe("agent-dispute additional tests", () => {
-  it("agent-dispute-closure fails when agent not registered", () => {
+describe("dispute-closure-for additional tests", () => {
+  it("dispute-closure-for is permissionless but still enforces nonce rules", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
 
@@ -5640,10 +5640,10 @@ describe("agent-dispute additional tests", () => {
       address1
     );
 
-    // Try to dispute with unregistered agent
+    // Try to dispute with the same nonce as the existing forced close
     const { result } = simnet.callPublicFn(
       "stackflow",
-      "agent-dispute-closure",
+      "dispute-closure-for",
       [
         Cl.principal(address2),
         Cl.none(),
@@ -5661,7 +5661,7 @@ describe("agent-dispute additional tests", () => {
       address3
     );
 
-    expect(result).toBeErr(Cl.uint(StackflowError.Unauthorized));
+    expect(result).toBeErr(Cl.uint(StackflowError.NonceTooLow));
   });
 });
 
