@@ -176,6 +176,7 @@
         (get amount borrow)
       ))
     )
+    (asserts! (is-eq contract-caller OPERATOR) ERR_UNAUTHORIZED)
     (try! (check-valid stackflow token))
 
     ;; The reservoir cannot attempt to force-cancel a tap that has borrowed liquidity.
@@ -216,6 +217,7 @@
         (get amount borrow)
       ))
     )
+    (asserts! (is-eq contract-caller OPERATOR) ERR_UNAUTHORIZED)
     (try! (check-valid stackflow token))
 
     ;; The reservoir cannot attempt to force-close a tap that has borrowed liquidity.
@@ -265,6 +267,7 @@
         (get amount borrow)
       ))
     )
+    (asserts! (is-eq contract-caller OPERATOR) ERR_UNAUTHORIZED)
     (try! (check-valid stackflow token))
     ;; The reservoir cannot attempt to return liquidity that is still borrowed.
     (asserts! (>= reservoir-balance borrowed-amount) ERR_UNAUTHORIZED)
