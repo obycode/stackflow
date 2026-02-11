@@ -99,7 +99,7 @@ function structuredDataHash(structuredData: ClarityValue): Buffer {
 
 const domainHash = structuredDataHash(
   Cl.tuple({
-    name: Cl.stringAscii("StackFlow"),
+    name: Cl.stringAscii(stackflowContract),
     version: Cl.stringAscii("0.6.0"),
     "chain-id": Cl.uint(chainIds.testnet),
   })

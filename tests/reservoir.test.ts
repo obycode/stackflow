@@ -3,6 +3,7 @@ import { Cl, ClarityType, ResponseOkCV } from "@stacks/transactions";
 import {
   deployer,
   address1,
+  address2,
   address1PK,
   address2PK,
   reservoirContract,
@@ -160,6 +161,20 @@ describe("reservoir", () => {
         deployer
       );
       expect(available).toBeOk(Cl.uint(1000000000n));
+    });
+
+    it("non-operator cannot add STX liquidity", () => {
+      const { result } = simnet.callPublicFn(
+        "reservoir",
+        "add-liquidity",
+        [Cl.none(), Cl.uint(1000000000)],
+        address1
+      );
+      expect(result).toBeErr(Cl.uint(ReservoirError.Unauthorized));
+
+      const stxBalances = simnet.getAssetsMap().get("STX")!;
+      const reservoirBalance = stxBalances.get(reservoirContract);
+      expect(reservoirBalance ?? 0n).toBe(0n);
     });
 
     it("operator can remove their own unused STX liquidity", () => {
@@ -1048,6 +1063,95 @@ describe("reservoir", () => {
       const reservoirBalance = stxBalances.get(reservoirContract);
       expect(reservoirBalance).toBe(1000000000n - 50000n + 5000n);
     });
+
+    it("non-operator cannot return liquidity after borrow term ends", () => {
+      const amount = 50000;
+      const fee = 5000; // 10% of amount
+
+      const mySignature = generateDepositSignature(
+        address1PK,
+        null,
+        address1,
+        reservoirContract,
+        1000000,
+        50000,
+        1,
+        reservoirContract
+      );
+
+      const reservoirSignature = generateDepositSignature(
+        deployerPK,
+        null,
+        reservoirContract,
+        address1,
+        50000,
+        1000000,
+        1,
+        reservoirContract
+      );
+
+      const borrow = simnet.callPublicFn(
+        "reservoir",
+        "borrow-liquidity",
+        [
+          Cl.principal(stackflowContract),
+          Cl.uint(amount),
+          Cl.uint(fee),
+          Cl.none(),
+          Cl.uint(1000000),
+          Cl.uint(50000),
+          Cl.buffer(mySignature),
+          Cl.buffer(reservoirSignature),
+          Cl.uint(1),
+        ],
+        address1
+      );
+      expect(borrow.result).toBeOk(
+        Cl.uint(simnet.burnBlockHeight + BORROW_TERM_BLOCKS)
+      );
+      simnet.mineEmptyBlocks(BORROW_TERM_BLOCKS + 1);
+
+      const myReturnSignature = generateWithdrawSignature(
+        address1PK,
+        null,
+        address1,
+        reservoirContract,
+        1000000,
+        0,
+        2,
+        reservoirContract
+      );
+      const reservoirReturnSignature = generateWithdrawSignature(
+        deployerPK,
+        null,
+        reservoirContract,
+        address1,
+        0,
+        1000000,
+        2,
+        reservoirContract
+      );
+
+      const returnLiquidity = simnet.callPublicFn(
+        "reservoir",
+        "return-liquidity-to-reservoir",
+        [
+          Cl.principal(stackflowContract),
+          Cl.none(),
+          Cl.principal(address1),
+          Cl.uint(50000),
+          Cl.uint(1000000),
+          Cl.uint(0),
+          Cl.buffer(myReturnSignature),
+          Cl.buffer(reservoirReturnSignature),
+          Cl.uint(2),
+        ],
+        address2
+      );
+      expect(returnLiquidity.result).toBeErr(
+        Cl.uint(ReservoirError.Unauthorized)
+      );
+    });
   });
 
   describe("force-closures", () => {
@@ -1405,6 +1509,159 @@ describe("reservoir", () => {
       // Verify the reservoir balance after returning liquidity
       const reservoirBalance = stxBalances.get(reservoirContract);
       expect(reservoirBalance).toBe(1000000000n - 50000n + 5000n);
+    });
+
+    it("non-operator cannot force-cancel after borrow term ends", () => {
+      const amount = 50000;
+      const fee = 5000; // 10% of amount
+      const userBalance = 1000000;
+
+      const mySignature = generateDepositSignature(
+        address1PK,
+        null,
+        address1,
+        reservoirContract,
+        userBalance,
+        amount,
+        1,
+        reservoirContract
+      );
+
+      const reservoirSignature = generateDepositSignature(
+        deployerPK,
+        null,
+        reservoirContract,
+        address1,
+        amount,
+        userBalance,
+        1,
+        reservoirContract
+      );
+
+      const borrow = simnet.callPublicFn(
+        "reservoir",
+        "borrow-liquidity",
+        [
+          Cl.principal(stackflowContract),
+          Cl.uint(amount),
+          Cl.uint(fee),
+          Cl.none(),
+          Cl.uint(1000000),
+          Cl.uint(50000),
+          Cl.buffer(mySignature),
+          Cl.buffer(reservoirSignature),
+          Cl.uint(1),
+        ],
+        address1
+      );
+      expect(borrow.result).toBeOk(
+        Cl.uint(simnet.burnBlockHeight + BORROW_TERM_BLOCKS)
+      );
+      simnet.mineEmptyBlocks(BORROW_TERM_BLOCKS + 1);
+
+      const forceCancel = simnet.callPublicFn(
+        "reservoir",
+        "force-cancel-tap",
+        [
+          Cl.principal(stackflowContract),
+          Cl.none(),
+          Cl.principal(address1),
+        ],
+        address2
+      );
+      expect(forceCancel.result).toBeErr(Cl.uint(ReservoirError.Unauthorized));
+    });
+
+    it("non-operator cannot force-close after borrow term ends", () => {
+      const amount = 50000;
+      const fee = 5000; // 10% of amount
+      const userBalance = 1000000;
+
+      const myDepositSignature = generateDepositSignature(
+        address1PK,
+        null,
+        address1,
+        reservoirContract,
+        userBalance,
+        amount,
+        1,
+        reservoirContract
+      );
+
+      const reservoirDepositSignature = generateDepositSignature(
+        deployerPK,
+        null,
+        reservoirContract,
+        address1,
+        amount,
+        userBalance,
+        1,
+        reservoirContract
+      );
+
+      const borrow = simnet.callPublicFn(
+        "reservoir",
+        "borrow-liquidity",
+        [
+          Cl.principal(stackflowContract),
+          Cl.uint(amount),
+          Cl.uint(fee),
+          Cl.none(),
+          Cl.uint(userBalance),
+          Cl.uint(amount),
+          Cl.buffer(myDepositSignature),
+          Cl.buffer(reservoirDepositSignature),
+          Cl.uint(1),
+        ],
+        address1
+      );
+      expect(borrow.result).toBeOk(
+        Cl.uint(simnet.burnBlockHeight + BORROW_TERM_BLOCKS)
+      );
+      simnet.mineEmptyBlocks(BORROW_TERM_BLOCKS + 1);
+
+      const mySignature = generateTransferSignature(
+        address1PK,
+        null,
+        address1,
+        reservoirContract,
+        userBalance + 100,
+        amount - 100,
+        5,
+        address1
+      );
+
+      const reservoirSignature = generateTransferSignature(
+        deployerPK,
+        null,
+        reservoirContract,
+        address1,
+        amount - 100,
+        userBalance + 100,
+        5,
+        address1
+      );
+
+      const forceClose = simnet.callPublicFn(
+        "reservoir",
+        "force-close-tap",
+        [
+          Cl.principal(stackflowContract),
+          Cl.none(),
+          Cl.principal(address1),
+          Cl.uint(userBalance + 100),
+          Cl.uint(amount - 100),
+          Cl.buffer(mySignature),
+          Cl.buffer(reservoirSignature),
+          Cl.uint(5),
+          Cl.uint(PipeAction.Transfer),
+          Cl.principal(address1),
+          Cl.none(),
+          Cl.none(),
+        ],
+        address2
+      );
+      expect(forceClose.result).toBeErr(Cl.uint(ReservoirError.Unauthorized));
     });
   });
 });

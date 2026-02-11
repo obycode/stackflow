@@ -34,7 +34,9 @@ messages include a nonce to track their ordering.
 indicating the agreed upon balances of each participant. These signed messages
 can be exchanged off-chain and only need to be submitted on-chain when closing
 the Pipe, depositing additional funds to, or withdrawing funds from the Pipe.
-The messages include a nonce to track their ordering.
+The messages include a nonce to track their ordering. The SIP-018 domain is
+bound to the specific StackFlow contract principal, so signatures are not
+reusable across different StackFlow contract instances.
 
 A Pipe can be closed cooperatively at any time, with both parties agreeing on
 the final balances and signing off on the closure. If either party becomes

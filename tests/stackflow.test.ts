@@ -528,6 +528,95 @@ describe("fund-pipe", () => {
     expect(contractBalance).toBe(3000000n);
   });
 
+  it("can fund a previously closed pipe with a higher nonce", () => {
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-pipe",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
+      address1
+    );
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-pipe",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
+      address2
+    );
+
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
+    const closeSignature1 = generateClosePipeSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      1000000,
+      2000000,
+      1,
+      address1
+    );
+    const closeSignature2 = generateClosePipeSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      2000000,
+      1000000,
+      1,
+      address1
+    );
+
+    const { result: closeResult } = simnet.callPublicFn(
+      "stackflow",
+      "close-pipe",
+      [
+        Cl.none(),
+        Cl.principal(address2),
+        Cl.uint(1000000),
+        Cl.uint(2000000),
+        Cl.buffer(closeSignature1),
+        Cl.buffer(closeSignature2),
+        Cl.uint(1),
+      ],
+      address1
+    );
+    expect(closeResult).toBeOk(Cl.bool(false));
+
+    const { result: fundResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-pipe",
+      [Cl.none(), Cl.uint(500000), Cl.principal(address2), Cl.uint(2)],
+      address1
+    );
+    expect(fundResult).toBeOk(
+      Cl.tuple({
+        token: Cl.none(),
+        "principal-1": Cl.principal(address1),
+        "principal-2": Cl.principal(address2),
+      })
+    );
+
+    const pipeKey = (fundResult as ResponseOkCV).value;
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
+    expect(pipe).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(0),
+        "balance-2": Cl.uint(0),
+        "pending-1": Cl.some(
+          Cl.tuple({
+            amount: Cl.uint(500000),
+            "burn-height": Cl.uint(simnet.burnBlockHeight + CONFIRMATION_DEPTH),
+          })
+        ),
+        "pending-2": Cl.none(),
+        "expires-at": Cl.uint(MAX_HEIGHT),
+        nonce: Cl.uint(1),
+        closer: Cl.none(),
+      })
+    );
+  });
+
   it("cannot fund pipe with unapproved token", () => {
     // Initialize the contract for STX
     simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
@@ -3845,6 +3934,44 @@ describe("finalize", () => {
     const contractBalance = stxBalances.get(stackflowContract);
     expect(contractBalance).toBe(3000000n);
   });
+
+  it("can finalize exactly at the expiry height", () => {
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-pipe",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
+      address1
+    );
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-pipe",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
+      address2
+    );
+
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
+    const cancelHeight = simnet.burnBlockHeight;
+    const { result: cancelResult } = simnet.callPublicFn(
+      "stackflow",
+      "force-cancel",
+      [Cl.none(), Cl.principal(address2)],
+      address1
+    );
+    expect(cancelResult).toBeOk(Cl.uint(cancelHeight + WAITING_PERIOD));
+
+    simnet.mineEmptyBurnBlocks(WAITING_PERIOD);
+
+    const { result: finalizeResult } = simnet.callPublicFn(
+      "stackflow",
+      "finalize",
+      [Cl.none(), Cl.principal(address2)],
+      address1
+    );
+    expect(finalizeResult).toBeOk(Cl.bool(false));
+  });
 });
 
 describe("deposit", () => {
@@ -4731,6 +4858,100 @@ describe("withdraw", () => {
       Cl.tuple({
         "balance-1": Cl.uint(500000),
         "balance-2": Cl.uint(2000000),
+        "expires-at": Cl.uint(MAX_HEIGHT),
+        nonce: Cl.uint(1),
+        closer: Cl.none(),
+        "pending-1": Cl.none(),
+        "pending-2": Cl.none(),
+      })
+    );
+  });
+
+  it("can withdraw the full pipe balance", () => {
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-pipe",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
+      address1
+    );
+    const { result: fundResult } = simnet.callPublicFn(
+      "stackflow",
+      "fund-pipe",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
+      address2
+    );
+    expect(fundResult).toBeOk(
+      Cl.tuple({
+        token: Cl.none(),
+        "principal-1": Cl.principal(address1),
+        "principal-2": Cl.principal(address2),
+      })
+    );
+    const pipeKey = (fundResult as ResponseOkCV).value;
+
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+
+    const signature1 = generateWithdrawSignature(
+      address1PK,
+      null,
+      address1,
+      address2,
+      0,
+      0,
+      1,
+      address1
+    );
+    const signature2 = generateWithdrawSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      0,
+      0,
+      1,
+      address1
+    );
+
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "withdraw",
+      [
+        Cl.uint(3000000),
+        Cl.none(),
+        Cl.principal(address2),
+        Cl.uint(0),
+        Cl.uint(0),
+        Cl.buffer(signature1),
+        Cl.buffer(signature2),
+        Cl.uint(1),
+      ],
+      address1
+    );
+    expect(result).toBeOk(
+      Cl.tuple({
+        "principal-1": Cl.principal(address1),
+        "principal-2": Cl.principal(address2),
+        token: Cl.none(),
+      })
+    );
+
+    const stxBalances = simnet.getAssetsMap().get("STX")!;
+    const balance1 = stxBalances.get(address1);
+    expect(balance1).toBe(100000002000000n);
+
+    const balance2 = stxBalances.get(address2);
+    expect(balance2).toBe(99999998000000n);
+
+    const contractBalance = stxBalances.get(stackflowContract);
+    expect(contractBalance).toBe(0n);
+
+    const pipe = simnet.getMapEntry(stackflowContract, "pipes", pipeKey);
+    expect(pipe).toBeSome(
+      Cl.tuple({
+        "balance-1": Cl.uint(0),
+        "balance-2": Cl.uint(0),
         "expires-at": Cl.uint(MAX_HEIGHT),
         nonce: Cl.uint(1),
         closer: Cl.none(),

@@ -39,7 +39,7 @@
 ;; Constants for SIP-018 structured data
 (define-constant structured-data-prefix 0x534950303138)
 (define-constant message-domain-hash (sha256 (unwrap-panic (to-consensus-buff? {
-  name: "StackFlow",
+  name: (unwrap-panic (to-ascii? current-contract)),
   version: "0.6.0",
   chain-id: chain-id,
 }))))
@@ -199,7 +199,7 @@
         (closer (get closer pipe))
       )
       ;; If there was an existing pipe, the new nonce must be equal or greater
-      (asserts! (>= (get nonce pipe) nonce) ERR_NONCE_TOO_LOW)
+      (asserts! (>= nonce (get nonce pipe)) ERR_NONCE_TOO_LOW)
 
       ;; A forced closure must not be in progress
       (asserts! (is-none closer) ERR_CLOSE_IN_PROGRESS)
@@ -562,7 +562,7 @@
     (asserts! (is-some closer) ERR_NO_CLOSE_IN_PROGRESS)
 
     ;; The waiting period must have passed
-    (asserts! (> burn-block-height expires-at) ERR_NOT_EXPIRED)
+    (asserts! (>= burn-block-height expires-at) ERR_NOT_EXPIRED)
 
     ;; Reset the pipe in the map.
     (reset-pipe pipe-key (get nonce pipe))
@@ -767,7 +767,7 @@
 
     ;; Withdrawal amount cannot be greater than the total pipe balance
     (asserts!
-      (> (+ (get balance-1 settled-pipe) (get balance-2 settled-pipe)) amount)
+      (>= (+ (get balance-1 settled-pipe) (get balance-2 settled-pipe)) amount)
       ERR_INVALID_WITHDRAWAL
     )
 

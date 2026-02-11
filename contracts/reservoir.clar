@@ -121,6 +121,7 @@
     (amount uint)
   )
   (begin
+    (asserts! (is-eq contract-caller OPERATOR) ERR_UNAUTHORIZED)
     (try! (check-valid-token token))
     (unwrap! (transfer-to-contract token amount) ERR_FUNDING_FAILED)
     (ok true)
