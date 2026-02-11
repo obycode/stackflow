@@ -12,3 +12,5 @@ coverage
 costs-reports.json
 node_modules
 .debug_history
+**/.env
+
