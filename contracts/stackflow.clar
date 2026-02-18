@@ -59,7 +59,6 @@
 (define-constant ERR_INVALID_OTHER_SIGNATURE (err u104))
 (define-constant ERR_CONSENSUS_BUFF (err u105))
 (define-constant ERR_UNAUTHORIZED (err u106))
-(define-constant ERR_MAX_ALLOWED (err u107))
 (define-constant ERR_INVALID_TOTAL_BALANCE (err u108))
 (define-constant ERR_WITHDRAWAL_FAILED (err u109))
 (define-constant ERR_PIPE_EXPIRED (err u110))
@@ -198,8 +197,9 @@
             closer: none,
           }
         ))
-        (updated-pipe (try! (increase-sender-balance pipe-key pipe token amount)))
-        (closer (get closer pipe))
+        (settled-pipe (settle-pending pipe))
+        (updated-pipe (try! (increase-sender-balance pipe-key settled-pipe token amount)))
+        (closer (get closer settled-pipe))
       )
       ;; If there was an existing pipe, the new nonce must be equal or greater
       (asserts! (>= nonce (get nonce pipe)) ERR_NONCE_TOO_LOW)
@@ -248,15 +248,9 @@
   )
   (let (
       (pipe-key (try! (get-pipe-key (contract-of-optional token) tx-sender with)))
-      (principal-1 (get principal-1 pipe-key))
-      (balance-1 (if (is-eq tx-sender principal-1)
-        my-balance
-        their-balance
-      ))
-      (balance-2 (if (is-eq tx-sender principal-1)
-        their-balance
-        my-balance
-      ))
+      (signed-balances (map-balances tx-sender pipe-key my-balance their-balance))
+      (balance-1 (get balance-1 signed-balances))
+      (balance-2 (get balance-2 signed-balances))
       (updated-pipe {
         balance-1: balance-1,
         balance-2: balance-2,
@@ -308,7 +302,7 @@
       (pipe (unwrap! (map-get? pipes pipe-key) ERR_NO_SUCH_PIPE))
       (closer (get closer pipe))
       (expires-at (+ burn-block-height WAITING_PERIOD))
-      (settled-pipe (settle-pending pipe-key pipe))
+      (settled-pipe (settle-pending pipe))
     )
     ;; A forced closure must not be in progress
     (asserts! (is-none closer) ERR_CLOSE_IN_PROGRESS)
@@ -374,7 +368,7 @@
       (pipe (unwrap! (map-get? pipes pipe-key) ERR_NO_SUCH_PIPE))
       (pipe-nonce (get nonce pipe))
       (closer (get closer pipe))
-      (settled-pipe (settle-pending pipe-key pipe))
+      (settled-pipe (settle-pending pipe))
     )
     ;; Exit early if a forced closure is already in progress.
     (asserts! (is-none closer) ERR_CLOSE_IN_PROGRESS)
@@ -407,15 +401,9 @@
     )
     (let (
         (expires-at (+ burn-block-height WAITING_PERIOD))
-        (principal-1 (get principal-1 pipe-key))
-        (balance-1 (if (is-eq tx-sender principal-1)
-          my-balance
-          their-balance
-        ))
-        (balance-2 (if (is-eq tx-sender principal-1)
-          their-balance
-          my-balance
-        ))
+        (signed-balances (map-balances tx-sender pipe-key my-balance their-balance))
+        (balance-1 (get balance-1 signed-balances))
+        (balance-2 (get balance-2 signed-balances))
         (new-pipe {
           balance-1: balance-1,
           balance-2: balance-2,
@@ -582,7 +570,7 @@
 ;;; `tx-sender` and `with` for FT `token` (`none` indicates STX). Signatures
 ;;; must confirm the deposit and the new balances.
 ;;; Returns:
-;;; -`(ok pipe-key)` on success
+;;; - `(ok pipe-key)` on success
 ;;; - `ERR_NO_SUCH_PIPE` if the pipe does not exist
 ;;; - `ERR_CLOSE_IN_PROGRESS` if a forced closure is in progress
 ;;; - `ERR_NONCE_TOO_LOW` if the nonce is less than the pipe's saved nonce
@@ -607,15 +595,10 @@
       (principal-1 (get principal-1 pipe-key))
       ;; These are the balances that both parties have signed off on, including
       ;; the deposit amount.
-      (balance-1 (if (is-eq tx-sender principal-1)
-        my-balance
-        their-balance
-      ))
-      (balance-2 (if (is-eq tx-sender principal-1)
-        their-balance
-        my-balance
-      ))
-      (settled-pipe (settle-pending pipe-key pipe))
+      (signed-balances (map-balances tx-sender pipe-key my-balance their-balance))
+      (balance-1 (get balance-1 signed-balances))
+      (balance-2 (get balance-2 signed-balances))
+      (settled-pipe (settle-pending pipe))
       (pending-1-amount (match (get pending-1 settled-pipe)
         pending (get amount pending)
         u0
@@ -675,15 +658,15 @@
 ;;; `with` for FT `token` (`none` indicates STX). Signatures must confirm the
 ;;; withdrawal and the new balances.
 ;;; Returns:
-;;; -`(ok pipe-key)` on success
+;;; - `(ok pipe-key)` on success
 ;;; - `ERR_NO_SUCH_PIPE` if the pipe does not exist
 ;;; - `ERR_CLOSE_IN_PROGRESS` if a forced closure is in progress
 ;;; - `ERR_NONCE_TOO_LOW` if the nonce is less than the pipe's saved nonce
 ;;; - `ERR_INVALID_TOTAL_BALANCE` if the total balance of the pipe is not
-;;;   equal to the sum of the balances provided and the deposit amount
+;;;   equal to the prior total balance minus the withdrawal amount
 ;;; - `ERR_INVALID_SENDER_SIGNATURE` if the sender's signature is invalid
 ;;; - `ERR_INVALID_OTHER_SIGNATURE` if the other party's signature is invalid
-;;; - `ERR_WITHDRAWAL_FAILED` if the deposit fails
+;;; - `ERR_WITHDRAWAL_FAILED` if the withdrawal transfer fails
 (define-public (withdraw
     (amount uint)
     (token (optional <sip-010>))
@@ -697,17 +680,11 @@
   (let (
       (pipe-key (try! (get-pipe-key (contract-of-optional token) tx-sender with)))
       (pipe (unwrap! (map-get? pipes pipe-key) ERR_NO_SUCH_PIPE))
-      (principal-1 (get principal-1 pipe-key))
-      (balance-1 (if (is-eq tx-sender principal-1)
-        my-balance
-        their-balance
-      ))
-      (balance-2 (if (is-eq tx-sender principal-1)
-        their-balance
-        my-balance
-      ))
+      (signed-balances (map-balances tx-sender pipe-key my-balance their-balance))
+      (balance-1 (get balance-1 signed-balances))
+      (balance-2 (get balance-2 signed-balances))
       ;; Settle any pending deposits that may be in progress
-      (settled-pipe (settle-pending pipe-key pipe))
+      (settled-pipe (settle-pending pipe))
       (updated-pipe (merge settled-pipe {
         balance-1: balance-1,
         balance-2: balance-2,
@@ -755,6 +732,14 @@
 ;;;   (some {
 ;;;     balance-1: uint,
 ;;;     balance-2: uint,
+;;;     pending-1: (optional {
+;;;       amount: uint,
+;;;       burn-height: uint,
+;;;     }),
+;;;     pending-2: (optional {
+;;;       amount: uint,
+;;;       burn-height: uint,
+;;;     }),
 ;;;     expires-at: uint,
 ;;;     nonce: uint,
 ;;;     closer: (optional principal)
@@ -1022,6 +1007,26 @@
   )
 )
 
+;;; Map caller-relative balances (`my-balance`, `their-balance`) into the
+;;; canonical pipe ordering (`balance-1`, `balance-2`).
+(define-private (map-balances
+    (for principal)
+    (pipe-key {
+      token: (optional principal),
+      principal-1: principal,
+      principal-2: principal,
+    })
+    (my-balance uint)
+    (their-balance uint)
+  )
+  (let ((principal-1 (get principal-1 pipe-key)))
+    {
+      balance-1: (if (is-eq for principal-1) my-balance their-balance),
+      balance-2: (if (is-eq for principal-1) their-balance my-balance),
+    }
+  )
+)
+
 ;;; Transfer `amount` from `tx-sender` to the contract and update the pipe
 ;;; balances.
 ;;; Returns:
@@ -1053,10 +1058,7 @@
     (token (optional <sip-010>))
     (amount uint)
   )
-  (let (
-      ;; If there are outstanding deposits that can be settled, settle them.
-      (settled-pipe (settle-pending pipe-key pipe))
-    )
+  (begin
     (match token
       t (unwrap! (contract-call? t transfer amount tx-sender current-contract none)
         ERR_DEPOSIT_FAILED
@@ -1067,16 +1069,16 @@
     )
     (ok (if (is-eq tx-sender (get principal-1 pipe-key))
       (begin
-        (asserts! (is-none (get pending-1 settled-pipe)) ERR_ALREADY_PENDING)
-        (merge settled-pipe { pending-1: (some {
+        (asserts! (is-none (get pending-1 pipe)) ERR_ALREADY_PENDING)
+        (merge pipe { pending-1: (some {
           amount: amount,
           burn-height: (+ burn-block-height CONFIRMATION_DEPTH),
         }) }
         )
       )
       (begin
-        (asserts! (is-none (get pending-2 settled-pipe)) ERR_ALREADY_PENDING)
-        (merge settled-pipe { pending-2: (some {
+        (asserts! (is-none (get pending-2 pipe)) ERR_ALREADY_PENDING)
+        (merge pipe { pending-2: (some {
           amount: amount,
           burn-height: (+ burn-block-height CONFIRMATION_DEPTH),
         }) }
@@ -1133,15 +1135,9 @@
       (expires-at (get expires-at pipe))
       (pipe-nonce (get nonce pipe))
       (closer (unwrap! (get closer pipe) ERR_NO_CLOSE_IN_PROGRESS))
-      (principal-1 (get principal-1 pipe-key))
-      (balance-1 (if (is-eq for principal-1)
-        my-balance
-        their-balance
-      ))
-      (balance-2 (if (is-eq for principal-1)
-        their-balance
-        my-balance
-      ))
+      (signed-balances (map-balances for pipe-key my-balance their-balance))
+      (balance-1 (get balance-1 signed-balances))
+      (balance-2 (get balance-2 signed-balances))
     )
     ;; Exit early if this is an attempt to self-dispute
     (asserts! (not (is-eq for closer)) ERR_SELF_DISPUTE)
@@ -1344,14 +1340,9 @@
   )
 )
 
-;;; Settle the pending deposit(s) for a pipe.
-;;; Returns the updated pipe with deposits settled if possible.
+;;; Settle the pending deposit(s) for a pipe at the current burn height.
+;;; Returns the updated pipe, without writing it to storage.
 (define-private (settle-pending
-    (pipe-key {
-      token: (optional principal),
-      principal-1: principal,
-      principal-2: principal,
-    })
     (pipe {
       balance-1: uint,
       balance-2: uint,
@@ -1403,8 +1394,56 @@
       ))
       (updated-pipe (merge (merge pipe settle-1) settle-2))
     )
-    (map-set pipes pipe-key updated-pipe)
     updated-pipe
+  )
+)
+
+;;; Compute confirmed and pending balances for each side at `at-height`.
+(define-private (pipe-balance-state
+    (pipe {
+      balance-1: uint,
+      balance-2: uint,
+      pending-1: (optional {
+        amount: uint,
+        burn-height: uint,
+      }),
+      pending-2: (optional {
+        amount: uint,
+        burn-height: uint,
+      }),
+      expires-at: uint,
+      nonce: uint,
+      closer: (optional principal),
+    })
+    (at-height uint)
+  )
+  (let (
+      (pipe-balances-1 (calculate-balances
+        (get balance-1 pipe)
+        (get pending-1 pipe)
+        at-height
+      ))
+      (pipe-balances-2 (calculate-balances
+        (get balance-2 pipe)
+        (get pending-2 pipe)
+        at-height
+      ))
+      (confirmed-1 (get confirmed pipe-balances-1))
+      (confirmed-2 (get confirmed pipe-balances-2))
+      (pending-1 (get pending pipe-balances-1))
+      (pending-2 (get pending pipe-balances-2))
+      (confirmed-total (+ confirmed-1 confirmed-2))
+      (pending-total (+ pending-1 pending-2))
+    )
+    {
+      confirmed-1: confirmed-1,
+      confirmed-2: confirmed-2,
+      pending-1: pending-1,
+      pending-2: pending-2,
+      confirmed-total: confirmed-total,
+      pending-total: pending-total,
+      total: (+ confirmed-total pending-total),
+    }
   )
 )
 
@@ -1423,33 +1462,25 @@
   (let (
       (pipe (unwrap! (map-get? pipes pipe-key) ERR_NO_SUCH_PIPE))
       (at-height (default-to burn-block-height at-height-opt))
-      (pipe-1 (get balance-1 pipe))
-      (pipe-2 (get balance-2 pipe))
-      (pipe-pending-1 (get pending-1 pipe))
-      (pipe-pending-2 (get pending-2 pipe))
-      (pipe-balances-1 (calculate-balances pipe-1 pipe-pending-1 at-height))
-      (pipe-balances-2 (calculate-balances pipe-2 pipe-pending-2 at-height))
-      (confirmed (+ (get confirmed pipe-balances-1) (get confirmed pipe-balances-2)))
-      (pending (+ (get pending pipe-balances-1) (get pending pipe-balances-2)))
-      (pipe-total-sum (+ confirmed pending))
+      (state (pipe-balance-state pipe at-height))
       (sum (+ balance-1 balance-2))
     )
     ;; The sum of the balances must be equal to the sum of the pipe balances
     ;; and the pending deposits.
-    (asserts! (is-eq sum pipe-total-sum) ERR_INVALID_TOTAL_BALANCE)
+    (asserts! (is-eq sum (get total state)) ERR_INVALID_TOTAL_BALANCE)
 
     ;; Ensure that these balances do not require spending the pending deposits.
     (asserts!
       (<= balance-1
-        (+ (get confirmed pipe-balances-1) (get pending pipe-balances-1)
-          (get confirmed pipe-balances-2)
+        (+ (get confirmed-1 state) (get pending-1 state)
+          (get confirmed-2 state)
         ))
       ERR_INVALID_BALANCES
     )
     (asserts!
       (<= balance-2
-        (+ (get confirmed pipe-balances-2) (get pending pipe-balances-2)
-          (get confirmed pipe-balances-1)
+        (+ (get confirmed-2 state) (get pending-2 state)
+          (get confirmed-1 state)
         ))
       ERR_INVALID_BALANCES
     )
@@ -1481,15 +1512,7 @@
   (let (
       (pipe (unwrap! (map-get? pipes pipe-key) ERR_NO_SUCH_PIPE))
       (at-height (default-to burn-block-height at-height-opt))
-      (pipe-1 (get balance-1 pipe))
-      (pipe-2 (get balance-2 pipe))
-      (pipe-pending-1 (get pending-1 pipe))
-      (pipe-pending-2 (get pending-2 pipe))
-      (pipe-balances-1 (calculate-balances pipe-1 pipe-pending-1 at-height))
-      (pipe-balances-2 (calculate-balances pipe-2 pipe-pending-2 at-height))
-      (confirmed (+ (get confirmed pipe-balances-1) (get confirmed pipe-balances-2)))
-      (pending (+ (get pending pipe-balances-1) (get pending pipe-balances-2)))
-      (pipe-total-sum (+ confirmed pending))
+      (state (pipe-balance-state pipe at-height))
       (sum (+ balance-1 balance-2))
       (principal-1 (get principal-1 pipe-key))
       (principal-2 (get principal-2 pipe-key))
@@ -1498,8 +1521,8 @@
         balance-2
       ))
       (actor-pending (if (is-eq actor principal-1)
-        (get pending pipe-balances-1)
-        (get pending pipe-balances-2)
+        (get pending-1 state)
+        (get pending-2 state)
       ))
     )
     (if (is-eq action ACTION_DEPOSIT)
@@ -1510,7 +1533,7 @@
         (asserts! (is-none (get closer pipe)) ERR_CLOSE_IN_PROGRESS)
         (asserts! (>= actor-balance amount) ERR_INVALID_BALANCES)
         (asserts! (is-eq actor-pending u0) ERR_ALREADY_PENDING)
-        (asserts! (is-eq sum (+ pipe-total-sum amount)) ERR_INVALID_TOTAL_BALANCE)
+        (asserts! (is-eq sum (+ (get total state) amount)) ERR_INVALID_TOTAL_BALANCE)
         (ok true)
       )
       (if (is-eq action ACTION_WITHDRAWAL)
@@ -1519,14 +1542,14 @@
             ERR_INVALID_PRINCIPAL
           )
           (asserts! (is-none (get closer pipe)) ERR_CLOSE_IN_PROGRESS)
-          (asserts! (>= confirmed amount) ERR_INVALID_WITHDRAWAL)
-          (asserts! (is-eq sum (- confirmed amount)) ERR_INVALID_TOTAL_BALANCE)
+          (asserts! (>= (get confirmed-total state) amount) ERR_INVALID_WITHDRAWAL)
+          (asserts! (is-eq sum (- (get confirmed-total state) amount)) ERR_INVALID_TOTAL_BALANCE)
           (ok true)
         )
         (if (is-eq action ACTION_CLOSE)
           (begin
-            (asserts! (is-eq pending u0) ERR_PENDING)
-            (asserts! (is-eq sum confirmed) ERR_INVALID_TOTAL_BALANCE)
+            (asserts! (is-eq (get pending-total state) u0) ERR_PENDING)
+            (asserts! (is-eq sum (get confirmed-total state)) ERR_INVALID_TOTAL_BALANCE)
             (ok true)
           )
           (balance-check pipe-key balance-1 balance-2 at-height-opt)
