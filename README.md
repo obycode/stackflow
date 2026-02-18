@@ -204,6 +204,183 @@ If the closure is not disputed by the time the waiting period is over, the user
 may call `finalize` to complete the closure and transfer the appropriate
 balances to both parties.
 
+# Built-in Watchtower (Event Observer)
+
+This repo now includes a minimal watchtower service at `server/src/index.ts`. It
+is designed to run as a stacks-node event observer, ingest `print` events from
+Stackflow contracts, store latest signed states, and auto-submit
+`dispute-closure-for` when a `force-close` or `force-cancel` is observed.
+
+Run it with:
+
+```bash
+npm run watchtower
+```
+
+Optional environment variables:
+
+```bash
+WATCHTOWER_HOST=0.0.0.0
+WATCHTOWER_PORT=8787
+WATCHTOWER_DB_FILE=server/data/watchtower-state.db
+WATCHTOWER_MAX_RECENT_EVENTS=500
+WATCHTOWER_LOG_RAW_EVENTS=false
+STACKFLOW_CONTRACTS=ST....stackflow-0-6-0,ST....stackflow-sbtc-0-6-0
+WATCHTOWER_PRINCIPALS=ST...,ST...
+STACKS_NETWORK=devnet
+STACKS_API_URL=http://localhost:20443
+WATCHTOWER_SIGNER_KEY=<private-key-used-to-submit-disputes>
+WATCHTOWER_PRODUCER_KEY=<private-key-used-to-sign-off-chain-states>
+WATCHTOWER_PRODUCER_PRINCIPAL=<optional principal to sign for, e.g. ST... or ST....contract>
+WATCHTOWER_PRODUCER_SIGNER_MODE=local-key
+WATCHTOWER_STACKFLOW_MESSAGE_VERSION=0.6.0
+WATCHTOWER_SIGNATURE_VERIFIER_MODE=readonly
+WATCHTOWER_DISPUTE_EXECUTOR_MODE=auto
+WATCHTOWER_DISPUTE_ONLY_BENEFICIAL=false
+```
+
+If `STACKFLOW_CONTRACTS` is omitted, the watchtower automatically monitors any
+contract identifier matching `*.stackflow*`.
+`WATCHTOWER_STATE_FILE` is still accepted as a backward-compatible alias for
+`WATCHTOWER_DB_FILE`.
+The current implementation uses Node's `node:sqlite` module for persistence.
+`WATCHTOWER_SIGNATURE_VERIFIER_MODE` supports `readonly` (default),
+`accept-all`, and `reject-all`. Non-`readonly` modes are intended for testing.
+`WATCHTOWER_DISPUTE_EXECUTOR_MODE` supports `auto` (default), `noop`, and
+`mock`. `mock` is intended for local integration testing.
+`WATCHTOWER_PRODUCER_SIGNER_MODE` currently supports `local-key` (default) and
+`kms` (reserved for future signer backends; currently returns `503`).
+Set `WATCHTOWER_LOG_RAW_EVENTS=true` to print raw stackflow `print` event
+objects received via `/new_block` for payload inspection/debugging.
+If `WATCHTOWER_PRINCIPALS` is set, the watchtower only:
+
+1. accepts `POST /signature-states` for `forPrincipal` values in that list
+2. processes closure events for pipes that include at least one listed principal
+
+When `WATCHTOWER_PRINCIPALS` is omitted, it accepts any principal.
+
+Health and inspection endpoints:
+
+1. `GET /health`
+2. `GET /closures`
+3. `GET /pipes?limit=100&principal=ST...`
+4. `GET /signature-states?limit=100`
+5. `GET /dispute-attempts?limit=100`
+6. `GET /events?limit=100`
+7. `GET /app` (built-in browser UI)
+
+Producer signing endpoints:
+
+1. `POST /producer/transfer`
+2. `POST /producer/signature-request`
+
+`/producer/transfer` signs transfer states (`action = 1`).
+`/producer/signature-request` signs close/deposit/withdraw states
+(`action = 0|2|3`).
+For `action = 2|3` (deposit/withdraw), include `amount` in the request body.
+Both endpoints:
+
+1. check local signing policy against stored state:
+   - reject if nonce is not strictly higher than latest known nonce
+   - reject if producer balance would decrease
+   - for transfer (`action = 1`), require producer balance to strictly increase
+2. verify the counterparty signature (`verify-signature-request`)
+3. generate the producer signature
+4. store the full signature pair via the existing signature-state pipeline
+
+Producer signature verification uses `verify-signature-request` (read-only) to
+apply action-aware on-chain balance logic, including `amount` checks for
+deposit/withdraw requests.
+
+Signature state ingestion endpoint:
+
+1. `POST /signature-states`
+
+Example payload:
+
+```json
+{
+  "contractId": "ST....stackflow-0-6-0",
+  "forPrincipal": "ST...",
+  "withPrincipal": "ST...",
+  "token": null,
+  "myBalance": "900000",
+  "theirBalance": "100000",
+  "mySignature": "0x...",
+  "theirSignature": "0x...",
+  "nonce": "42",
+  "action": "1",
+  "actor": "ST...",
+  "secret": null,
+  "validAfter": null,
+  "beneficialOnly": false
+}
+```
+
+The watchtower stores one latest state per `(contract, pipe, forPrincipal)`,
+replacing only when the incoming nonce is strictly greater.
+Before storing, the watchtower verifies signatures by calling the Stackflow
+contract read-only function `verify-signatures`. If validation fails, the
+request returns `401` and nothing is stored.
+If the incoming nonce is not strictly higher than the stored nonce for that
+`(contract, pipe, forPrincipal)`, the request returns `409`.
+If `forPrincipal` is not in `WATCHTOWER_PRINCIPALS`, the request returns `403`.
+
+On-chain pipe tracking:
+
+1. `POST /new_block` print events update a persistent `pipes` view
+2. events such as `fund-pipe`, `deposit`, `withdraw`, `force-cancel`, and
+   `force-close` upsert current pipe balances
+3. terminal events (`close-pipe`, `dispute-closure`, `finalize`) reset tracked
+   balances to `0` and clear pending values
+4. `POST /new_burn_block` advances pending deposits into confirmed balances
+   once pending `burn-height` is reached
+5. `GET /pipes` merges this on-chain view with stored signature states and
+   returns the authoritative state per pipe by highest nonce (ties prefer
+   newer timestamps, then on-chain source)
+
+Event observer ingestion endpoint:
+
+1. `POST /new_block`
+2. `POST /new_burn_block`
+
+When Clarinet/stacks-node observer config uses `events_keys = ["*"]`, stacks-node
+can also call additional observer endpoints. The watchtower responds `200` (no-op)
+for compatibility on:
+
+1. `POST /new_mempool_tx`
+2. `POST /drop_mempool_tx`
+3. `POST /new_microblocks`
+
+For Clarinet devnet, set the observer in `settings/Devnet.toml`:
+
+```toml
+[devnet]
+stacks_node_events_observers = ["host.docker.internal:8787"]
+```
+
+Open the built-in UI in your browser:
+
+```text
+http://localhost:8787/app
+```
+
+The UI lets you:
+
+1. connect a Stacks wallet
+2. load watched pipes from on-chain observer state (`GET /pipes`)
+3. generate SIP-018 structured signatures for Stackflow state
+4. submit signature states to `POST /signature-states`
+5. call Stackflow contract methods (`fund-pipe`, `deposit`, `withdraw`,
+   `force-cancel`, `force-close`, `close-pipe`, `finalize`) via wallet popup
+
+Integration tests for the HTTP server are opt-in (they spawn a real process and
+bind a local port):
+
+```bash
+npm run test:watchtower:http
+```
+
 # Reference Server Implementation
 
 As discussed in the details, users of Stackflow should run a server to keep

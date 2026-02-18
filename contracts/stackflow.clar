@@ -79,6 +79,7 @@
 (define-constant ERR_INVALID_BALANCES (err u124))
 (define-constant ERR_INVALID_SIGNATURE (err u125))
 (define-constant ERR_ALLOWANCE_VIOLATION (err u126))
+(define-constant ERR_SELF_PIPE (err u127))
 
 ;; Number of burn blocks to wait before considering an on-chain action finalized.
 (define-constant CONFIRMATION_DEPTH u6)
@@ -181,6 +182,7 @@
   )
   (begin
     (try! (check-token token))
+    (asserts! (not (is-eq tx-sender with)) ERR_SELF_PIPE)
     (let (
         (pipe-key (try! (get-pipe-key (contract-of-optional token) tx-sender with)))
         (existing-pipe (map-get? pipes pipe-key))
@@ -246,8 +248,6 @@
   )
   (let (
       (pipe-key (try! (get-pipe-key (contract-of-optional token) tx-sender with)))
-      (pipe (unwrap! (map-get? pipes pipe-key) ERR_NO_SUCH_PIPE))
-      (pipe-nonce (get nonce pipe))
       (principal-1 (get principal-1 pipe-key))
       (balance-1 (if (is-eq tx-sender principal-1)
         my-balance
@@ -264,28 +264,10 @@
         nonce: nonce,
         closer: none,
       })
-      (settled-pipe (settle-pending pipe-key pipe))
     )
-    ;; Cannot close a pipe while there is a pending deposit
-    (asserts!
-      (and
-        (is-none (get pending-1 settled-pipe))
-        (is-none (get pending-2 settled-pipe))
-      )
-      ERR_PENDING
-    )
-
-    ;; The nonce must be greater than the pipe's saved nonce
-    (asserts! (> nonce pipe-nonce) ERR_NONCE_TOO_LOW)
-
-    ;; If the total balance of the pipe is not equal to the sum of the
-    ;; balances provided, the pipe close is invalid.
-    (asserts!
-      (is-eq (+ my-balance their-balance)
-        (+ (get balance-1 settled-pipe) (get balance-2 settled-pipe))
-      )
-      ERR_INVALID_TOTAL_BALANCE
-    )
+    (try! (validate-transition pipe-key balance-1 balance-2 nonce ACTION_CLOSE
+      tx-sender u0 none
+    ))
 
     ;; Verify the signatures of the two parties.
     (try! (verify-signatures my-signature tx-sender their-signature with pipe-key
@@ -622,12 +604,7 @@
   (let (
       (pipe-key (try! (get-pipe-key (contract-of-optional token) tx-sender with)))
       (pipe (unwrap! (map-get? pipes pipe-key) ERR_NO_SUCH_PIPE))
-      (pipe-nonce (get nonce pipe))
-      (closer (get closer pipe))
       (principal-1 (get principal-1 pipe-key))
-      ;; Ensure that the balance of the caller is not less than the deposit
-      ;; amount, since that would indicate an invalid deposit.
-      (balance-ok (asserts! (>= my-balance amount) ERR_INVALID_BALANCES))
       ;; These are the balances that both parties have signed off on, including
       ;; the deposit amount.
       (balance-1 (if (is-eq tx-sender principal-1)
@@ -639,93 +616,58 @@
         my-balance
       ))
       (settled-pipe (settle-pending pipe-key pipe))
-      ;; If the new balance of the pipe is not equal to the sum of the
-      ;; existing balances and the deposit amount, the deposit is invalid.
-      ;; Previously pending balances are included in the calculation.
-      (total-ok (asserts!
-        (is-eq (+ my-balance their-balance)
-          (+ (get balance-1 settled-pipe) (get balance-2 settled-pipe)
-            (match (get pending-1 settled-pipe)
-              pending (get amount pending)
-              u0
-            )
-            (match (get pending-2 settled-pipe)
-              pending (get amount pending)
-              u0
-            )
-            amount
-          ))
-        ERR_INVALID_TOTAL_BALANCE
+      (pending-1-amount (match (get pending-1 settled-pipe)
+        pending (get amount pending)
+        u0
       ))
-      ;; These are the settled balances that actually exist in the pipe while
-      ;; the deposit is pending.
-      (pre-balance-1 (if (is-eq tx-sender principal-1)
-        (- my-balance amount)
-        (- their-balance
-          (match (get pending-1 settled-pipe)
-            pending (get amount pending)
-            u0
-          ))
+      (pending-2-amount (match (get pending-2 settled-pipe)
+        pending (get amount pending)
+        u0
       ))
-      (pre-balance-2 (if (is-eq tx-sender principal-1)
-        (- their-balance
-          (match (get pending-2 settled-pipe)
-            pending (get amount pending)
-            u0
-          ))
-        (- my-balance amount)
-      ))
-      (updated-pipe (try! (increase-sender-balance pipe-key settled-pipe token amount)))
-      (result-pipe (merge updated-pipe {
-        balance-1: pre-balance-1,
-        balance-2: pre-balance-2,
-        nonce: nonce,
-      }))
     )
-    ;; A forced closure must not be in progress
-    (asserts! (is-none closer) ERR_CLOSE_IN_PROGRESS)
-
-    ;; Nonce must be greater than the pipe nonce
-    (asserts! (> nonce pipe-nonce) ERR_NONCE_TOO_LOW)
-
-    ;; If the new balance of the pipe is not equal to the sum of the
-    ;; existing balances and the deposit amount, the deposit is invalid.
-    ;; Previously pending balances are included in the calculation.
-    (asserts!
-      (is-eq (+ my-balance their-balance)
-        (+ (get balance-1 settled-pipe) (get balance-2 settled-pipe)
-          (match (get pending-1 settled-pipe)
-            pending (get amount pending)
-            u0
-          )
-          (match (get pending-2 settled-pipe)
-            pending (get amount pending)
-            u0
-          )
-          amount
-        ))
-      ERR_INVALID_TOTAL_BALANCE
-    )
-
-    ;; Update the pipe with the new balances and nonce.
-    (map-set pipes pipe-key result-pipe)
-
-    ;; Verify the signatures of the two parties.
-    (try! (verify-signatures my-signature tx-sender their-signature with pipe-key
-      balance-1 balance-2 nonce ACTION_DEPOSIT tx-sender none none
+    ;; Validate the same transition constraints used by read-only verification.
+    (try! (validate-transition pipe-key balance-1 balance-2 nonce ACTION_DEPOSIT
+      tx-sender amount none
     ))
 
-    (print {
-      event: "deposit",
-      pipe-key: pipe-key,
-      pipe: updated-pipe,
-      sender: tx-sender,
-      amount: amount,
-      my-signature: my-signature,
-      their-signature: their-signature,
-    })
+    (let (
+        ;; These are the settled balances that actually exist in the pipe while
+        ;; the deposit is pending.
+        (pre-balance-1 (if (is-eq tx-sender principal-1)
+          (- my-balance amount)
+          (- their-balance pending-1-amount)
+        ))
+        (pre-balance-2 (if (is-eq tx-sender principal-1)
+          (- their-balance pending-2-amount)
+          (- my-balance amount)
+        ))
+        (updated-pipe (try! (increase-sender-balance pipe-key settled-pipe token amount)))
+        (result-pipe (merge updated-pipe {
+          balance-1: pre-balance-1,
+          balance-2: pre-balance-2,
+          nonce: nonce,
+        }))
+      )
+      ;; Update the pipe with the new balances and nonce.
+      (map-set pipes pipe-key result-pipe)
 
-    (ok pipe-key)
+      ;; Verify the signatures of the two parties.
+      (try! (verify-signatures my-signature tx-sender their-signature with pipe-key
+        balance-1 balance-2 nonce ACTION_DEPOSIT tx-sender none none
+      ))
+
+      (print {
+        event: "deposit",
+        pipe-key: pipe-key,
+        pipe: updated-pipe,
+        sender: tx-sender,
+        amount: amount,
+        my-signature: my-signature,
+        their-signature: their-signature,
+      })
+
+      (ok pipe-key)
+    )
   )
 )
 
@@ -755,8 +697,6 @@
   (let (
       (pipe-key (try! (get-pipe-key (contract-of-optional token) tx-sender with)))
       (pipe (unwrap! (map-get? pipes pipe-key) ERR_NO_SUCH_PIPE))
-      (pipe-nonce (get nonce pipe))
-      (closer (get closer pipe))
       (principal-1 (get principal-1 pipe-key))
       (balance-1 (if (is-eq tx-sender principal-1)
         my-balance
@@ -774,26 +714,10 @@
         nonce: nonce,
       }))
     )
-    ;; A forced closure must not be in progress
-    (asserts! (is-none closer) ERR_CLOSE_IN_PROGRESS)
-
-    ;; Nonce must be greater than the pipe nonce
-    (asserts! (> nonce pipe-nonce) ERR_NONCE_TOO_LOW)
-
-    ;; Withdrawal amount cannot be greater than the total pipe balance
-    (asserts!
-      (>= (+ (get balance-1 settled-pipe) (get balance-2 settled-pipe)) amount)
-      ERR_INVALID_WITHDRAWAL
-    )
-
-    ;; If the new balance of the pipe is not equal to the sum of the
-    ;; prior balances minus the withdraw amount, the withdrawal is invalid.
-    (asserts!
-      (is-eq (+ my-balance their-balance)
-        (- (+ (get balance-1 settled-pipe) (get balance-2 settled-pipe)) amount)
-      )
-      ERR_INVALID_TOTAL_BALANCE
-    )
+    ;; Validate the same transition constraints used by read-only verification.
+    (try! (validate-transition pipe-key balance-1 balance-2 nonce ACTION_WITHDRAWAL
+      tx-sender amount none
+    ))
 
     ;; Update the pipe with the new balances and nonce.
     (map-set pipes pipe-key updated-pipe)
@@ -963,6 +887,53 @@
     )))
     (verify-signature signature signer pipe-key balance-1 balance-2 nonce action
       actor hashed-secret valid-after
+    )
+  )
+)
+
+;;; Validates that the specified data is valid for the action and that
+;;; `signature` is a valid signature from `signer` for this data.
+;;; For `ACTION_DEPOSIT` and `ACTION_WITHDRAWAL`, `amount` is required to match
+;;; the same balance equations enforced by the corresponding public functions.
+;;; Returns:
+;;; - `(ok none)` if the signature is valid now
+;;; - `(ok (some burn-block))` if the signature will be valid at `burn-block`
+;;; - Same error semantics as `verify-signature-with-secret`, with action-
+;;;   specific balance checks for deposit and withdrawal.
+(define-read-only (verify-signature-request
+    (signature (buff 65))
+    (signer principal)
+    (pipe-key {
+      token: (optional principal),
+      principal-1: principal,
+      principal-2: principal,
+    })
+    (balance-1 uint)
+    (balance-2 uint)
+    (nonce uint)
+    (action uint)
+    (actor principal)
+    (secret (optional (buff 32)))
+    (valid-after (optional uint))
+    (amount uint)
+  )
+  (let (
+      (hashed-secret (match secret
+        s (some (sha256 s))
+        none
+      ))
+      (hash (try! (make-structured-data-hash pipe-key balance-1 balance-2 nonce action actor
+        hashed-secret valid-after
+      )))
+      (after (default-to burn-block-height valid-after))
+    )
+    (try! (validate-transition pipe-key balance-1 balance-2 nonce action actor amount
+      valid-after
+    ))
+    (try! (verify-hash-signature hash signature signer actor))
+    (if (> after burn-block-height)
+      (ok (some (- after burn-block-height)))
+      (ok none)
     )
   )
 )
@@ -1483,6 +1454,109 @@
       ERR_INVALID_BALANCES
     )
     (ok true)
+  )
+)
+
+;;; Check action-specific balance invariants for signature validation.
+;;; - For `ACTION_DEPOSIT`, validates the same total-balance and pending rules
+;;;   enforced by `deposit`.
+;;; - For `ACTION_WITHDRAWAL`, validates the same total-balance rules enforced
+;;;   by `withdraw`.
+;;; - For `ACTION_CLOSE`, validates the same pending and total-balance rules
+;;;   enforced by `close-pipe`.
+;;; - For other actions, defers to `balance-check`.
+(define-private (action-balance-check
+    (pipe-key {
+      token: (optional principal),
+      principal-1: principal,
+      principal-2: principal,
+    })
+    (balance-1 uint)
+    (balance-2 uint)
+    (action uint)
+    (actor principal)
+    (amount uint)
+    (at-height-opt (optional uint))
+  )
+  (let (
+      (pipe (unwrap! (map-get? pipes pipe-key) ERR_NO_SUCH_PIPE))
+      (at-height (default-to burn-block-height at-height-opt))
+      (pipe-1 (get balance-1 pipe))
+      (pipe-2 (get balance-2 pipe))
+      (pipe-pending-1 (get pending-1 pipe))
+      (pipe-pending-2 (get pending-2 pipe))
+      (pipe-balances-1 (calculate-balances pipe-1 pipe-pending-1 at-height))
+      (pipe-balances-2 (calculate-balances pipe-2 pipe-pending-2 at-height))
+      (confirmed (+ (get confirmed pipe-balances-1) (get confirmed pipe-balances-2)))
+      (pending (+ (get pending pipe-balances-1) (get pending pipe-balances-2)))
+      (pipe-total-sum (+ confirmed pending))
+      (sum (+ balance-1 balance-2))
+      (principal-1 (get principal-1 pipe-key))
+      (principal-2 (get principal-2 pipe-key))
+      (actor-balance (if (is-eq actor principal-1)
+        balance-1
+        balance-2
+      ))
+      (actor-pending (if (is-eq actor principal-1)
+        (get pending pipe-balances-1)
+        (get pending pipe-balances-2)
+      ))
+    )
+    (if (is-eq action ACTION_DEPOSIT)
+      (begin
+        (asserts! (or (is-eq actor principal-1) (is-eq actor principal-2))
+          ERR_INVALID_PRINCIPAL
+        )
+        (asserts! (is-none (get closer pipe)) ERR_CLOSE_IN_PROGRESS)
+        (asserts! (>= actor-balance amount) ERR_INVALID_BALANCES)
+        (asserts! (is-eq actor-pending u0) ERR_ALREADY_PENDING)
+        (asserts! (is-eq sum (+ pipe-total-sum amount)) ERR_INVALID_TOTAL_BALANCE)
+        (ok true)
+      )
+      (if (is-eq action ACTION_WITHDRAWAL)
+        (begin
+          (asserts! (or (is-eq actor principal-1) (is-eq actor principal-2))
+            ERR_INVALID_PRINCIPAL
+          )
+          (asserts! (is-none (get closer pipe)) ERR_CLOSE_IN_PROGRESS)
+          (asserts! (>= confirmed amount) ERR_INVALID_WITHDRAWAL)
+          (asserts! (is-eq sum (- confirmed amount)) ERR_INVALID_TOTAL_BALANCE)
+          (ok true)
+        )
+        (if (is-eq action ACTION_CLOSE)
+          (begin
+            (asserts! (is-eq pending u0) ERR_PENDING)
+            (asserts! (is-eq sum confirmed) ERR_INVALID_TOTAL_BALANCE)
+            (ok true)
+          )
+          (balance-check pipe-key balance-1 balance-2 at-height-opt)
+        )
+      )
+    )
+  )
+)
+
+;;; Shared transition validation used by both public state-changing functions
+;;; and read-only signature verification.
+(define-private (validate-transition
+    (pipe-key {
+      token: (optional principal),
+      principal-1: principal,
+      principal-2: principal,
+    })
+    (balance-1 uint)
+    (balance-2 uint)
+    (nonce uint)
+    (action uint)
+    (actor principal)
+    (amount uint)
+    (at-height-opt (optional uint))
+  )
+  (begin
+    (try! (nonce-check pipe-key nonce))
+    (action-balance-check pipe-key balance-1 balance-2 action actor amount
+      at-height-opt
+    )
   )
 )
 

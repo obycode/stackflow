@@ -6817,3 +6817,102 @@ describe("verify-signature-with-secret", () => {
     expect(result).toBeErr(Cl.uint(StackflowError.InvalidSignature));
   });
 });
+
+describe("verify-signature-request", () => {
+  var pipeKey: ClarityValue;
+
+  beforeEach(() => {
+    simnet.callPublicFn("stackflow", "init", [Cl.none()], deployer);
+
+    simnet.callPublicFn(
+      "stackflow",
+      "fund-pipe",
+      [Cl.none(), Cl.uint(1000000), Cl.principal(address2), Cl.uint(0)],
+      address1
+    );
+    const { result } = simnet.callPublicFn(
+      "stackflow",
+      "fund-pipe",
+      [Cl.none(), Cl.uint(2000000), Cl.principal(address1), Cl.uint(0)],
+      address2
+    );
+    expect(result).toBeOk(
+      Cl.tuple({
+        token: Cl.none(),
+        "principal-1": Cl.principal(address1),
+        "principal-2": Cl.principal(address2),
+      })
+    );
+    pipeKey = (result as ResponseOkCV).value;
+
+    simnet.mineEmptyBlocks(CONFIRMATION_DEPTH);
+  });
+
+  it("validates withdrawal request signatures with action-aware amount", () => {
+    const signature = generateWithdrawSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      1500000,
+      1000000,
+      1,
+      address2
+    );
+
+    const { result } = simnet.callReadOnlyFn(
+      "stackflow",
+      "verify-signature-request",
+      [
+        Cl.buffer(signature),
+        Cl.principal(address2),
+        pipeKey,
+        Cl.uint(1000000),
+        Cl.uint(1500000),
+        Cl.uint(1),
+        Cl.uint(PipeAction.Withdraw),
+        Cl.principal(address2),
+        Cl.none(),
+        Cl.none(),
+        Cl.uint(500000),
+      ],
+      address2
+    );
+
+    expect(result).toBeOk(Cl.none());
+  });
+
+  it("fails withdrawal request validation when amount does not match balances", () => {
+    const signature = generateWithdrawSignature(
+      address2PK,
+      null,
+      address2,
+      address1,
+      1500000,
+      1000000,
+      1,
+      address2
+    );
+
+    const { result } = simnet.callReadOnlyFn(
+      "stackflow",
+      "verify-signature-request",
+      [
+        Cl.buffer(signature),
+        Cl.principal(address2),
+        pipeKey,
+        Cl.uint(1000000),
+        Cl.uint(1500000),
+        Cl.uint(1),
+        Cl.uint(PipeAction.Withdraw),
+        Cl.principal(address2),
+        Cl.none(),
+        Cl.none(),
+        Cl.uint(400000),
+      ],
+      address2
+    );
+
+    expect(result).toBeErr(Cl.uint(StackflowError.InvalidTotalBalance));
+  });
+});

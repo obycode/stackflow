@@ -13,4 +13,5 @@ costs-reports.json
 node_modules
 .debug_history
 **/.env
-
+server/data/*.json
+server/dist/
