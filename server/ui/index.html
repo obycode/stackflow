@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Stackflow Console</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/app/styles.css" />
+  </head>
+  <body>
+    <main class="layout">
+      <section class="card hero">
+        <h1>Stackflow Console</h1>
+        <p>Connect wallet, inspect watched pipes, generate signatures, and call Stackflow contract functions.</p>
+      </section>
+
+      <section class="card">
+        <h2>Connection</h2>
+        <div class="grid two">
+          <label>
+            Watchtower URL
+            <input id="watchtower-url" type="text" />
+          </label>
+          <label>
+            Stackflow Contract
+            <input id="contract-id" type="text" placeholder="ST....stackflow-0-6-0" />
+          </label>
+          <label>
+            Network
+            <select id="network">
+              <option value="devnet">devnet</option>
+              <option value="testnet">testnet</option>
+              <option value="mainnet">mainnet</option>
+            </select>
+          </label>
+          <label>
+            Contract Version
+            <input id="contract-version" type="text" value="0.6.0" />
+          </label>
+        </div>
+        <div class="actions">
+          <button id="connect-btn">Connect Wallet</button>
+          <button id="disconnect-btn" class="ghost">Disconnect</button>
+          <button id="refresh-pipes-btn" class="ghost">Refresh Pipes</button>
+        </div>
+        <p id="wallet-status" class="status">Wallet not connected.</p>
+      </section>
+
+      <section class="card">
+        <h2>Watched Pipes</h2>
+        <div id="pipes-body" class="pipes-list">
+          <article class="pipe-card pipe-card-empty">
+            <p>Connect wallet to load watched pipes.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Action</h2>
+        <p>Select one action. The form below will show only the relevant inputs.</p>
+        <div class="grid two">
+          <label class="wide">
+            Action Type
+            <select id="action-select">
+              <option value="fund-pipe">fund-pipe</option>
+              <option value="deposit">deposit</option>
+              <option value="withdraw">withdraw</option>
+              <option value="force-cancel">force-cancel</option>
+              <option value="close-pipe">close-pipe</option>
+              <option value="force-close">force-close</option>
+              <option value="finalize">finalize</option>
+              <option value="sign-transfer">sign-transfer</option>
+              <option value="sign-deposit">sign-deposit</option>
+              <option value="sign-withdrawal">sign-withdrawal</option>
+              <option value="sign-close">sign-close</option>
+              <option value="request-producer-transfer">request-producer-transfer</option>
+              <option value="request-producer-deposit">request-producer-deposit</option>
+              <option value="request-producer-withdrawal">request-producer-withdrawal</option>
+              <option value="request-producer-close">request-producer-close</option>
+              <option value="submit-signature-state">submit-signature-state</option>
+            </select>
+          </label>
+
+          <label id="field-sig-with">
+            Counterparty Principal
+            <input id="sig-with" type="text" placeholder="ST..." />
+          </label>
+          <label id="field-sig-token">
+            Token Contract Principal (optional)
+            <input id="sig-token" type="text" placeholder="ST....token-contract" />
+          </label>
+          <label id="field-sig-token-asset-name">
+            Token Asset Name (FT post-condition)
+            <input id="sig-token-asset-name" type="text" placeholder="token" />
+          </label>
+          <label id="field-call-fund-amount">
+            <span id="call-amount-label">fund-pipe Amount</span>
+            <input id="call-fund-amount" type="number" min="0" step="1" />
+          </label>
+          <label id="field-sig-nonce">
+            Nonce
+            <input id="sig-nonce" type="number" min="0" step="1" />
+          </label>
+          <label id="field-sig-my-balance">
+            My Balance
+            <input id="sig-my-balance" type="number" min="0" step="1" />
+          </label>
+          <label id="field-sig-their-balance">
+            Their Balance
+            <input id="sig-their-balance" type="number" min="0" step="1" />
+          </label>
+          <label id="field-sig-action">
+            Signed Action
+            <select id="sig-action">
+              <option value="0">Close</option>
+              <option value="1" selected>Transfer</option>
+              <option value="2">Deposit</option>
+              <option value="3">Withdrawal</option>
+            </select>
+          </label>
+          <label id="field-sig-actor">
+            Actor Principal
+            <input id="sig-actor" type="text" placeholder="Defaults to connected wallet" />
+          </label>
+          <label id="field-sig-valid-after">
+            Valid After Burn Height (optional)
+            <input id="sig-valid-after" type="number" min="0" step="1" />
+          </label>
+          <label id="field-sig-secret">
+            Secret Preimage Hex (optional 32 bytes, no hashing needed)
+            <input id="sig-secret" type="text" placeholder="64 hex chars" />
+          </label>
+          <label id="field-sig-my-signature" class="wide">
+            <span id="sig-my-signature-label">My Signature (RSV hex)</span>
+            <input id="sig-my-signature" type="text" placeholder="0x..." />
+            <small id="sig-my-signature-help" class="field-help">
+              Paste your signature, or switch to a sign-* action to generate it here.
+            </small>
+          </label>
+          <label id="field-sig-their-signature" class="wide">
+            Counterparty Signature (RSV hex)
+            <input id="sig-their-signature" type="text" placeholder="0x..." />
+          </label>
+        </div>
+        <div class="actions">
+          <button id="action-submit-btn">Submit</button>
+        </div>
+        <p id="action-help" class="status"></p>
+        <pre id="signature-payload" class="code"></pre>
+        <p id="tx-result" class="status"></p>
+      </section>
+    </main>
+
+    <script type="module" src="/app/main.js"></script>
+  </body>
+</html>
