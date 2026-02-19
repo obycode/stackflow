@@ -14,7 +14,7 @@ import { describe, expect, it } from 'vitest';
 
 import { normalizePipeId } from '../server/src/observer-parser.ts';
 import { SqliteStateStore } from '../server/src/state-store.ts';
-import { Watchtower } from '../server/src/watchtower.ts';
+import { StackflowNode } from '../server/src/stackflow-node.ts';
 
 const P1 = 'ST1SJ3DTE5DN7X54YDH5D64R3BCB6A2AG2ZQ8YPD5';
 const P2 = 'ST2CY5V39NHDPWSXMW9QDT3HC3GD6Q6XX4CFRK9AG';
@@ -86,15 +86,15 @@ describe('watchtower state transitions', () => {
     const store = new SqliteStateStore({ dbFile, maxRecentEvents: 10 });
     store.load();
 
-    const watchtower = new Watchtower({
+    const stackflowNode = new StackflowNode({
       stateStore: store,
       watchedPrincipals: [P1],
     });
 
-    const result = await watchtower.ingest(payloadFor('force-close', P2, P3), '/new_block');
+    const result = await stackflowNode.ingest(payloadFor('force-close', P2, P3), '/new_block');
 
     expect(result.observedEvents).toBe(0);
-    expect(watchtower.status().activeClosures).toHaveLength(0);
+    expect(stackflowNode.status().activeClosures).toHaveLength(0);
 
     cleanupDb(store, dbFile);
   });
@@ -108,19 +108,19 @@ describe('watchtower state transitions', () => {
     const store = new SqliteStateStore({ dbFile, maxRecentEvents: 10 });
     store.load();
 
-    const watchtower = new Watchtower({ stateStore: store });
+    const stackflowNode = new StackflowNode({ stateStore: store });
 
-    await watchtower.ingest(payloadFor('force-close'), '/new_block');
+    await stackflowNode.ingest(payloadFor('force-close'), '/new_block');
 
-    let status = watchtower.status();
+    let status = stackflowNode.status();
     expect(status.activeClosures).toHaveLength(1);
     expect(status.activeClosures[0].event).toBe('force-close');
     expect(status.observedPipes).toHaveLength(1);
     expect(status.observedPipes[0].event).toBe('force-close');
 
-    await watchtower.ingest(payloadFor('finalize'), '/new_block');
+    await stackflowNode.ingest(payloadFor('finalize'), '/new_block');
 
-    status = watchtower.status();
+    status = stackflowNode.status();
     expect(status.activeClosures).toHaveLength(0);
     expect(status.observedPipes).toHaveLength(1);
     expect(status.observedPipes[0].event).toBe('finalize');
@@ -139,10 +139,10 @@ describe('watchtower state transitions', () => {
     const store = new SqliteStateStore({ dbFile, maxRecentEvents: 10 });
     store.load();
 
-    const watchtower = new Watchtower({ stateStore: store });
-    await watchtower.ingest(payloadFor('fund-pipe'), '/new_block');
+    const stackflowNode = new StackflowNode({ stateStore: store });
+    await stackflowNode.ingest(payloadFor('fund-pipe'), '/new_block');
 
-    const status = watchtower.status();
+    const status = stackflowNode.status();
     expect(status.observedPipes).toHaveLength(1);
     expect(status.observedPipes[0].event).toBe('fund-pipe');
     expect(status.observedPipes[0].balance1).toBe('50');
@@ -161,18 +161,18 @@ describe('watchtower state transitions', () => {
     const store = new SqliteStateStore({ dbFile, maxRecentEvents: 10 });
     store.load();
 
-    const watchtower = new Watchtower({ stateStore: store });
-    await watchtower.ingest(payloadFor('force-close'), '/new_block');
+    const stackflowNode = new StackflowNode({ stateStore: store });
+    await stackflowNode.ingest(payloadFor('force-close'), '/new_block');
 
-    let status = watchtower.status();
+    let status = stackflowNode.status();
     expect(status.activeClosures).toHaveLength(1);
     expect(status.observedPipes).toHaveLength(1);
     expect(status.observedPipes[0].balance1).toBe('50');
     expect(status.observedPipes[0].balance2).toBe('75');
 
-    await watchtower.ingest(payloadFor('dispute-closure'), '/new_block');
+    await stackflowNode.ingest(payloadFor('dispute-closure'), '/new_block');
 
-    status = watchtower.status();
+    status = stackflowNode.status();
     expect(status.activeClosures).toHaveLength(0);
     expect(status.observedPipes).toHaveLength(1);
     expect(status.observedPipes[0].event).toBe('dispute-closure');
@@ -193,18 +193,18 @@ describe('watchtower state transitions', () => {
     const store = new SqliteStateStore({ dbFile, maxRecentEvents: 10 });
     store.load();
 
-    const watchtower = new Watchtower({ stateStore: store });
-    await watchtower.ingest(payloadFor('fund-pipe'), '/new_block');
+    const stackflowNode = new StackflowNode({ stateStore: store });
+    await stackflowNode.ingest(payloadFor('fund-pipe'), '/new_block');
 
-    let status = watchtower.status();
+    let status = stackflowNode.status();
     expect(status.observedPipes).toHaveLength(1);
     expect(status.observedPipes[0].event).toBe('fund-pipe');
     expect(status.observedPipes[0].balance1).toBe('50');
     expect(status.observedPipes[0].balance2).toBe('75');
 
-    await watchtower.ingest(payloadFor('close-pipe'), '/new_block');
+    await stackflowNode.ingest(payloadFor('close-pipe'), '/new_block');
 
-    status = watchtower.status();
+    status = stackflowNode.status();
     expect(status.activeClosures).toHaveLength(0);
     expect(status.observedPipes).toHaveLength(1);
     expect(status.observedPipes[0].event).toBe('close-pipe');
@@ -225,7 +225,7 @@ describe('watchtower state transitions', () => {
     const store = new SqliteStateStore({ dbFile, maxRecentEvents: 10 });
     store.load();
 
-    const watchtower = new Watchtower({ stateStore: store });
+    const stackflowNode = new StackflowNode({ stateStore: store });
     const pipeKey = {
       token: null,
       'principal-1': P1,
@@ -256,19 +256,19 @@ describe('watchtower state transitions', () => {
       updatedAt: new Date().toISOString(),
     });
 
-    const before = await watchtower.ingestBurnBlock(158, '/new_burn_block');
+    const before = await stackflowNode.ingestBurnBlock(158, '/new_burn_block');
     expect(before.settledPipes).toBe(0);
 
-    let status = watchtower.status();
+    let status = stackflowNode.status();
     expect(status.observedPipes).toHaveLength(1);
     expect(status.observedPipes[0].balance1).toBe('0');
     expect(status.observedPipes[0].pending1Amount).toBe('4000000');
     expect(status.observedPipes[0].pending1BurnHeight).toBe('159');
 
-    const after = await watchtower.ingestBurnBlock(159, '/new_burn_block');
+    const after = await stackflowNode.ingestBurnBlock(159, '/new_burn_block');
     expect(after.settledPipes).toBe(1);
 
-    status = watchtower.status();
+    status = stackflowNode.status();
     expect(status.observedPipes).toHaveLength(1);
     expect(status.observedPipes[0].balance1).toBe('4000000');
     expect(status.observedPipes[0].pending1Amount).toBeNull();

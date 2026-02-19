@@ -7,21 +7,26 @@ import { getAddressFromPrivateKey } from '@stacks/transactions';
 import { describe, expect, it } from 'vitest';
 
 import {
-  ProducerService,
-  ProducerServiceError,
-  ProducerStateSigner,
-} from '../server/src/producer-service.ts';
+  createCounterpartySigner,
+  CounterpartyService,
+  CounterpartyServiceError,
+  CounterpartyStateSigner,
+} from '../server/src/counterparty-service.ts';
 import { normalizePipeId } from '../server/src/observer-parser.ts';
 import { canonicalPipeKey } from '../server/src/principal-utils.ts';
 import { AcceptAllSignatureVerifier } from '../server/src/signature-verifier.ts';
 import { SqliteStateStore } from '../server/src/state-store.ts';
-import { Watchtower } from '../server/src/watchtower.ts';
+import { StackflowNode } from '../server/src/stackflow-node.ts';
 
 const CONTRACT_ID = 'ST126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT59ZTE2J.stackflow-0-6-0';
 const COUNTERPARTY = 'ST2CY5V39NHDPWSXMW9QDT3HC3GD6Q6XX4CFRK9AG';
 const PRODUCER_KEY =
   '7287ba251d44a4d3fd9276c88ce34c5c52a038955511cccaf77e61068649c17801';
 const COUNTERPARTY_SIGNATURE = `0x${'22'.repeat(65)}`;
+const PRODUCER_ADDRESS = getAddressFromPrivateKey(
+  PRODUCER_KEY,
+  createNetwork({ network: 'devnet' }),
+);
 
 function cleanupDb(store: SqliteStateStore, dbFile: string): void {
   store.close();
@@ -38,41 +43,41 @@ function makeHarness({
 }: {
   signatureVerifierMode?: 'accept-all' | 'reject-all';
 }) {
-  const producerAddress = getAddressFromPrivateKey(
+  const counterpartyAddress = getAddressFromPrivateKey(
     PRODUCER_KEY,
     createNetwork({ network: 'devnet' }),
   );
   const dbFile = path.join(
     os.tmpdir(),
-    `stackflow-producer-${Date.now()}-${Math.random()}.db`,
+    `stackflow-counterparty-${Date.now()}-${Math.random()}.db`,
   );
   const store = new SqliteStateStore({ dbFile, maxRecentEvents: 20 });
   store.load();
 
-  const watchtower = new Watchtower({
+  const stackflowNode = new StackflowNode({
     stateStore: store,
-    watchedPrincipals: [producerAddress],
+    watchedPrincipals: [counterpartyAddress],
     signatureVerifier: new AcceptAllSignatureVerifier(),
   });
-  const signer = new ProducerStateSigner({
+  const signer = new CounterpartyStateSigner({
     stacksNetwork: 'devnet',
     stacksApiUrl: null,
     signatureVerifierMode,
-    producerKey: PRODUCER_KEY,
-    producerPrincipal: null,
+    counterpartyKey: PRODUCER_KEY,
+    counterpartyPrincipal: null,
     stackflowMessageVersion: '0.6.0',
   });
-  const service = new ProducerService({ watchtower, signer });
+  const service = new CounterpartyService({ stackflowNode, signer });
 
   return {
-    producerAddress,
+    counterpartyAddress,
     dbFile,
     store,
     service,
   };
 }
 
-function transferPayload(producerAddress: string) {
+function transferPayload(counterpartyAddress: string) {
   return {
     contractId: CONTRACT_ID,
     withPrincipal: COUNTERPARTY,
@@ -82,7 +87,7 @@ function transferPayload(producerAddress: string) {
     theirSignature: COUNTERPARTY_SIGNATURE,
     nonce: '5',
     action: '1',
-    actor: producerAddress,
+    actor: counterpartyAddress,
     secret: null,
     validAfter: null,
     beneficialOnly: false,
@@ -91,7 +96,7 @@ function transferPayload(producerAddress: string) {
 
 function seedObservedPipeState({
   store,
-  producerAddress,
+  counterpartyAddress,
   withPrincipal,
   token,
   contractId,
@@ -100,7 +105,7 @@ function seedObservedPipeState({
   nonce,
 }: {
   store: SqliteStateStore;
-  producerAddress: string;
+  counterpartyAddress: string;
   withPrincipal: string;
   token: string | null;
   contractId: string;
@@ -108,15 +113,15 @@ function seedObservedPipeState({
   theirBalance: string;
   nonce: string;
 }): void {
-  const pipeKey = canonicalPipeKey(token, producerAddress, withPrincipal);
+  const pipeKey = canonicalPipeKey(token, counterpartyAddress, withPrincipal);
   const pipeId = normalizePipeId(pipeKey);
   if (!pipeId) {
     throw new Error('failed to build pipe id in test');
   }
 
-  const principal1IsProducer = pipeKey['principal-1'] === producerAddress;
-  const balance1 = principal1IsProducer ? myBalance : theirBalance;
-  const balance2 = principal1IsProducer ? theirBalance : myBalance;
+  const principal1IsCounterparty = pipeKey['principal-1'] === counterpartyAddress;
+  const balance1 = principal1IsCounterparty ? myBalance : theirBalance;
+  const balance2 = principal1IsCounterparty ? theirBalance : myBalance;
   const now = new Date().toISOString();
   store.setObservedPipe({
     stateId: `${contractId}|${pipeId}`,
@@ -139,14 +144,14 @@ function seedObservedPipeState({
   });
 }
 
-describe('producer signing service', () => {
+describe('counterparty signing service', () => {
   it('signs transfer states and stores the latest signature pair', async () => {
-    const { producerAddress, dbFile, store, service } = makeHarness({});
+    const { counterpartyAddress, dbFile, store, service } = makeHarness({});
 
     try {
       seedObservedPipeState({
         store,
-        producerAddress,
+        counterpartyAddress,
         withPrincipal: COUNTERPARTY,
         token: null,
         contractId: CONTRACT_ID,
@@ -155,11 +160,11 @@ describe('producer signing service', () => {
         nonce: '4',
       });
 
-      const result = await service.signTransfer(transferPayload(producerAddress));
+      const result = await service.signTransfer(transferPayload(counterpartyAddress));
 
       expect(result.upsert.stored).toBe(true);
       expect(result.upsert.replaced).toBe(false);
-      expect(result.request.forPrincipal).toBe(producerAddress);
+      expect(result.request.forPrincipal).toBe(counterpartyAddress);
       expect(result.request.action).toBe('1');
       expect(result.mySignature).toMatch(/^0x[0-9a-f]{130}$/);
       expect(result.upsert.state.mySignature).toBe(result.mySignature);
@@ -169,16 +174,16 @@ describe('producer signing service', () => {
     }
   });
 
-  it('enforces action restrictions on /producer/signature-request', async () => {
-    const { producerAddress, dbFile, store, service } = makeHarness({});
+  it('enforces action restrictions on /counterparty/signature-request', async () => {
+    const { counterpartyAddress, dbFile, store, service } = makeHarness({});
 
     try {
       await expect(
         service.signSignatureRequest({
-          ...transferPayload(producerAddress),
+          ...transferPayload(counterpartyAddress),
           action: '1',
         }),
-      ).rejects.toMatchObject<Partial<ProducerServiceError>>({
+      ).rejects.toMatchObject<Partial<CounterpartyServiceError>>({
         statusCode: 400,
       });
     } finally {
@@ -187,14 +192,14 @@ describe('producer signing service', () => {
   });
 
   it('rejects requests when reject-all verifier mode is active', async () => {
-    const { producerAddress, dbFile, store, service } = makeHarness({
+    const { counterpartyAddress, dbFile, store, service } = makeHarness({
       signatureVerifierMode: 'reject-all',
     });
 
     try {
       seedObservedPipeState({
         store,
-        producerAddress,
+        counterpartyAddress,
         withPrincipal: COUNTERPARTY,
         token: null,
         contractId: CONTRACT_ID,
@@ -204,8 +209,8 @@ describe('producer signing service', () => {
       });
 
       await expect(
-        service.signTransfer(transferPayload(producerAddress)),
-      ).rejects.toMatchObject<Partial<ProducerServiceError>>({
+        service.signTransfer(transferPayload(counterpartyAddress)),
+      ).rejects.toMatchObject<Partial<CounterpartyServiceError>>({
         statusCode: 401,
       });
     } finally {
@@ -214,12 +219,12 @@ describe('producer signing service', () => {
   });
 
   it('requires amount for withdrawal signature requests', async () => {
-    const { producerAddress, dbFile, store, service } = makeHarness({});
+    const { counterpartyAddress, dbFile, store, service } = makeHarness({});
 
     try {
       seedObservedPipeState({
         store,
-        producerAddress,
+        counterpartyAddress,
         withPrincipal: COUNTERPARTY,
         token: null,
         contractId: CONTRACT_ID,
@@ -230,7 +235,7 @@ describe('producer signing service', () => {
 
       await expect(
         service.signSignatureRequest({
-          ...transferPayload(producerAddress),
+          ...transferPayload(counterpartyAddress),
           action: '3',
           actor: COUNTERPARTY,
           amount: null,
@@ -238,7 +243,7 @@ describe('producer signing service', () => {
           theirBalance: '50',
           nonce: '5',
         }),
-      ).rejects.toMatchObject<Partial<ProducerServiceError>>({
+      ).rejects.toMatchObject<Partial<CounterpartyServiceError>>({
         statusCode: 400,
       });
     } finally {
@@ -247,12 +252,12 @@ describe('producer signing service', () => {
   });
 
   it('rejects transfer when nonce is not higher than stored state', async () => {
-    const { producerAddress, dbFile, store, service } = makeHarness({});
+    const { counterpartyAddress, dbFile, store, service } = makeHarness({});
 
     try {
       seedObservedPipeState({
         store,
-        producerAddress,
+        counterpartyAddress,
         withPrincipal: COUNTERPARTY,
         token: null,
         contractId: CONTRACT_ID,
@@ -261,12 +266,12 @@ describe('producer signing service', () => {
         nonce: '4',
       });
 
-      const first = await service.signTransfer(transferPayload(producerAddress));
+      const first = await service.signTransfer(transferPayload(counterpartyAddress));
       expect(first.upsert.stored).toBe(true);
 
       await expect(
-        service.signTransfer(transferPayload(producerAddress)),
-      ).rejects.toMatchObject<Partial<ProducerServiceError>>({
+        service.signTransfer(transferPayload(counterpartyAddress)),
+      ).rejects.toMatchObject<Partial<CounterpartyServiceError>>({
         statusCode: 409,
         details: {
           reason: 'nonce-too-low',
@@ -278,13 +283,13 @@ describe('producer signing service', () => {
     }
   });
 
-  it('rejects transfer when producer balance decreases', async () => {
-    const { producerAddress, dbFile, store, service } = makeHarness({});
+  it('rejects transfer when counterparty balance decreases', async () => {
+    const { counterpartyAddress, dbFile, store, service } = makeHarness({});
 
     try {
       seedObservedPipeState({
         store,
-        producerAddress,
+        counterpartyAddress,
         withPrincipal: COUNTERPARTY,
         token: null,
         contractId: CONTRACT_ID,
@@ -295,15 +300,15 @@ describe('producer signing service', () => {
 
       await expect(
         service.signTransfer({
-          ...transferPayload(producerAddress),
+          ...transferPayload(counterpartyAddress),
           myBalance: '150',
           theirBalance: '150',
           nonce: '5',
         }),
-      ).rejects.toMatchObject<Partial<ProducerServiceError>>({
+      ).rejects.toMatchObject<Partial<CounterpartyServiceError>>({
         statusCode: 403,
         details: {
-          reason: 'producer-balance-decrease',
+          reason: 'counterparty-balance-decrease',
         },
       });
     } finally {
@@ -312,12 +317,12 @@ describe('producer signing service', () => {
   });
 
   it('rejects transfer when no baseline state exists', async () => {
-    const { producerAddress, dbFile, store, service } = makeHarness({});
+    const { counterpartyAddress, dbFile, store, service } = makeHarness({});
 
     try {
       await expect(
-        service.signTransfer(transferPayload(producerAddress)),
-      ).rejects.toMatchObject<Partial<ProducerServiceError>>({
+        service.signTransfer(transferPayload(counterpartyAddress)),
+      ).rejects.toMatchObject<Partial<CounterpartyServiceError>>({
         statusCode: 409,
         details: {
           reason: 'unknown-pipe-state',
@@ -326,5 +331,28 @@ describe('producer signing service', () => {
     } finally {
       cleanupDb(store, dbFile);
     }
+  });
+
+  it('requires a KMS key id when kms signer mode is enabled', async () => {
+    const signer = createCounterpartySigner({
+      stacksNetwork: 'devnet',
+      stacksApiUrl: null,
+      signatureVerifierMode: 'accept-all',
+      counterpartyKey: null,
+      counterpartyPrincipal: null,
+      counterpartySignerMode: 'kms',
+      stackflowMessageVersion: '0.6.0',
+      counterpartyKmsKeyId: null,
+      counterpartyKmsRegion: null,
+      counterpartyKmsEndpoint: null,
+    });
+
+    expect(signer.enabled).toBe(false);
+    await expect(signer.ensureReady()).resolves.toBeUndefined();
+    await expect(
+      signer.signMySignature(transferPayload(PRODUCER_ADDRESS)),
+    ).rejects.toMatchObject<Partial<CounterpartyServiceError>>({
+      statusCode: 503,
+    });
   });
 });

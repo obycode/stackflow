@@ -7,9 +7,9 @@ import type {
   DisputeAttemptRecord,
   ObservedPipeRecord,
   PipeKey,
-  RecordedWatchtowerEvent,
+  RecordedStackflowNodeEvent,
   SignatureStateRecord,
-  WatchtowerPersistedState,
+  StackflowNodePersistedState,
 } from './types.js';
 
 interface SqliteStateStoreOptions {
@@ -87,7 +87,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function isLegacyState(value: unknown): value is WatchtowerPersistedState {
+function isLegacyState(value: unknown): value is StackflowNodePersistedState {
   if (!isRecord(value)) {
     return false;
   }
@@ -152,7 +152,7 @@ export class SqliteStateStore {
       const backupFile = `${this.dbFile}.json-backup-${Date.now()}`;
       fs.renameSync(this.dbFile, backupFile);
       console.log(
-        `[watchtower] migrated legacy JSON state to SQLite; backup=${backupFile}`,
+        `[stackflow-node] migrated legacy JSON state to SQLite; backup=${backupFile}`,
       );
     }
 
@@ -314,7 +314,7 @@ export class SqliteStateStore {
     }
   }
 
-  private loadLegacyJsonState(): WatchtowerPersistedState | null {
+  private loadLegacyJsonState(): StackflowNodePersistedState | null {
     if (!fs.existsSync(this.dbFile)) {
       return null;
     }
@@ -337,7 +337,7 @@ export class SqliteStateStore {
     }
   }
 
-  private importLegacyState(legacyState: WatchtowerPersistedState): void {
+  private importLegacyState(legacyState: StackflowNodePersistedState): void {
     const db = this.getDb();
     db.exec('BEGIN');
     try {
@@ -621,7 +621,7 @@ export class SqliteStateStore {
     };
   }
 
-  getSnapshot(): WatchtowerPersistedState {
+  getSnapshot(): StackflowNodePersistedState {
     const db = this.getDb();
 
     const closureRows = db
@@ -668,10 +668,10 @@ export class SqliteStateStore {
       disputeAttempts[mapped.attemptId] = mapped;
     }
 
-    const recentEvents: RecordedWatchtowerEvent[] = [];
+    const recentEvents: RecordedStackflowNodeEvent[] = [];
     for (const row of eventRows) {
       try {
-        const parsed = JSON.parse(row.event_json) as RecordedWatchtowerEvent;
+        const parsed = JSON.parse(row.event_json) as RecordedStackflowNodeEvent;
         recentEvents.push(parsed);
       } catch {
         // Skip corrupted rows to keep the store usable.
@@ -689,7 +689,7 @@ export class SqliteStateStore {
     };
   }
 
-  recordEvent(event: RecordedWatchtowerEvent): void {
+  recordEvent(event: RecordedStackflowNodeEvent): void {
     const db = this.getDb();
     const insert = db.prepare(
       'INSERT INTO recent_events (event_json, observed_at) VALUES (?, ?)',

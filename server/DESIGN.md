@@ -1,8 +1,8 @@
-# Stackflow Watchtower Server Design
+# Stackflow Node Server Design
 
 ## Purpose
 
-The watchtower server protects users from stale channel closures by:
+The stackflow-node server protects users from stale channel closures by:
 
 1. Accepting and persisting the latest valid signed state for watched users.
 2. Listening to Stackflow `print` events from a Stacks node observer (`POST /new_block`).
@@ -12,7 +12,7 @@ The watchtower server protects users from stale channel closures by:
 
 - `src/index.ts`
   - HTTP API, built-in UI static file serving, and dependency wiring.
-- `src/watchtower.ts`
+- `src/stackflow-node.ts`
   - Core decision engine and state transitions.
 - `src/observer-parser.ts`
   - Normalizes observer payloads into Stackflow events.
@@ -27,9 +27,8 @@ The watchtower server protects users from stale channel closures by:
 
 State is persisted in SQLite:
 
-- Default: `server/data/watchtower-state.db`
-- Config: `WATCHTOWER_DB_FILE`
-- Backward-compatible alias: `WATCHTOWER_STATE_FILE`
+- Default: `server/data/stackflow-node-state.db`
+- Config: `STACKFLOW_NODE_DB_FILE`
 
 ### SQLite settings
 
@@ -60,7 +59,7 @@ On startup the store configures:
 ### Data lifecycle
 
 - Every write updates `meta.updated_at`.
-- `recent_events` is capped by `WATCHTOWER_MAX_RECENT_EVENTS` (default `500`).
+- `recent_events` is capped by `STACKFLOW_NODE_MAX_RECENT_EVENTS` (default `500`).
 - `recent_events` is pruned after each insert.
 
 ## API
@@ -76,17 +75,17 @@ On startup the store configures:
   - Stacks-node observer compatibility endpoints. They are accepted and ignored.
 - `POST /signature-states`
   - Off-chain state submission.
-- `POST /producer/transfer`
-  - Producer-mode transfer signing (`action=1`).
-- `POST /producer/signature-request`
-  - Producer-mode close/deposit/withdraw signing (`action=0|2|3`).
+- `POST /counterparty/transfer`
+  - Counterparty-mode transfer signing (`action=1`).
+- `POST /counterparty/signature-request`
+  - Counterparty-mode close/deposit/withdraw signing (`action=0|2|3`).
   - For `action=2|3`, request payload must include `amount`.
 
-Producer-mode endpoints apply local policy before signing:
+Counterparty-mode endpoints apply local policy before signing:
 
 - Reject if requested nonce is not strictly higher than latest known nonce.
-- Reject if producer balance would decrease.
-- For transfer requests (`action=1`), require producer balance to strictly increase
+- Reject if counterparty balance would decrease.
+- For transfer requests (`action=1`), require counterparty balance to strictly increase
   and preserve total channel balance.
 - Counterparty signatures are validated via on-chain read-only
   `verify-signature-request`, including action-aware amount checks.
@@ -117,7 +116,7 @@ Producer-mode endpoints apply local policy before signing:
 3. Apply contract filter:
    - explicit `STACKFLOW_CONTRACTS`, or
    - default `*.stackflow*` matcher.
-4. Apply principal scope filter (`WATCHTOWER_PRINCIPALS`) if configured.
+4. Apply principal scope filter (`STACKFLOW_NODE_PRINCIPALS`) if configured.
 5. Record event in `recent_events`.
 6. Update closure state:
    - open: `force-close`, `force-cancel`
@@ -151,21 +150,24 @@ Deduping:
 
 ## Config
 
-- `WATCHTOWER_HOST`, `WATCHTOWER_PORT`
-- `WATCHTOWER_DB_FILE` (or alias `WATCHTOWER_STATE_FILE`)
-- `WATCHTOWER_MAX_RECENT_EVENTS`
+- `STACKFLOW_NODE_HOST`, `STACKFLOW_NODE_PORT`
+- `STACKFLOW_NODE_DB_FILE`
+- `STACKFLOW_NODE_MAX_RECENT_EVENTS`
 - `STACKFLOW_CONTRACTS`
-- `WATCHTOWER_PRINCIPALS` (CSV allowlist, max 100)
+- `STACKFLOW_NODE_PRINCIPALS` (CSV allowlist, max 100)
 - `STACKS_NETWORK`
 - `STACKS_API_URL`
-- `WATCHTOWER_SIGNER_KEY`
-- `WATCHTOWER_PRODUCER_KEY`
-- `WATCHTOWER_PRODUCER_PRINCIPAL`
-- `WATCHTOWER_PRODUCER_SIGNER_MODE` (`local-key|kms`)
-- `WATCHTOWER_STACKFLOW_MESSAGE_VERSION`
-- `WATCHTOWER_SIGNATURE_VERIFIER_MODE` (`readonly|accept-all|reject-all`)
-- `WATCHTOWER_DISPUTE_EXECUTOR_MODE` (`auto|noop|mock`)
-- `WATCHTOWER_DISPUTE_ONLY_BENEFICIAL`
+- `STACKFLOW_NODE_DISPUTE_SIGNER_KEY`
+- `STACKFLOW_NODE_COUNTERPARTY_KEY`
+- `STACKFLOW_NODE_COUNTERPARTY_PRINCIPAL`
+- `STACKFLOW_NODE_COUNTERPARTY_SIGNER_MODE` (`local-key|kms`)
+- `STACKFLOW_NODE_COUNTERPARTY_KMS_KEY_ID`
+- `STACKFLOW_NODE_COUNTERPARTY_KMS_REGION`
+- `STACKFLOW_NODE_COUNTERPARTY_KMS_ENDPOINT`
+- `STACKFLOW_NODE_STACKFLOW_MESSAGE_VERSION`
+- `STACKFLOW_NODE_SIGNATURE_VERIFIER_MODE` (`readonly|accept-all|reject-all`)
+- `STACKFLOW_NODE_DISPUTE_EXECUTOR_MODE` (`auto|noop|mock`)
+- `STACKFLOW_NODE_DISPUTE_ONLY_BENEFICIAL`
 
 ## Production Notes
 

@@ -35,7 +35,7 @@ plan:
     - transaction-type: contract-publish
       contract-name: stackflow
       expected-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
-      cost: 491980
+      cost: 520800
       path: contracts/stackflow.clar
       anchor-block-only: true
       clarity-version: 4

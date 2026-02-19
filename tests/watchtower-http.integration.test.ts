@@ -24,7 +24,7 @@ const P2 = 'ST2CY5V39NHDPWSXMW9QDT3HC3GD6Q6XX4CFRK9AG';
 const P3 = 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM';
 const SIG_A = `0x${'11'.repeat(65)}`;
 const SIG_B = `0x${'22'.repeat(65)}`;
-const RUN_HTTP_INTEGRATION = process.env.WATCHTOWER_HTTP_INTEGRATION === '1';
+const RUN_HTTP_INTEGRATION = process.env.STACKFLOW_NODE_HTTP_INTEGRATION === '1';
 
 interface Harness {
   baseUrl: string;
@@ -42,7 +42,7 @@ beforeAll(() => {
   }
 
   if (!built) {
-    execFileSync('npm', ['run', '-s', 'build:watchtower'], {
+    execFileSync('npm', ['run', '-s', 'build:stackflow-node'], {
       cwd: ROOT,
       stdio: 'pipe',
     });
@@ -212,9 +212,9 @@ async function startHarness({
     cwd: ROOT,
     env: {
       ...process.env,
-      WATCHTOWER_HOST: '127.0.0.1',
-      WATCHTOWER_PORT: String(port),
-      WATCHTOWER_DB_FILE: dbFile,
+      STACKFLOW_NODE_HOST: '127.0.0.1',
+      STACKFLOW_NODE_PORT: String(port),
+      STACKFLOW_NODE_DB_FILE: dbFile,
       STACKFLOW_CONTRACTS: CONTRACT_ID,
       ...extraEnv,
     },
@@ -244,9 +244,9 @@ async function startHarness({
       cwd: ROOT,
       env: {
         ...process.env,
-        WATCHTOWER_HOST: '127.0.0.1',
-        WATCHTOWER_PORT: String(port),
-        WATCHTOWER_DB_FILE: dbFile,
+        STACKFLOW_NODE_HOST: '127.0.0.1',
+        STACKFLOW_NODE_PORT: String(port),
+        STACKFLOW_NODE_DB_FILE: dbFile,
         STACKFLOW_CONTRACTS: CONTRACT_ID,
         ...extraEnv,
       },
@@ -283,9 +283,9 @@ describeHttp('watchtower http integration', () => {
     const harness = await startHarness({
       dbFile,
       extraEnv: {
-        WATCHTOWER_PRINCIPALS: `${P1},${P2}`,
-        WATCHTOWER_SIGNATURE_VERIFIER_MODE: 'accept-all',
-        WATCHTOWER_DISPUTE_EXECUTOR_MODE: 'noop',
+        STACKFLOW_NODE_PRINCIPALS: `${P1},${P2}`,
+        STACKFLOW_NODE_SIGNATURE_VERIFIER_MODE: 'accept-all',
+        STACKFLOW_NODE_DISPUTE_EXECUTOR_MODE: 'noop',
       },
     });
 
@@ -405,9 +405,9 @@ describeHttp('watchtower http integration', () => {
     const harness = await startHarness({
       dbFile,
       extraEnv: {
-        WATCHTOWER_PRINCIPALS: P1,
-        WATCHTOWER_SIGNATURE_VERIFIER_MODE: 'accept-all',
-        WATCHTOWER_DISPUTE_EXECUTOR_MODE: 'mock',
+        STACKFLOW_NODE_PRINCIPALS: P1,
+        STACKFLOW_NODE_SIGNATURE_VERIFIER_MODE: 'accept-all',
+        STACKFLOW_NODE_DISPUTE_EXECUTOR_MODE: 'mock',
       },
     });
 
@@ -535,9 +535,9 @@ describeHttp('watchtower http integration', () => {
     const harness = await startHarness({
       dbFile,
       extraEnv: {
-        WATCHTOWER_PRINCIPALS: P1,
-        WATCHTOWER_SIGNATURE_VERIFIER_MODE: 'reject-all',
-        WATCHTOWER_DISPUTE_EXECUTOR_MODE: 'noop',
+        STACKFLOW_NODE_PRINCIPALS: P1,
+        STACKFLOW_NODE_SIGNATURE_VERIFIER_MODE: 'reject-all',
+        STACKFLOW_NODE_DISPUTE_EXECUTOR_MODE: 'noop',
       },
     });
 

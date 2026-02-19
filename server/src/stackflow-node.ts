@@ -18,16 +18,16 @@ import type {
   IngestResult,
   ObservedPipeRecord,
   PipeKey,
-  RecordedWatchtowerEvent,
+  RecordedStackflowNodeEvent,
   SignatureStateInput,
   SignatureStateRecord,
   SignatureStateUpsertResult,
   SignatureVerifier,
   StackflowPrintEvent,
-  WatchtowerStatus,
+  StackflowNodeStatus,
 } from './types.js';
 
-interface WatchtowerOptions {
+interface StackflowNodeOptions {
   stateStore: SqliteStateStore;
   watchedContracts?: string[];
   watchedPrincipals?: string[];
@@ -234,7 +234,7 @@ function parseUnsignedBigInt(value: string | null): bigint | null {
   }
 }
 
-export class Watchtower {
+export class StackflowNode {
   private readonly stateStore: SqliteStateStore;
 
   private readonly watchedContracts: string[];
@@ -254,7 +254,7 @@ export class Watchtower {
     disputeExecutor,
     disputeOnlyBeneficial = false,
     signatureVerifier,
-  }: WatchtowerOptions) {
+  }: StackflowNodeOptions) {
     this.stateStore = stateStore;
     this.watchedContracts = watchedContracts;
     this.watchedPrincipals = new Set(watchedPrincipals);
@@ -272,7 +272,7 @@ export class Watchtower {
 
     if (!this.isWatchedPrincipal(normalized.forPrincipal)) {
       console.warn(
-        `[watchtower] signature-state processed result=rejected reason=principal-not-watched ${context}`,
+        `[stackflow-node] signature-state processed result=rejected reason=principal-not-watched ${context}`,
       );
       throw new PrincipalNotWatchedError(normalized.forPrincipal);
     }
@@ -284,7 +284,7 @@ export class Watchtower {
 
       if (!verification.valid) {
         console.warn(
-          `[watchtower] signature-state processed result=rejected reason=${
+          `[stackflow-node] signature-state processed result=rejected reason=${
             verification.reason || 'invalid-signature'
           } ${context}`,
         );
@@ -324,7 +324,7 @@ export class Watchtower {
 
       if (incomingNonce <= existingNonce) {
         console.log(
-          `[watchtower] signature-state processed result=ignored reason=nonce-not-higher incomingNonce=${incomingNonce.toString(
+          `[stackflow-node] signature-state processed result=ignored reason=nonce-not-higher incomingNonce=${incomingNonce.toString(
             10,
           )} existingNonce=${existingNonce.toString(10)} ${pipeContext}`,
         );
@@ -338,7 +338,7 @@ export class Watchtower {
 
       this.stateStore.setSignatureState(nextState);
       console.log(
-        `[watchtower] signature-state processed result=stored replaced=true ${pipeContext}`,
+        `[stackflow-node] signature-state processed result=stored replaced=true ${pipeContext}`,
       );
       return {
         stored: true,
@@ -350,7 +350,7 @@ export class Watchtower {
 
     this.stateStore.setSignatureState(nextState);
     console.log(
-      `[watchtower] signature-state processed result=stored replaced=false ${pipeContext}`,
+      `[stackflow-node] signature-state processed result=stored replaced=false ${pipeContext}`,
     );
     return {
       stored: true,
@@ -366,7 +366,7 @@ export class Watchtower {
     });
 
     console.log(
-      `[watchtower] stackflow events extracted=${events.length} source=${source ?? 'unknown'}`,
+      `[stackflow-node] stackflow events extracted=${events.length} source=${source ?? 'unknown'}`,
     );
 
     let observedEvents = 0;
@@ -374,7 +374,7 @@ export class Watchtower {
       const pipeId = event.pipeKey ? normalizePipeId(event.pipeKey) : null;
       const watchedPipe = this.isWatchedPipe(event.pipeKey);
       console.log(
-        `[watchtower] stackflow event detected contract=${event.contractId} event=${
+        `[stackflow-node] stackflow event detected contract=${event.contractId} event=${
           event.eventName ?? 'unknown'
         } txid=${event.txid ?? '-'} pipeId=${pipeId ?? '-'} watchedPipe=${watchedPipe}`,
       );
@@ -487,14 +487,14 @@ export class Watchtower {
       this.stateStore.setObservedPipe(nextPipe);
 
       console.log(
-        `[watchtower] pending settled pipeId=${observedPipe.pipeId} burnBlock=${burnBlockHeight.toString(
+        `[stackflow-node] pending settled pipeId=${observedPipe.pipeId} burnBlock=${burnBlockHeight.toString(
           10,
         )} balance1=${nextPipe.balance1 ?? '-'} balance2=${nextPipe.balance2 ?? '-'}`,
       );
     }
 
     console.log(
-      `[watchtower] burn block processed height=${burnBlockHeight.toString(
+      `[stackflow-node] burn block processed height=${burnBlockHeight.toString(
         10,
       )} source=${source ?? 'unknown'} settledPipes=${settledPipes}`,
     );
@@ -533,7 +533,7 @@ export class Watchtower {
     event: StackflowPrintEvent,
     source: string | null = null,
   ): Promise<void> {
-    const processedEvent: RecordedWatchtowerEvent = {
+    const processedEvent: RecordedStackflowNodeEvent = {
       ...event,
       source,
       observedAt: new Date().toISOString(),
@@ -541,19 +541,19 @@ export class Watchtower {
 
     this.stateStore.recordEvent(processedEvent);
     console.log(
-      `[watchtower] event recorded event=${event.eventName ?? 'unknown'} txid=${event.txid ?? '-'} source=${
+      `[stackflow-node] event recorded event=${event.eventName ?? 'unknown'} txid=${event.txid ?? '-'} source=${
         source ?? 'unknown'
       }`,
     );
 
     if (!event.pipeKey || !event.eventName) {
-      console.log('[watchtower] event skipped reason=missing-pipe-or-event-name');
+      console.log('[stackflow-node] event skipped reason=missing-pipe-or-event-name');
       return;
     }
 
     const pipeId = normalizePipeId(event.pipeKey);
     if (!pipeId) {
-      console.log('[watchtower] event skipped reason=invalid-pipe-id');
+      console.log('[stackflow-node] event skipped reason=invalid-pipe-id');
       return;
     }
 
@@ -581,7 +581,7 @@ export class Watchtower {
       };
       this.stateStore.setObservedPipe(observedPipe);
       console.log(
-        `[watchtower] observed pipe updated pipeId=${pipeId} event=${event.eventName} nonce=${
+        `[stackflow-node] observed pipe updated pipeId=${pipeId} event=${event.eventName} nonce=${
           observedPipe.nonce ?? '-'
         }`,
       );
@@ -605,7 +605,7 @@ export class Watchtower {
 
       this.stateStore.setClosure(closure);
       console.log(
-        `[watchtower] closure opened pipeId=${pipeId} event=${event.eventName} nonce=${
+        `[stackflow-node] closure opened pipeId=${pipeId} event=${event.eventName} nonce=${
           closure.nonce ?? '-'
         } expiresAt=${closure.expiresAt ?? '-'}`,
       );
@@ -636,7 +636,7 @@ export class Watchtower {
       this.stateStore.setObservedPipe(observedPipe);
       this.stateStore.deleteClosure(pipeId);
       console.log(
-        `[watchtower] terminal event settled pipeId=${pipeId} event=${event.eventName} balances-reset-to-zero`,
+        `[stackflow-node] terminal event settled pipeId=${pipeId} event=${event.eventName} balances-reset-to-zero`,
       );
       return;
     }
@@ -648,7 +648,7 @@ export class Watchtower {
   ): Promise<void> {
     if (!this.disputeExecutor?.enabled) {
       console.log(
-        `[watchtower] dispute skipped reason=executor-disabled pipeId=${closure.pipeId} contract=${closure.contractId}`,
+        `[stackflow-node] dispute skipped reason=executor-disabled pipeId=${closure.pipeId} contract=${closure.contractId}`,
       );
       return;
     }
@@ -656,7 +656,7 @@ export class Watchtower {
     const closureNonce = toBigInt(closure.nonce);
     if (closureNonce === null) {
       console.log(
-        `[watchtower] dispute skipped reason=missing-closure-nonce pipeId=${closure.pipeId} contract=${closure.contractId}`,
+        `[stackflow-node] dispute skipped reason=missing-closure-nonce pipeId=${closure.pipeId} contract=${closure.contractId}`,
       );
       return;
     }
@@ -664,7 +664,7 @@ export class Watchtower {
     const closer = closure.closer;
     if (!closer) {
       console.log(
-        `[watchtower] dispute skipped reason=missing-closer pipeId=${closure.pipeId} contract=${closure.contractId}`,
+        `[stackflow-node] dispute skipped reason=missing-closer pipeId=${closure.pipeId} contract=${closure.contractId}`,
       );
       return;
     }
@@ -675,13 +675,13 @@ export class Watchtower {
 
     if (candidates.length === 0) {
       console.log(
-        `[watchtower] dispute skipped reason=no-counterparty-state pipeId=${closure.pipeId} contract=${closure.contractId} closer=${closer}`,
+        `[stackflow-node] dispute skipped reason=no-counterparty-state pipeId=${closure.pipeId} contract=${closure.contractId} closer=${closer}`,
       );
       return;
     }
 
     console.log(
-      `[watchtower] dispute evaluate pipeId=${closure.pipeId} contract=${closure.contractId} closer=${closer} closureNonce=${closureNonce.toString(
+      `[stackflow-node] dispute evaluate pipeId=${closure.pipeId} contract=${closure.contractId} closer=${closer} closureNonce=${closureNonce.toString(
         10,
       )} candidateStates=${candidates.length}`,
     );
@@ -712,7 +712,7 @@ export class Watchtower {
 
     if (!eligible) {
       console.log(
-        `[watchtower] dispute skipped reason=no-eligible-state pipeId=${closure.pipeId} contract=${closure.contractId}`,
+        `[stackflow-node] dispute skipped reason=no-eligible-state pipeId=${closure.pipeId} contract=${closure.contractId}`,
       );
       return;
     }
@@ -722,13 +722,13 @@ export class Watchtower {
     const existingAttempt = this.stateStore.getDisputeAttempt(attemptId);
     if (existingAttempt?.success) {
       console.log(
-        `[watchtower] dispute skipped reason=already-submitted pipeId=${closure.pipeId} contract=${closure.contractId} for=${eligible.forPrincipal} attemptId=${attemptId}`,
+        `[stackflow-node] dispute skipped reason=already-submitted pipeId=${closure.pipeId} contract=${closure.contractId} for=${eligible.forPrincipal} attemptId=${attemptId}`,
       );
       return;
     }
 
     console.log(
-      `[watchtower] dispute submit pipeId=${closure.pipeId} contract=${closure.contractId} for=${eligible.forPrincipal} nonce=${eligible.nonce} triggerTxid=${triggerEvent.txid ?? '-'} mode=${
+      `[stackflow-node] dispute submit pipeId=${closure.pipeId} contract=${closure.contractId} for=${eligible.forPrincipal} nonce=${eligible.nonce} triggerTxid=${triggerEvent.txid ?? '-'} mode=${
         this.disputeExecutor.constructor.name
       }`,
     );
@@ -753,7 +753,7 @@ export class Watchtower {
       };
       this.stateStore.setDisputeAttempt(attempt);
       console.log(
-        `[watchtower] dispute submitted pipeId=${closure.pipeId} contract=${closure.contractId} for=${eligible.forPrincipal} disputeTxid=${result.txid}`,
+        `[stackflow-node] dispute submitted pipeId=${closure.pipeId} contract=${closure.contractId} for=${eligible.forPrincipal} disputeTxid=${result.txid}`,
       );
     } catch (error) {
       const attempt: DisputeAttemptRecord = {
@@ -769,12 +769,12 @@ export class Watchtower {
       };
       this.stateStore.setDisputeAttempt(attempt);
       console.error(
-        `[watchtower] dispute failed pipeId=${closure.pipeId} contract=${closure.contractId} for=${eligible.forPrincipal} error=${attempt.error}`,
+        `[stackflow-node] dispute failed pipeId=${closure.pipeId} contract=${closure.contractId} for=${eligible.forPrincipal} error=${attempt.error}`,
       );
     }
   }
 
-  status(): WatchtowerStatus {
+  status(): StackflowNodeStatus {
     const snapshot = this.stateStore.getSnapshot();
 
     return {

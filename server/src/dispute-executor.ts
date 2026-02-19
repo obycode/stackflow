@@ -18,7 +18,7 @@ import type {
   SignatureStateRecord,
   StackflowPrintEvent,
   SubmitDisputeResult,
-  WatchtowerConfig,
+  StackflowNodeConfig,
 } from './types.js';
 
 function normalizePrivateKey(input: string): string {
@@ -37,19 +37,19 @@ export class StacksDisputeExecutor implements DisputeExecutor {
 
   private readonly network: ReturnType<typeof createNetwork>;
 
-  private readonly signerKey: string | null;
+  private readonly disputeSignerKey: string | null;
 
-  constructor(config: Pick<WatchtowerConfig, 'stacksNetwork' | 'stacksApiUrl' | 'signerKey'>) {
+  constructor(config: Pick<StackflowNodeConfig, 'stacksNetwork' | 'stacksApiUrl' | 'disputeSignerKey'>) {
     this.network = createNetwork({
       network: config.stacksNetwork,
       client: config.stacksApiUrl ? { baseUrl: config.stacksApiUrl } : undefined,
     });
 
-    this.signerKey = config.signerKey ? normalizePrivateKey(config.signerKey) : null;
+    this.disputeSignerKey = config.disputeSignerKey ? normalizePrivateKey(config.disputeSignerKey) : null;
 
-    this.enabled = Boolean(this.signerKey);
-    this.signerAddress = this.signerKey
-      ? getAddressFromPrivateKey(this.signerKey, this.network)
+    this.enabled = Boolean(this.disputeSignerKey);
+    this.signerAddress = this.disputeSignerKey
+      ? getAddressFromPrivateKey(this.disputeSignerKey, this.network)
       : null;
   }
 
@@ -60,8 +60,8 @@ export class StacksDisputeExecutor implements DisputeExecutor {
     closure: ClosureRecord;
     triggerEvent: StackflowPrintEvent;
   }): Promise<SubmitDisputeResult> {
-    if (!this.signerKey) {
-      throw new Error('watchtower signer key not configured');
+    if (!this.disputeSignerKey) {
+      throw new Error('stackflow-node dispute signer key not configured');
     }
 
     const contract = parseContractPrincipal(signatureState.contractId);
@@ -80,7 +80,7 @@ export class StacksDisputeExecutor implements DisputeExecutor {
 
     const tx = await makeContractCall({
       network: this.network,
-      senderKey: this.signerKey,
+      senderKey: this.disputeSignerKey,
       contractAddress: contract.address,
       contractName: contract.name,
       functionName: 'dispute-closure-for',

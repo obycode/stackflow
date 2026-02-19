@@ -17,23 +17,23 @@ import {
   RejectAllSignatureVerifier,
 } from './signature-verifier.js';
 import {
-  createProducerSigner,
-  ProducerService,
-  ProducerServiceError,
-} from './producer-service.js';
+  createCounterpartySigner,
+  CounterpartyService,
+  CounterpartyServiceError,
+} from './counterparty-service.js';
 import { SqliteStateStore } from './state-store.js';
 import { canonicalPipeKey } from './principal-utils.js';
 import type {
   DisputeExecutor,
   PipeKey,
   SignatureVerifier,
-  WatchtowerStatus,
+  StackflowNodeStatus,
 } from './types.js';
 import {
   PrincipalNotWatchedError,
   SignatureValidationError,
-  Watchtower,
-} from './watchtower.js';
+  StackflowNode,
+} from './stackflow-node.js';
 
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
 const UI_ROOT = path.resolve(process.cwd(), 'server/ui');
@@ -365,7 +365,7 @@ function shouldReplacePipe(existing: MergedPipeRecord, incoming: MergedPipeRecor
 }
 
 function mergeAuthoritativePipes(
-  status: WatchtowerStatus,
+  status: StackflowNodeStatus,
   principal: string | null,
 ): MergedPipeRecord[] {
   const records = new Map<string, MergedPipeRecord>();
@@ -473,24 +473,24 @@ async function maybeServeUi(
 }
 
 function createHandler({
-  watchtower,
-  producerService,
+  stackflowNode,
+  counterpartyService,
   startedAt,
   disputeEnabled,
   signerAddress,
-  producerEnabled,
-  producerPrincipal,
+  counterpartyEnabled,
+  counterpartyPrincipal,
   stacksNetwork,
   watchedContracts,
   logRawEvents,
 }: {
-  watchtower: Watchtower;
-  producerService: ProducerService;
+  stackflowNode: StackflowNode;
+  counterpartyService: CounterpartyService;
   startedAt: string;
   disputeEnabled: boolean;
   signerAddress: string | null;
-  producerEnabled: boolean;
-  producerPrincipal: string | null;
+  counterpartyEnabled: boolean;
+  counterpartyPrincipal: string | null;
   stacksNetwork: 'mainnet' | 'testnet' | 'devnet' | 'mocknet';
   watchedContracts: string[];
   logRawEvents: boolean;
@@ -510,7 +510,7 @@ function createHandler({
     }
 
     if (method === 'GET' && url.pathname === '/health') {
-      const status = watchtower.status();
+      const status = stackflowNode.status();
 
       writeJson(response, 200, {
         ok: true,
@@ -521,15 +521,15 @@ function createHandler({
         signatureStates: status.signatureStates.length,
         disputeEnabled,
         signerAddress,
-        producerEnabled,
-        producerPrincipal,
+        counterpartyEnabled,
+        counterpartyPrincipal,
         stacksNetwork,
       });
       return;
     }
 
     if (method === 'GET' && url.pathname === '/closures') {
-      const status = watchtower.status();
+      const status = stackflowNode.status();
       writeJson(response, 200, {
         ok: true,
         closures: status.activeClosures,
@@ -538,7 +538,7 @@ function createHandler({
     }
 
     if (method === 'GET' && url.pathname === '/signature-states') {
-      const status = watchtower.status();
+      const status = stackflowNode.status();
       const limit = parseLimit(url);
 
       writeJson(response, 200, {
@@ -549,7 +549,7 @@ function createHandler({
     }
 
     if (method === 'GET' && url.pathname === '/pipes') {
-      const status = watchtower.status();
+      const status = stackflowNode.status();
       const limit = parseLimit(url);
       const principal = url.searchParams.get('principal')?.trim() || null;
       const pipes = mergeAuthoritativePipes(status, principal);
@@ -562,7 +562,7 @@ function createHandler({
     }
 
     if (method === 'GET' && url.pathname === '/dispute-attempts') {
-      const status = watchtower.status();
+      const status = stackflowNode.status();
       const limit = parseLimit(url);
 
       writeJson(response, 200, {
@@ -573,7 +573,7 @@ function createHandler({
     }
 
     if (method === 'GET' && url.pathname === '/events') {
-      const status = watchtower.status();
+      const status = stackflowNode.status();
       const limit = parseLimit(url);
       writeJson(response, 200, {
         ok: true,
@@ -585,7 +585,7 @@ function createHandler({
     if (method === 'POST' && url.pathname === '/signature-states') {
       try {
         const payload = await readJsonBody(request);
-        const result = await watchtower.upsertSignatureState(payload);
+        const result = await stackflowNode.upsertSignatureState(payload);
 
         if (!result.stored && result.reason === 'nonce-too-low') {
           const incomingNonce =
@@ -597,7 +597,7 @@ function createHandler({
               : null;
 
           console.warn(
-            `[watchtower] /signature-states rejected status=409 reason=nonce-too-low incomingNonce=${
+            `[stackflow-node] /signature-states rejected status=409 reason=nonce-too-low incomingNonce=${
               incomingNonce ?? '-'
             } existingNonce=${result.state.nonce} stateId=${result.state.stateId}`,
           );
@@ -619,7 +619,7 @@ function createHandler({
       } catch (error) {
         if (error instanceof SignatureValidationError) {
           console.warn(
-            `[watchtower] /signature-states rejected status=401 error=${error.message}`,
+            `[stackflow-node] /signature-states rejected status=401 error=${error.message}`,
           );
           writeJson(response, 401, {
             ok: false,
@@ -630,7 +630,7 @@ function createHandler({
 
         if (error instanceof PrincipalNotWatchedError) {
           console.warn(
-            `[watchtower] /signature-states rejected status=403 error=${error.message}`,
+            `[stackflow-node] /signature-states rejected status=403 error=${error.message}`,
           );
           writeJson(response, 403, {
             ok: false,
@@ -640,7 +640,7 @@ function createHandler({
         }
 
         console.warn(
-          `[watchtower] /signature-states rejected status=400 error=${
+          `[stackflow-node] /signature-states rejected status=400 error=${
             error instanceof Error ? error.message : 'failed to store signature state'
           }`,
         );
@@ -655,14 +655,14 @@ function createHandler({
       return;
     }
 
-    if (method === 'POST' && url.pathname === '/producer/transfer') {
+    if (method === 'POST' && url.pathname === '/counterparty/transfer') {
       try {
         const payload = await readJsonBody(request);
-        const result = await producerService.signTransfer(payload);
+        const result = await counterpartyService.signTransfer(payload);
 
         if (!result.upsert.stored && result.upsert.reason === 'nonce-too-low') {
           console.warn(
-            `[watchtower] /producer/transfer rejected status=409 reason=nonce-too-low incomingNonce=${result.request.nonce} existingNonce=${result.upsert.state.nonce} stateId=${result.upsert.state.stateId}`,
+            `[stackflow-node] /counterparty/transfer rejected status=409 reason=nonce-too-low incomingNonce=${result.request.nonce} existingNonce=${result.upsert.state.nonce} stateId=${result.upsert.state.stateId}`,
           );
           writeJson(response, 409, {
             ok: false,
@@ -677,7 +677,7 @@ function createHandler({
 
         writeJson(response, 200, {
           ok: true,
-          producerPrincipal: result.request.forPrincipal,
+          counterpartyPrincipal: result.request.forPrincipal,
           withPrincipal: result.request.withPrincipal,
           token: result.request.token,
           amount: result.request.amount,
@@ -693,9 +693,9 @@ function createHandler({
           reason: result.upsert.reason,
         });
       } catch (error) {
-        if (error instanceof ProducerServiceError) {
+        if (error instanceof CounterpartyServiceError) {
           console.warn(
-            `[watchtower] /producer/transfer rejected status=${error.statusCode} error=${error.message}`,
+            `[stackflow-node] /counterparty/transfer rejected status=${error.statusCode} error=${error.message}`,
           );
           const details =
             error.details && typeof error.details === 'object'
@@ -710,7 +710,7 @@ function createHandler({
         }
 
         console.error(
-          `[watchtower] /producer/transfer error: ${
+          `[stackflow-node] /counterparty/transfer error: ${
             error instanceof Error ? error.message : 'failed to sign transfer'
           }`,
         );
@@ -723,14 +723,14 @@ function createHandler({
       return;
     }
 
-    if (method === 'POST' && url.pathname === '/producer/signature-request') {
+    if (method === 'POST' && url.pathname === '/counterparty/signature-request') {
       try {
         const payload = await readJsonBody(request);
-        const result = await producerService.signSignatureRequest(payload);
+        const result = await counterpartyService.signSignatureRequest(payload);
 
         if (!result.upsert.stored && result.upsert.reason === 'nonce-too-low') {
           console.warn(
-            `[watchtower] /producer/signature-request rejected status=409 reason=nonce-too-low incomingNonce=${result.request.nonce} existingNonce=${result.upsert.state.nonce} stateId=${result.upsert.state.stateId}`,
+            `[stackflow-node] /counterparty/signature-request rejected status=409 reason=nonce-too-low incomingNonce=${result.request.nonce} existingNonce=${result.upsert.state.nonce} stateId=${result.upsert.state.stateId}`,
           );
           writeJson(response, 409, {
             ok: false,
@@ -745,7 +745,7 @@ function createHandler({
 
         writeJson(response, 200, {
           ok: true,
-          producerPrincipal: result.request.forPrincipal,
+          counterpartyPrincipal: result.request.forPrincipal,
           withPrincipal: result.request.withPrincipal,
           token: result.request.token,
           amount: result.request.amount,
@@ -761,9 +761,9 @@ function createHandler({
           reason: result.upsert.reason,
         });
       } catch (error) {
-        if (error instanceof ProducerServiceError) {
+        if (error instanceof CounterpartyServiceError) {
           console.warn(
-            `[watchtower] /producer/signature-request rejected status=${error.statusCode} error=${error.message}`,
+            `[stackflow-node] /counterparty/signature-request rejected status=${error.statusCode} error=${error.message}`,
           );
           const details =
             error.details && typeof error.details === 'object'
@@ -778,7 +778,7 @@ function createHandler({
         }
 
         console.error(
-          `[watchtower] /producer/signature-request error: ${
+          `[stackflow-node] /counterparty/signature-request error: ${
             error instanceof Error ? error.message : 'failed to sign request'
           }`,
         );
@@ -795,7 +795,7 @@ function createHandler({
       try {
         const payload = await readJsonBody(request);
         console.log(
-          `[watchtower] /new_block received ${summarizeNewBlockPayload(payload)}`,
+          `[stackflow-node] /new_block received ${summarizeNewBlockPayload(payload)}`,
         );
         if (logRawEvents) {
           const samples = extractRawStackflowPrintEventSamples(
@@ -803,22 +803,22 @@ function createHandler({
             watchedContracts,
           );
           console.log(
-            `[watchtower] /new_block raw stackflow events count=${samples.length}`,
+            `[stackflow-node] /new_block raw stackflow events count=${samples.length}`,
           );
           for (const [index, sample] of samples.entries()) {
             console.log(
-              `[watchtower] /new_block raw stackflow event[${index}] ${stringifyForLog(sample)}`,
+              `[stackflow-node] /new_block raw stackflow event[${index}] ${stringifyForLog(sample)}`,
             );
           }
         }
-        const result = await watchtower.ingest(payload, url.pathname);
+        const result = await stackflowNode.ingest(payload, url.pathname);
         console.log(
-          `[watchtower] /new_block processed observedEvents=${result.observedEvents} activeClosures=${result.activeClosures}`,
+          `[stackflow-node] /new_block processed observedEvents=${result.observedEvents} activeClosures=${result.activeClosures}`,
         );
         writeJson(response, 200, { ok: true, ...result });
       } catch (error) {
         console.error(
-          `[watchtower] /new_block error: ${
+          `[stackflow-node] /new_block error: ${
             error instanceof Error ? error.message : 'failed to ingest payload'
           }`,
         );
@@ -837,7 +837,7 @@ function createHandler({
         const burnBlockHeight = extractBurnBlockHeight(payload);
 
         if (!burnBlockHeight) {
-          console.warn('[watchtower] /new_burn_block ignored: missing burn block height');
+          console.warn('[stackflow-node] /new_burn_block ignored: missing burn block height');
           writeJson(response, 200, {
             ok: true,
             ignored: true,
@@ -847,14 +847,14 @@ function createHandler({
           return;
         }
 
-        const result = await watchtower.ingestBurnBlock(burnBlockHeight, url.pathname);
+        const result = await stackflowNode.ingestBurnBlock(burnBlockHeight, url.pathname);
         writeJson(response, 200, {
           ok: true,
           ...result,
         });
       } catch (error) {
         console.error(
-          `[watchtower] /new_burn_block error: ${
+          `[stackflow-node] /new_burn_block error: ${
             error instanceof Error ? error.message : 'failed to process burn block'
           }`,
         );
@@ -893,7 +893,7 @@ function createHandler({
   };
 }
 
-function start(): void {
+async function start(): Promise<void> {
   const config = loadConfig();
   const stateStore = new SqliteStateStore({
     dbFile: config.dbFile,
@@ -911,7 +911,7 @@ function start(): void {
       return new MockDisputeExecutor();
     }
 
-    return config.signerKey
+    return config.disputeSignerKey
       ? new StacksDisputeExecutor(config)
       : new NoopDisputeExecutor();
   })();
@@ -928,30 +928,46 @@ function start(): void {
     return new ReadOnlySignatureVerifier(config);
   })();
 
-  const watchtower = new Watchtower({
+  const counterpartySigner = createCounterpartySigner(config);
+  await counterpartySigner.ensureReady();
+  const effectiveWatchedPrincipals = (() => {
+    const counterpartyPrincipal = counterpartySigner.counterpartyPrincipal;
+    if (config.watchedPrincipals.length === 0) {
+      return counterpartyPrincipal ? [counterpartyPrincipal] : [];
+    }
+
+    if (!counterpartyPrincipal) {
+      return config.watchedPrincipals;
+    }
+
+    return Array.from(
+      new Set([...config.watchedPrincipals, counterpartyPrincipal]),
+    );
+  })();
+
+  const stackflowNode = new StackflowNode({
     stateStore,
     watchedContracts: config.watchedContracts,
-    watchedPrincipals: config.watchedPrincipals,
+    watchedPrincipals: effectiveWatchedPrincipals,
     disputeExecutor,
     disputeOnlyBeneficial: config.disputeOnlyBeneficial,
     signatureVerifier,
   });
-  const producerSigner = createProducerSigner(config);
-  const producerService = new ProducerService({
-    watchtower,
-    signer: producerSigner,
+  const counterpartyService = new CounterpartyService({
+    stackflowNode,
+    signer: counterpartySigner,
   });
 
   const startedAt = new Date().toISOString();
   const server = http.createServer(
     createHandler({
-      watchtower,
-      producerService,
+      stackflowNode,
+      counterpartyService,
       startedAt,
       disputeEnabled: disputeExecutor.enabled,
       signerAddress: disputeExecutor.signerAddress,
-      producerEnabled: producerService.enabled,
-      producerPrincipal: producerService.producerPrincipal,
+      counterpartyEnabled: counterpartyService.enabled,
+      counterpartyPrincipal: counterpartyService.counterpartyPrincipal,
       stacksNetwork: config.stacksNetwork,
       watchedContracts: config.watchedContracts,
       logRawEvents: config.logRawEvents,
@@ -964,35 +980,47 @@ function start(): void {
         ? config.watchedContracts.join(', ')
         : '[auto: any *.stackflow* contract]';
     const watchedPrincipals =
-      config.watchedPrincipals.length > 0
-        ? config.watchedPrincipals.join(', ')
+      effectiveWatchedPrincipals.length > 0
+        ? effectiveWatchedPrincipals.join(', ')
         : '[auto: any principal]';
 
     console.log(
-      `[watchtower] listening on http://${config.host}:${config.port} ` +
+      `[stackflow-node] listening on http://${config.host}:${config.port} ` +
         `contracts=${watchedContracts} db=${config.dbFile} ` +
         `principals=${watchedPrincipals} disputes=${disputeExecutor.enabled ? 'enabled' : 'disabled'} ` +
         `dispute-mode=${config.disputeExecutorMode} verifier-mode=${config.signatureVerifierMode} ` +
-        `producer-signer-mode=${config.producerSignerMode} ` +
-        `producer-signing=${producerService.enabled ? 'enabled' : 'disabled'} producer-principal=${
-          producerService.producerPrincipal ?? '-'
+        `counterparty-signer-mode=${config.counterpartySignerMode} ` +
+        `counterparty-signing=${counterpartyService.enabled ? 'enabled' : 'disabled'} counterparty-principal=${
+          counterpartyService.counterpartyPrincipal ?? '-'
         }`,
     );
 
     if (config.signatureVerifierMode !== 'readonly') {
       console.warn(
-        `[watchtower] non-readonly signature verifier mode active: ${config.signatureVerifierMode}`,
+        `[stackflow-node] non-readonly signature verifier mode active: ${config.signatureVerifierMode}`,
       );
     }
 
     if (config.disputeExecutorMode !== 'auto') {
       console.warn(
-        `[watchtower] non-auto dispute executor mode active: ${config.disputeExecutorMode}`,
+        `[stackflow-node] non-auto dispute executor mode active: ${config.disputeExecutorMode}`,
       );
     }
 
     if (config.logRawEvents) {
-      console.warn('[watchtower] raw stackflow event logging is enabled');
+      console.warn('[stackflow-node] raw stackflow event logging is enabled');
+    }
+
+    if (counterpartySigner.counterpartyPrincipal) {
+      if (config.watchedPrincipals.length === 0) {
+        console.warn(
+          `[stackflow-node] STACKFLOW_NODE_PRINCIPALS is empty; restricting watchlist to counterparty principal ${counterpartySigner.counterpartyPrincipal}`,
+        );
+      } else if (!config.watchedPrincipals.includes(counterpartySigner.counterpartyPrincipal)) {
+        console.warn(
+          `[stackflow-node] added counterparty principal to watchlist: ${counterpartySigner.counterpartyPrincipal}`,
+        );
+      }
     }
   });
 
@@ -1003,15 +1031,15 @@ function start(): void {
     }
     shuttingDown = true;
 
-    console.log(`[watchtower] received ${signal}, shutting down`);
+    console.log(`[stackflow-node] received ${signal}, shutting down`);
     server.close(() => {
       stateStore.close();
-      console.log('[watchtower] shutdown complete');
+      console.log('[stackflow-node] shutdown complete');
       process.exit(0);
     });
 
     setTimeout(() => {
-      console.error('[watchtower] forced shutdown timeout reached');
+      console.error('[stackflow-node] forced shutdown timeout reached');
       stateStore.close();
       process.exit(1);
     }, 10000).unref();
@@ -1021,4 +1049,11 @@ function start(): void {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 }
 
-start();
+start().catch((error) => {
+  console.error(
+    `[stackflow-node] fatal startup error: ${
+      error instanceof Error ? error.message : String(error)
+    }`,
+  );
+  process.exit(1);
+});

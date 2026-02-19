@@ -14,10 +14,10 @@ var CHAIN_IDS = {
 };
 var STORAGE_KEY = "stackflow-console-config-v1";
 var connectedAddress = null;
-var watchtowerProducerEnabled = false;
-var watchtowerProducerPrincipal = null;
+var stackflowNodeCounterpartyEnabled = false;
+var stackflowNodeCounterpartyPrincipal = null;
 var ids = {
-  watchtowerUrl: "watchtower-url",
+  serverUrl: "stackflow-node-url",
   contractId: "contract-id",
   network: "network",
   contractVersion: "contract-version",
@@ -204,9 +204,9 @@ var ACTION_DEFS = {
       "field-sig-my-signature"
     ]
   },
-  "request-producer-transfer": {
-    submitLabel: "Request producer transfer signature",
-    help: "Send your transfer signature to the producer and receive their signature.",
+  "request-counterparty-transfer": {
+    submitLabel: "Request counterparty transfer signature",
+    help: "Send your transfer signature to the counterparty and receive their signature.",
     fields: [
       "field-sig-with",
       "field-sig-token",
@@ -220,9 +220,9 @@ var ACTION_DEFS = {
       "field-sig-their-signature"
     ]
   },
-  "request-producer-deposit": {
-    submitLabel: "Request producer deposit signature",
-    help: "Send your deposit signature to the producer and receive their signature.",
+  "request-counterparty-deposit": {
+    submitLabel: "Request counterparty deposit signature",
+    help: "Send your deposit signature to the counterparty and receive their signature.",
     amountLabel: "deposit Amount",
     fields: [
       "field-sig-with",
@@ -238,9 +238,9 @@ var ACTION_DEFS = {
       "field-sig-their-signature"
     ]
   },
-  "request-producer-withdrawal": {
-    submitLabel: "Request producer withdrawal signature",
-    help: "Send your withdrawal signature to the producer and receive their signature.",
+  "request-counterparty-withdrawal": {
+    submitLabel: "Request counterparty withdrawal signature",
+    help: "Send your withdrawal signature to the counterparty and receive their signature.",
     amountLabel: "withdraw Amount",
     fields: [
       "field-sig-with",
@@ -256,9 +256,9 @@ var ACTION_DEFS = {
       "field-sig-their-signature"
     ]
   },
-  "request-producer-close": {
-    submitLabel: "Request producer close signature",
-    help: "Send your close signature to the producer and receive their signature.",
+  "request-counterparty-close": {
+    submitLabel: "Request counterparty close signature",
+    help: "Send your close signature to the counterparty and receive their signature.",
     fields: [
       "field-sig-with",
       "field-sig-token",
@@ -272,7 +272,7 @@ var ACTION_DEFS = {
   },
   "submit-signature-state": {
     submitLabel: "Submit signature state",
-    help: "Send the latest signed state to the watchtower.",
+    help: "Send the latest signed state to the server.",
     fields: [
       "field-sig-with",
       "field-sig-token",
@@ -289,20 +289,20 @@ var ACTION_DEFS = {
   }
 };
 var PRODUCER_ACTION_CONFIG = {
-  "request-producer-transfer": {
-    endpoint: "/producer/transfer",
+  "request-counterparty-transfer": {
+    endpoint: "/counterparty/transfer",
     action: "1"
   },
-  "request-producer-close": {
-    endpoint: "/producer/signature-request",
+  "request-counterparty-close": {
+    endpoint: "/counterparty/signature-request",
     action: "0"
   },
-  "request-producer-deposit": {
-    endpoint: "/producer/signature-request",
+  "request-counterparty-deposit": {
+    endpoint: "/counterparty/signature-request",
     action: "2"
   },
-  "request-producer-withdrawal": {
-    endpoint: "/producer/signature-request",
+  "request-counterparty-withdrawal": {
+    endpoint: "/counterparty/signature-request",
     action: "3"
   }
 };
@@ -334,21 +334,21 @@ function setSignedActionForSelection(action) {
     "sign-transfer": "1",
     "sign-deposit": "2",
     "sign-withdrawal": "3",
-    "request-producer-close": "0",
-    "request-producer-transfer": "1",
-    "request-producer-deposit": "2",
-    "request-producer-withdrawal": "3"
+    "request-counterparty-close": "0",
+    "request-counterparty-transfer": "1",
+    "request-counterparty-deposit": "2",
+    "request-counterparty-withdrawal": "3"
   };
   const value = mapping[action];
   if (value !== void 0) {
     getInput(ids.sigAction).value = value;
   }
 }
-function getProducerActionConfig(action) {
+function getCounterpartyActionConfig(action) {
   return PRODUCER_ACTION_CONFIG[action] || null;
 }
-function isProducerRequestAction(action) {
-  return Boolean(getProducerActionConfig(action));
+function isCounterpartyRequestAction(action) {
+  return Boolean(getCounterpartyActionConfig(action));
 }
 function updateActionUi() {
   const action = getSelectedAction();
@@ -381,18 +381,18 @@ function updateActionUi() {
   if (mySigHelp) {
     mySigHelp.textContent = signAction ? "Click the submit button to generate this signature. It will auto-fill here." : "Paste your signature, or switch to a sign-* action to generate it here.";
   }
-  if (isProducerRequestAction(action) && !normalizedText(getInput(ids.sigWith).value) && watchtowerProducerPrincipal) {
-    getInput(ids.sigWith).value = watchtowerProducerPrincipal;
+  if (isCounterpartyRequestAction(action) && !normalizedText(getInput(ids.sigWith).value) && stackflowNodeCounterpartyPrincipal) {
+    getInput(ids.sigWith).value = stackflowNodeCounterpartyPrincipal;
   }
-  let producerHint = "";
-  if (isProducerRequestAction(action)) {
-    if (watchtowerProducerEnabled && watchtowerProducerPrincipal) {
-      producerHint = ` Producer principal: ${watchtowerProducerPrincipal}.`;
+  let counterpartyHint = "";
+  if (isCounterpartyRequestAction(action)) {
+    if (stackflowNodeCounterpartyEnabled && stackflowNodeCounterpartyPrincipal) {
+      counterpartyHint = ` Counterparty principal: ${stackflowNodeCounterpartyPrincipal}.`;
     } else {
-      producerHint = " Producer signing is not reported as enabled by the watchtower.";
+      counterpartyHint = " Counterparty signing is not reported as enabled by the server.";
     }
   }
-  setStatus(ids.actionHelp, `Action: ${action}. ${def.help}${producerHint}`, false);
+  setStatus(ids.actionHelp, `Action: ${action}. ${def.help}${counterpartyHint}`, false);
   setSignedActionForSelection(action);
 }
 function normalizedText(value) {
@@ -452,7 +452,7 @@ function makePostConditionForTransfer(principal, tokenContractId, amount) {
 }
 function saveConfig() {
   const data = {
-    watchtowerUrl: getInput(ids.watchtowerUrl).value.trim(),
+    serverUrl: getInput(ids.serverUrl).value.trim(),
     contractId: getInput(ids.contractId).value.trim(),
     network: getInput(ids.network).value.trim(),
     contractVersion: getInput(ids.contractVersion).value.trim()
@@ -466,8 +466,8 @@ function loadConfig() {
   }
   try {
     const parsed = JSON.parse(raw);
-    if (typeof parsed.watchtowerUrl === "string") {
-      getInput(ids.watchtowerUrl).value = parsed.watchtowerUrl;
+    if (typeof parsed.serverUrl === "string") {
+      getInput(ids.serverUrl).value = parsed.serverUrl;
     }
     if (typeof parsed.contractId === "string") {
       getInput(ids.contractId).value = parsed.contractId;
@@ -482,7 +482,7 @@ function loadConfig() {
   }
 }
 function defaultConfig() {
-  getInput(ids.watchtowerUrl).value = window.location.origin;
+  getInput(ids.serverUrl).value = window.location.origin;
   getInput(ids.contractVersion).value = "0.6.0";
 }
 function toBigInt(value, field) {
@@ -808,7 +808,7 @@ function extractTxid(response) {
   }
   return null;
 }
-function buildWatchtowerPayload() {
+function buildStackflowNodePayload() {
   const parsed = parseSignerInputs();
   const contractId = parseContractId();
   const mySignature = normalizeHex(
@@ -840,10 +840,10 @@ function buildWatchtowerPayload() {
     beneficialOnly: false
   };
 }
-function buildProducerRequestPayload(action) {
-  const config = getProducerActionConfig(action);
+function buildCounterpartyRequestPayload(action) {
+  const config = getCounterpartyActionConfig(action);
   if (!config) {
-    throw new Error(`Unsupported producer action: ${action}`);
+    throw new Error(`Unsupported counterparty action: ${action}`);
   }
   if (!connectedAddress) {
     throw new Error("Connect wallet first");
@@ -891,21 +891,21 @@ function renderPayloadPreview() {
     }
     return;
   }
-  if (isProducerRequestAction(action)) {
+  if (isCounterpartyRequestAction(action)) {
     try {
-      const request2 = buildProducerRequestPayload(action);
+      const request2 = buildCounterpartyRequestPayload(action);
       $(ids.signaturePayload).textContent = JSON.stringify(request2, null, 2);
     } catch (error) {
-      $(ids.signaturePayload).textContent = error instanceof Error ? error.message : "invalid producer request";
+      $(ids.signaturePayload).textContent = error instanceof Error ? error.message : "invalid counterparty request";
     }
     return;
   }
   if (action !== "submit-signature-state") {
-    $(ids.signaturePayload).textContent = "Payload preview appears for submit-signature-state and producer requests.";
+    $(ids.signaturePayload).textContent = "Payload preview appears for submit-signature-state and counterparty requests.";
     return;
   }
   try {
-    const payload = buildWatchtowerPayload();
+    const payload = buildStackflowNodePayload();
     $(ids.signaturePayload).textContent = JSON.stringify(payload, null, 2);
   } catch (error) {
     $(ids.signaturePayload).textContent = error instanceof Error ? error.message : "invalid signature payload";
@@ -994,9 +994,9 @@ function pipeMatchesParticipants(pipe, connected, withPrincipal, token) {
   return pipeToken === token && (principal1 === connected && principal2 === withPrincipal || principal2 === connected && principal1 === withPrincipal);
 }
 async function resolvePipeTotals(withPrincipal, token) {
-  const baseUrl = normalizedText(getInput(ids.watchtowerUrl).value);
+  const baseUrl = normalizedText(getInput(ids.serverUrl).value);
   if (!baseUrl) {
-    throw new Error("Watchtower URL is required");
+    throw new Error("Server URL is required");
   }
   const body = await fetchJson(
     `${baseUrl}/pipes?limit=500&principal=${encodeURIComponent(connectedAddress)}`
@@ -1023,9 +1023,9 @@ async function refreshPipes() {
     return;
   }
   try {
-    const baseUrl = normalizedText(getInput(ids.watchtowerUrl).value);
+    const baseUrl = normalizedText(getInput(ids.serverUrl).value);
     if (!baseUrl) {
-      throw new Error("Watchtower URL is required");
+      throw new Error("Server URL is required");
     }
     const [pipeBody, closureBody] = await Promise.all([
       fetchJson(
@@ -1174,10 +1174,10 @@ async function signStructuredState() {
 }
 async function submitSignatureState() {
   try {
-    const payload = buildWatchtowerPayload();
-    const baseUrl = normalizedText(getInput(ids.watchtowerUrl).value);
+    const payload = buildStackflowNodePayload();
+    const baseUrl = normalizedText(getInput(ids.serverUrl).value);
     if (!baseUrl) {
-      throw new Error("Watchtower URL is required");
+      throw new Error("Server URL is required");
     }
     const response = await fetch(`${baseUrl}/signature-states`, {
       method: "POST",
@@ -1213,12 +1213,12 @@ async function submitSignatureState() {
     );
   }
 }
-async function requestProducerSignature(action) {
-  const baseUrl = normalizedText(getInput(ids.watchtowerUrl).value);
+async function requestCounterpartySignature(action) {
+  const baseUrl = normalizedText(getInput(ids.serverUrl).value);
   if (!baseUrl) {
-    throw new Error("Watchtower URL is required");
+    throw new Error("Server URL is required");
   }
-  const requestPayload = buildProducerRequestPayload(action);
+  const requestPayload = buildCounterpartyRequestPayload(action);
   const response = await fetch(`${baseUrl}${requestPayload.endpoint}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -1230,7 +1230,7 @@ async function requestProducerSignature(action) {
     const existingNonce = body?.existingNonce ?? body?.state?.nonce ?? "?";
     setStatus(
       ids.txResult,
-      `Producer request rejected: nonce must be higher (incoming ${incomingNonce}, existing ${existingNonce}).`,
+      `Counterparty request rejected: nonce must be higher (incoming ${incomingNonce}, existing ${existingNonce}).`,
       true
     );
     return;
@@ -1239,22 +1239,22 @@ async function requestProducerSignature(action) {
     const message = typeof body?.error === "string" ? body.error : `${response.status} ${response.statusText}`;
     throw new Error(message);
   }
-  const producerSignature = normalizeHex(
+  const counterpartySignature = normalizeHex(
     body?.mySignature,
-    "Producer signature",
+    "Counterparty signature",
     65
   );
-  getInput(ids.sigTheirSignature).value = producerSignature;
+  getInput(ids.sigTheirSignature).value = counterpartySignature;
   renderPayloadPreview();
   setStatus(
     ids.txResult,
-    `Producer signature received (stored=${body.stored}, replaced=${body.replaced}).`
+    `Counterparty signature received (stored=${body.stored}, replaced=${body.replaced}).`
   );
   await refreshPipes();
 }
 function bindInputs() {
   const configIds = [
-    ids.watchtowerUrl,
+    ids.serverUrl,
     ids.contractId,
     ids.network,
     ids.contractVersion
@@ -1262,8 +1262,8 @@ function bindInputs() {
   for (const id of configIds) {
     getInput(id).addEventListener("change", saveConfig);
   }
-  getInput(ids.watchtowerUrl).addEventListener("change", async () => {
-    await syncNetworkFromWatchtower();
+  getInput(ids.serverUrl).addEventListener("change", async () => {
+    await syncNetworkFromStackflowNode();
   });
   getInput(ids.actionSelect).addEventListener("change", () => {
     updateActionUi();
@@ -1309,15 +1309,15 @@ function normalizeNetworkName(value) {
   }
   return null;
 }
-async function syncNetworkFromWatchtower() {
-  const baseUrl = normalizedText(getInput(ids.watchtowerUrl).value);
+async function syncNetworkFromStackflowNode() {
+  const baseUrl = normalizedText(getInput(ids.serverUrl).value);
   if (!baseUrl) {
     return;
   }
   try {
     const health = await fetchJson(`${baseUrl}/health`);
-    watchtowerProducerEnabled = Boolean(health?.producerEnabled);
-    watchtowerProducerPrincipal = typeof health?.producerPrincipal === "string" && normalizedText(health.producerPrincipal) ? health.producerPrincipal : null;
+    stackflowNodeCounterpartyEnabled = Boolean(health?.counterpartyEnabled);
+    stackflowNodeCounterpartyPrincipal = typeof health?.counterpartyPrincipal === "string" && normalizedText(health.counterpartyPrincipal) ? health.counterpartyPrincipal : null;
     const remoteNetwork = normalizeNetworkName(health?.stacksNetwork);
     if (!remoteNetwork) {
       return;
@@ -1328,10 +1328,10 @@ async function syncNetworkFromWatchtower() {
       saveConfig();
       setStatus(
         ids.walletStatus,
-        `Network auto-synced from watchtower: ${remoteNetwork}`
+        `Network auto-synced from server: ${remoteNetwork}`
       );
     }
-    if (isProducerRequestAction(getSelectedAction())) {
+    if (isCounterpartyRequestAction(getSelectedAction())) {
       updateActionUi();
       renderPayloadPreview();
     }
@@ -1565,8 +1565,8 @@ async function executeSelectedAction() {
     await submitSignatureState();
     return;
   }
-  if (isProducerRequestAction(action)) {
-    await requestProducerSignature(action);
+  if (isCounterpartyRequestAction(action)) {
+    await requestCounterpartySignature(action);
     return;
   }
   throw new Error(`Unsupported action: ${action}`);
@@ -1593,7 +1593,7 @@ async function init() {
   bindInputs();
   wireActions();
   updateActionUi();
-  await syncNetworkFromWatchtower();
+  await syncNetworkFromStackflowNode();
   await initWalletState();
   if (!connectedAddress) {
     renderPipesPlaceholder("Connect wallet to load watched pipes.");

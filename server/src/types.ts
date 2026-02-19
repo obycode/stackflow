@@ -135,29 +135,29 @@ export interface DisputeAttemptRecord {
   createdAt: string;
 }
 
-export interface WatchtowerPersistedState {
+export interface StackflowNodePersistedState {
   version: number;
   updatedAt: string | null;
   activeClosures: Record<string, ClosureRecord>;
   observedPipes: Record<string, ObservedPipeRecord>;
   signatureStates: Record<string, SignatureStateRecord>;
   disputeAttempts: Record<string, DisputeAttemptRecord>;
-  recentEvents: RecordedWatchtowerEvent[];
+  recentEvents: RecordedStackflowNodeEvent[];
 }
 
-export interface RecordedWatchtowerEvent extends StackflowPrintEvent {
+export interface RecordedStackflowNodeEvent extends StackflowPrintEvent {
   source: string | null;
   observedAt: string;
 }
 
-export interface WatchtowerStatus {
+export interface StackflowNodeStatus {
   version: number;
   updatedAt: string | null;
   activeClosures: ClosureRecord[];
   observedPipes: ObservedPipeRecord[];
   signatureStates: SignatureStateRecord[];
   disputeAttempts: DisputeAttemptRecord[];
-  recentEvents: RecordedWatchtowerEvent[];
+  recentEvents: RecordedStackflowNodeEvent[];
 }
 
 export interface IngestResult {
@@ -175,11 +175,11 @@ export type DisputeExecutorMode =
   | 'noop'
   | 'mock';
 
-export type ProducerSignerMode =
+export type CounterpartySignerMode =
   | 'local-key'
   | 'kms';
 
-export interface WatchtowerConfig {
+export interface StackflowNodeConfig {
   host: string;
   port: number;
   dbFile: string;
@@ -189,10 +189,13 @@ export interface WatchtowerConfig {
   watchedPrincipals: string[];
   stacksNetwork: 'mainnet' | 'testnet' | 'devnet' | 'mocknet';
   stacksApiUrl: string | null;
-  signerKey: string | null;
-  producerKey: string | null;
-  producerPrincipal: string | null;
-  producerSignerMode: ProducerSignerMode;
+  disputeSignerKey: string | null;
+  counterpartyKey: string | null;
+  counterpartyPrincipal: string | null;
+  counterpartySignerMode: CounterpartySignerMode;
+  counterpartyKmsKeyId: string | null;
+  counterpartyKmsRegion: string | null;
+  counterpartyKmsEndpoint: string | null;
   stackflowMessageVersion: string;
   signatureVerifierMode: SignatureVerifierMode;
   disputeExecutorMode: DisputeExecutorMode;

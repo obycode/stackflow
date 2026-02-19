@@ -16,8 +16,8 @@ import { SqliteStateStore } from '../server/src/state-store.ts';
 import {
   PrincipalNotWatchedError,
   SignatureValidationError,
-  Watchtower,
-} from '../server/src/watchtower.ts';
+  StackflowNode,
+} from '../server/src/stackflow-node.ts';
 import type {
   DisputeExecutor,
   SignatureVerifier,
@@ -139,13 +139,13 @@ function makeStore(): { store: SqliteStateStore; dbFile: string } {
 describe('watchtower signature + dispute flow', () => {
   it('rejects signature states for unwatched principals', async () => {
     const { store, dbFile } = makeStore();
-    const watchtower = new Watchtower({
+    const stackflowNode = new StackflowNode({
       stateStore: store,
       watchedPrincipals: [P2],
     });
 
     await expect(
-      watchtower.upsertSignatureState({
+      stackflowNode.upsertSignatureState({
         contractId: CONTRACT_ID,
         forPrincipal: P1,
         withPrincipal: P2,
@@ -162,20 +162,20 @@ describe('watchtower signature + dispute flow', () => {
       }),
     ).rejects.toBeInstanceOf(PrincipalNotWatchedError);
 
-    expect(watchtower.status().signatureStates).toHaveLength(0);
+    expect(stackflowNode.status().signatureStates).toHaveLength(0);
 
     cleanupDb(store, dbFile);
   });
 
   it('rejects invalid signatures before storing state', async () => {
     const { store, dbFile } = makeStore();
-    const watchtower = new Watchtower({
+    const stackflowNode = new StackflowNode({
       stateStore: store,
       signatureVerifier: new RejectingSignatureVerifier(),
     });
 
     await expect(
-      watchtower.upsertSignatureState({
+      stackflowNode.upsertSignatureState({
         contractId: CONTRACT_ID,
         forPrincipal: P1,
         withPrincipal: P2,
@@ -192,16 +192,16 @@ describe('watchtower signature + dispute flow', () => {
       }),
     ).rejects.toBeInstanceOf(SignatureValidationError);
 
-    expect(watchtower.status().signatureStates).toHaveLength(0);
+    expect(stackflowNode.status().signatureStates).toHaveLength(0);
 
     cleanupDb(store, dbFile);
   });
 
   it('stores only the latest signature state by nonce', async () => {
     const { store, dbFile } = makeStore();
-    const watchtower = new Watchtower({ stateStore: store });
+    const stackflowNode = new StackflowNode({ stateStore: store });
 
-    const first = await watchtower.upsertSignatureState({
+    const first = await stackflowNode.upsertSignatureState({
       contractId: CONTRACT_ID,
       forPrincipal: P1,
       withPrincipal: P2,
@@ -220,7 +220,7 @@ describe('watchtower signature + dispute flow', () => {
     expect(first.stored).toBe(true);
     expect(first.replaced).toBe(false);
 
-    const second = await watchtower.upsertSignatureState({
+    const second = await stackflowNode.upsertSignatureState({
       contractId: CONTRACT_ID,
       forPrincipal: P1,
       withPrincipal: P2,
@@ -238,10 +238,10 @@ describe('watchtower signature + dispute flow', () => {
 
     expect(second.stored).toBe(false);
     expect(second.reason).toBe('nonce-too-low');
-    expect(watchtower.status().signatureStates).toHaveLength(1);
-    expect(watchtower.status().signatureStates[0].nonce).toBe('5');
+    expect(stackflowNode.status().signatureStates).toHaveLength(1);
+    expect(stackflowNode.status().signatureStates[0].nonce).toBe('5');
 
-    const third = await watchtower.upsertSignatureState({
+    const third = await stackflowNode.upsertSignatureState({
       contractId: CONTRACT_ID,
       forPrincipal: P1,
       withPrincipal: P2,
@@ -259,9 +259,9 @@ describe('watchtower signature + dispute flow', () => {
 
     expect(third.stored).toBe(false);
     expect(third.reason).toBe('nonce-too-low');
-    expect(watchtower.status().signatureStates).toHaveLength(1);
-    expect(watchtower.status().signatureStates[0].myBalance).toBe('700');
-    expect(watchtower.status().signatureStates[0].nonce).toBe('5');
+    expect(stackflowNode.status().signatureStates).toHaveLength(1);
+    expect(stackflowNode.status().signatureStates[0].myBalance).toBe('700');
+    expect(stackflowNode.status().signatureStates[0].nonce).toBe('5');
 
     cleanupDb(store, dbFile);
   });
@@ -269,12 +269,12 @@ describe('watchtower signature + dispute flow', () => {
   it('auto-disputes force-cancel with a newer signature state and avoids duplicate submissions', async () => {
     const { store, dbFile } = makeStore();
     const executor = new FakeExecutor();
-    const watchtower = new Watchtower({
+    const stackflowNode = new StackflowNode({
       stateStore: store,
       disputeExecutor: executor,
     });
 
-    await watchtower.upsertSignatureState({
+    await stackflowNode.upsertSignatureState({
       contractId: CONTRACT_ID,
       forPrincipal: P1,
       withPrincipal: P2,
@@ -299,14 +299,14 @@ describe('watchtower signature + dispute flow', () => {
       blockHeight: 200,
     });
 
-    await watchtower.ingest(payload, '/new_block');
+    await stackflowNode.ingest(payload, '/new_block');
     expect(executor.calls).toHaveLength(1);
     expect(executor.calls[0].forPrincipal).toBe(P1);
 
-    await watchtower.ingest(payload, '/new_block');
+    await stackflowNode.ingest(payload, '/new_block');
     expect(executor.calls).toHaveLength(1);
 
-    const attempts = watchtower.status().disputeAttempts;
+    const attempts = stackflowNode.status().disputeAttempts;
     expect(attempts).toHaveLength(1);
     expect(attempts[0].success).toBe(true);
 
@@ -316,12 +316,12 @@ describe('watchtower signature + dispute flow', () => {
   it('skips dispute when beneficial-only is set and state is not better for user', async () => {
     const { store, dbFile } = makeStore();
     const executor = new FakeExecutor();
-    const watchtower = new Watchtower({
+    const stackflowNode = new StackflowNode({
       stateStore: store,
       disputeExecutor: executor,
     });
 
-    await watchtower.upsertSignatureState({
+    await stackflowNode.upsertSignatureState({
       contractId: CONTRACT_ID,
       forPrincipal: P1,
       withPrincipal: P2,
@@ -338,7 +338,7 @@ describe('watchtower signature + dispute flow', () => {
       beneficialOnly: true,
     });
 
-    await watchtower.ingest(
+    await stackflowNode.ingest(
       forceCancelPayload({
         txid: '0xforce2',
         sender: P2,
@@ -351,7 +351,7 @@ describe('watchtower signature + dispute flow', () => {
     );
 
     expect(executor.calls).toHaveLength(0);
-    expect(watchtower.status().disputeAttempts).toHaveLength(0);
+    expect(stackflowNode.status().disputeAttempts).toHaveLength(0);
 
     cleanupDb(store, dbFile);
   });

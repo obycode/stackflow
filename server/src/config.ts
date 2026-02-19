@@ -3,9 +3,9 @@ import path from 'node:path';
 import { parsePrincipal } from './principal-utils.js';
 import type {
   DisputeExecutorMode,
-  ProducerSignerMode,
+  CounterpartySignerMode,
   SignatureVerifierMode,
-  WatchtowerConfig,
+  StackflowNodeConfig,
 } from './types.js';
 import process from 'node:process';
 
@@ -15,7 +15,7 @@ const DEFAULT_MAX_RECENT_EVENTS = 500;
 const MAX_WATCHED_PRINCIPALS = 100;
 const DEFAULT_DB_FILE = path.resolve(
   process.cwd(),
-  'server/data/watchtower-state.db',
+  'server/data/stackflow-node-state.db',
 );
 
 function parseInteger(value: unknown, fallback: number): number {
@@ -40,12 +40,12 @@ function parseCsv(value: unknown): string[] {
 
 function parsePrincipalCsv(value: unknown): string[] {
   const principals = parseCsv(value).map((principal) =>
-    parsePrincipal(principal, 'WATCHTOWER_PRINCIPALS'),
+    parsePrincipal(principal, 'STACKFLOW_NODE_PRINCIPALS'),
   );
 
   if (principals.length > MAX_WATCHED_PRINCIPALS) {
     throw new Error(
-      `WATCHTOWER_PRINCIPALS exceeds max of ${MAX_WATCHED_PRINCIPALS} entries`,
+      `STACKFLOW_NODE_PRINCIPALS exceeds max of ${MAX_WATCHED_PRINCIPALS} entries`,
     );
   }
 
@@ -87,7 +87,7 @@ function parseSignatureVerifierMode(value: unknown): SignatureVerifierMode {
   }
 
   throw new Error(
-    'WATCHTOWER_SIGNATURE_VERIFIER_MODE must be readonly, accept-all, or reject-all',
+    'STACKFLOW_NODE_SIGNATURE_VERIFIER_MODE must be readonly, accept-all, or reject-all',
   );
 }
 
@@ -98,69 +98,78 @@ function parseDisputeExecutorMode(value: unknown): DisputeExecutorMode {
   }
 
   throw new Error(
-    'WATCHTOWER_DISPUTE_EXECUTOR_MODE must be auto, noop, or mock',
+    'STACKFLOW_NODE_DISPUTE_EXECUTOR_MODE must be auto, noop, or mock',
   );
 }
 
-function parseProducerSignerMode(value: unknown): ProducerSignerMode {
+function parseCounterpartySignerMode(value: unknown): CounterpartySignerMode {
   const normalized = String(value || 'local-key').trim().toLowerCase();
   if (normalized === 'local-key' || normalized === 'kms') {
     return normalized;
   }
 
   throw new Error(
-    'WATCHTOWER_PRODUCER_SIGNER_MODE must be local-key or kms',
+    'STACKFLOW_NODE_COUNTERPARTY_SIGNER_MODE must be local-key or kms',
   );
 }
 
 function parseStackflowMessageVersion(value: unknown): string {
   const text = String(value || '0.6.0').trim();
   if (text.length === 0) {
-    throw new Error('WATCHTOWER_STACKFLOW_MESSAGE_VERSION must not be empty');
+    throw new Error('STACKFLOW_NODE_STACKFLOW_MESSAGE_VERSION must not be empty');
   }
   if (!/^[\x20-\x7E]+$/.test(text)) {
-    throw new Error('WATCHTOWER_STACKFLOW_MESSAGE_VERSION must be ASCII');
+    throw new Error('STACKFLOW_NODE_STACKFLOW_MESSAGE_VERSION must be ASCII');
   }
   return text;
 }
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): WatchtowerConfig {
-  const dbFile =
-    env.WATCHTOWER_DB_FILE?.trim() ||
-    env.WATCHTOWER_STATE_FILE?.trim() ||
-    DEFAULT_DB_FILE;
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): StackflowNodeConfig {
+  const dbFile = env.STACKFLOW_NODE_DB_FILE?.trim() || DEFAULT_DB_FILE;
+  const disputeSignerKey = env.STACKFLOW_NODE_DISPUTE_SIGNER_KEY?.trim() || null;
 
   return {
-    host: env.WATCHTOWER_HOST?.trim() || DEFAULT_HOST,
-    port: parseInteger(env.WATCHTOWER_PORT, DEFAULT_PORT),
+    host: env.STACKFLOW_NODE_HOST?.trim() || DEFAULT_HOST,
+    port: parseInteger(env.STACKFLOW_NODE_PORT, DEFAULT_PORT),
     dbFile,
     maxRecentEvents: parseInteger(
-      env.WATCHTOWER_MAX_RECENT_EVENTS,
+      env.STACKFLOW_NODE_MAX_RECENT_EVENTS,
       DEFAULT_MAX_RECENT_EVENTS,
     ),
-    logRawEvents: parseBoolean(env.WATCHTOWER_LOG_RAW_EVENTS, false),
+    logRawEvents: parseBoolean(env.STACKFLOW_NODE_LOG_RAW_EVENTS, false),
     watchedContracts: parseCsv(env.STACKFLOW_CONTRACTS),
-    watchedPrincipals: parsePrincipalCsv(env.WATCHTOWER_PRINCIPALS),
+    watchedPrincipals: parsePrincipalCsv(env.STACKFLOW_NODE_PRINCIPALS),
     stacksNetwork: parseNetwork(env.STACKS_NETWORK),
     stacksApiUrl: env.STACKS_API_URL?.trim() || null,
-    signerKey: env.WATCHTOWER_SIGNER_KEY?.trim() || null,
-    producerKey:
-      env.WATCHTOWER_PRODUCER_KEY?.trim() || env.WATCHTOWER_SIGNER_KEY?.trim() || null,
-    producerPrincipal: env.WATCHTOWER_PRODUCER_PRINCIPAL?.trim() || null,
-    producerSignerMode: parseProducerSignerMode(
-      env.WATCHTOWER_PRODUCER_SIGNER_MODE,
+    disputeSignerKey,
+    counterpartyKey:
+      env.STACKFLOW_NODE_COUNTERPARTY_KEY?.trim() ||
+      disputeSignerKey ||
+      null,
+    counterpartyPrincipal: env.STACKFLOW_NODE_COUNTERPARTY_PRINCIPAL?.trim() || null,
+    counterpartySignerMode: parseCounterpartySignerMode(
+      env.STACKFLOW_NODE_COUNTERPARTY_SIGNER_MODE,
     ),
+    counterpartyKmsKeyId:
+      env.STACKFLOW_NODE_COUNTERPARTY_KMS_KEY_ID?.trim() ||
+      env.KMS_KEY_ID?.trim() ||
+      null,
+    counterpartyKmsRegion:
+      env.STACKFLOW_NODE_COUNTERPARTY_KMS_REGION?.trim() ||
+      env.AWS_REGION?.trim() ||
+      null,
+    counterpartyKmsEndpoint: env.STACKFLOW_NODE_COUNTERPARTY_KMS_ENDPOINT?.trim() || null,
     stackflowMessageVersion: parseStackflowMessageVersion(
-      env.WATCHTOWER_STACKFLOW_MESSAGE_VERSION,
+      env.STACKFLOW_NODE_STACKFLOW_MESSAGE_VERSION,
     ),
     signatureVerifierMode: parseSignatureVerifierMode(
-      env.WATCHTOWER_SIGNATURE_VERIFIER_MODE,
+      env.STACKFLOW_NODE_SIGNATURE_VERIFIER_MODE,
     ),
     disputeExecutorMode: parseDisputeExecutorMode(
-      env.WATCHTOWER_DISPUTE_EXECUTOR_MODE,
+      env.STACKFLOW_NODE_DISPUTE_EXECUTOR_MODE,
     ),
     disputeOnlyBeneficial: parseBoolean(
-      env.WATCHTOWER_DISPUTE_ONLY_BENEFICIAL,
+      env.STACKFLOW_NODE_DISPUTE_ONLY_BENEFICIAL,
       false,
     ),
   };

@@ -9,15 +9,16 @@
     "init:stackflow": "node scripts/init-stackflow.js",
     "build:ui": "node scripts/build-ui.js",
     "test": "vitest run",
-    "test:watchtower:http": "WATCHTOWER_HTTP_INTEGRATION=1 vitest run tests/watchtower-http.integration.test.ts",
+    "test:stackflow-node:http": "STACKFLOW_NODE_HTTP_INTEGRATION=1 vitest run tests/watchtower-http.integration.test.ts",
     "test:report": "vitest run -- --coverage --costs",
     "test:watch": "chokidar \"tests/**/*.ts\" \"contracts/**/*.clar\" -c \"npm run test:report\"",
-    "build:watchtower": "tsc -p tsconfig.server.json",
-    "watchtower": "npm run build:watchtower && node server/dist/index.js"
+    "build:stackflow-node": "tsc -p tsconfig.server.json",
+    "stackflow-node": "npm run build:stackflow-node && node server/dist/index.js"
   },
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@aws-sdk/client-kms": "^3.993.0",
     "@stacks/clarinet-sdk": "^3.10.0",
     "@stacks/connect": "^7.2.0",
     "@stacks/network": "^7.2.0",

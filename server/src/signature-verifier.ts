@@ -15,7 +15,7 @@ import type {
   SignatureStateInput,
   SignatureVerificationResult,
   SignatureVerifier,
-  WatchtowerConfig,
+  StackflowNodeConfig,
 } from './types.js';
 
 const STACKFLOW_CONTRACT_ERROR_MESSAGES: Record<string, string> = {
@@ -69,7 +69,7 @@ function senderAddressForPrincipal(principal: string): string {
 export class ReadOnlySignatureVerifier implements SignatureVerifier {
   private readonly network: ReturnType<typeof createNetwork>;
 
-  constructor(config: Pick<WatchtowerConfig, 'stacksNetwork' | 'stacksApiUrl'>) {
+  constructor(config: Pick<StackflowNodeConfig, 'stacksNetwork' | 'stacksApiUrl'>) {
     this.network = createNetwork({
       network: config.stacksNetwork,
       client: config.stacksApiUrl ? { baseUrl: config.stacksApiUrl } : undefined,
