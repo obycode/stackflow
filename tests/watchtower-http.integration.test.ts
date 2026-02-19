@@ -22,6 +22,8 @@ const CONTRACT_ID = 'ST126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT59ZTE2J.stackflow-0-6-0';
 const P1 = 'ST1SJ3DTE5DN7X54YDH5D64R3BCB6A2AG2ZQ8YPD5';
 const P2 = 'ST2CY5V39NHDPWSXMW9QDT3HC3GD6Q6XX4CFRK9AG';
 const P3 = 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM';
+const COUNTERPARTY_SIGNER_KEY =
+  '7287ba251d44a4d3fd9276c88ce34c5c52a038955511cccaf77e61068649c17801';
 const SIG_A = `0x${'11'.repeat(65)}`;
 const SIG_B = `0x${'22'.repeat(65)}`;
 const RUN_HTTP_INTEGRATION = process.env.STACKFLOW_NODE_HTTP_INTEGRATION === '1';
@@ -141,6 +143,74 @@ function signatureStatePayload(forPrincipal: string) {
     nonce: '5',
     action: '1',
     actor: forPrincipal,
+    secret: null,
+    validAfter: null,
+    beneficialOnly: false,
+  };
+}
+
+function transferPayload({
+  forPrincipal,
+  withPrincipal,
+  myBalance,
+  theirBalance,
+  nonce,
+}: {
+  forPrincipal: string;
+  withPrincipal: string;
+  myBalance: string;
+  theirBalance: string;
+  nonce: string;
+}) {
+  return {
+    contractId: CONTRACT_ID,
+    forPrincipal,
+    withPrincipal,
+    token: null,
+    amount: '0',
+    myBalance,
+    theirBalance,
+    theirSignature: SIG_B,
+    nonce,
+    action: '1',
+    actor: withPrincipal,
+    secret: null,
+    validAfter: null,
+    beneficialOnly: false,
+  };
+}
+
+function signatureRequestPayload({
+  forPrincipal,
+  withPrincipal,
+  action,
+  amount,
+  myBalance,
+  theirBalance,
+  nonce,
+  actor,
+}: {
+  forPrincipal: string;
+  withPrincipal: string;
+  action: '0' | '2' | '3';
+  amount: string;
+  myBalance: string;
+  theirBalance: string;
+  nonce: string;
+  actor: string;
+}) {
+  return {
+    contractId: CONTRACT_ID,
+    forPrincipal,
+    withPrincipal,
+    token: null,
+    amount,
+    myBalance,
+    theirBalance,
+    theirSignature: SIG_B,
+    nonce,
+    action,
+    actor,
     secret: null,
     validAfter: null,
     beneficialOnly: false,
@@ -523,6 +593,327 @@ describeHttp('watchtower http integration', () => {
 
       expect(stateCount.count).toBe(1);
       expect(attemptCount.count).toBe(1);
+      cleanupDbFiles(dbFile);
+    }
+  });
+
+  it('signs and persists a direct transfer update through /counterparty/transfer', async () => {
+    const dbFile = path.join(
+      os.tmpdir(),
+      `stackflow-watchtower-http-${Date.now()}-${Math.random()}.db`,
+    );
+    const harness = await startHarness({
+      dbFile,
+      extraEnv: {
+        STACKFLOW_NODE_SIGNATURE_VERIFIER_MODE: 'accept-all',
+        STACKFLOW_NODE_DISPUTE_EXECUTOR_MODE: 'noop',
+        STACKFLOW_NODE_COUNTERPARTY_KEY: COUNTERPARTY_SIGNER_KEY,
+      },
+    });
+
+    try {
+      const healthResponse = await fetch(`${harness.baseUrl}/health`);
+      expect(healthResponse.status).toBe(200);
+      const health = (await healthResponse.json()) as {
+        counterpartyPrincipal: string | null;
+      };
+      expect(typeof health.counterpartyPrincipal).toBe('string');
+      const counterpartyPrincipal = health.counterpartyPrincipal as string;
+      const withPrincipal = counterpartyPrincipal === P1 ? P2 : P1;
+
+      const baselineState = signatureStatePayload(counterpartyPrincipal);
+      baselineState.withPrincipal = withPrincipal;
+      baselineState.actor = withPrincipal;
+
+      const seedResponse = await fetch(`${harness.baseUrl}/signature-states`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(baselineState),
+      });
+      expect(seedResponse.status).toBe(200);
+
+      const transferResponse = await fetch(
+        `${harness.baseUrl}/counterparty/transfer`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(
+            transferPayload({
+              forPrincipal: counterpartyPrincipal,
+              withPrincipal,
+              myBalance: '910',
+              theirBalance: '90',
+              nonce: '6',
+            }),
+          ),
+        },
+      );
+      expect(transferResponse.status).toBe(200);
+      const transferBody = (await transferResponse.json()) as {
+        stored: boolean;
+        replaced: boolean;
+        mySignature: string;
+      };
+      expect(transferBody.stored).toBe(true);
+      expect(transferBody.replaced).toBe(true);
+      expect(transferBody.mySignature).toMatch(/^0x[0-9a-f]{130}$/);
+
+      const statesResponse = await fetch(
+        `${harness.baseUrl}/signature-states?limit=10`,
+      );
+      expect(statesResponse.status).toBe(200);
+      const statesBody = (await statesResponse.json()) as {
+        signatureStates: Array<{
+          forPrincipal: string;
+          withPrincipal: string;
+          nonce: string;
+          myBalance: string;
+          theirBalance: string;
+          mySignature: string;
+        }>;
+      };
+      expect(statesBody.signatureStates).toHaveLength(1);
+      expect(statesBody.signatureStates[0].forPrincipal).toBe(counterpartyPrincipal);
+      expect(statesBody.signatureStates[0].withPrincipal).toBe(withPrincipal);
+      expect(statesBody.signatureStates[0].nonce).toBe('6');
+      expect(statesBody.signatureStates[0].myBalance).toBe('910');
+      expect(statesBody.signatureStates[0].theirBalance).toBe('90');
+      expect(statesBody.signatureStates[0].mySignature).toBe(
+        transferBody.mySignature,
+      );
+
+      const pipesResponse = await fetch(
+        `${harness.baseUrl}/pipes?principal=${encodeURIComponent(counterpartyPrincipal)}`,
+      );
+      expect(pipesResponse.status).toBe(200);
+      const pipesBody = (await pipesResponse.json()) as {
+        pipes: Array<{
+          source: string;
+          nonce: string | null;
+          balance1: string | null;
+          balance2: string | null;
+          pipeKey: {
+            'principal-1': string;
+            'principal-2': string;
+          };
+        }>;
+      };
+      expect(pipesBody.pipes).toHaveLength(1);
+      expect(pipesBody.pipes[0].source).toBe('signature-state');
+      expect(pipesBody.pipes[0].nonce).toBe('6');
+      const principal1IsCounterparty =
+        pipesBody.pipes[0].pipeKey['principal-1'] === counterpartyPrincipal;
+      expect(
+        principal1IsCounterparty
+          ? pipesBody.pipes[0].balance1
+          : pipesBody.pipes[0].balance2,
+      ).toBe('910');
+      expect(
+        principal1IsCounterparty
+          ? pipesBody.pipes[0].balance2
+          : pipesBody.pipes[0].balance1,
+      ).toBe('90');
+
+      const rejectedTransfer = await fetch(
+        `${harness.baseUrl}/counterparty/transfer`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(
+            transferPayload({
+              forPrincipal: counterpartyPrincipal,
+              withPrincipal,
+              myBalance: '910',
+              theirBalance: '90',
+              nonce: '7',
+            }),
+          ),
+        },
+      );
+      expect(rejectedTransfer.status).toBe(403);
+      const rejectedBody = (await rejectedTransfer.json()) as {
+        reason: string;
+      };
+      expect(rejectedBody.reason).toBe('transfer-not-beneficial');
+    } finally {
+      await harness.stop();
+      cleanupDbFiles(dbFile);
+    }
+  });
+
+  it('supports peer signature requests for close, deposit, and withdrawal', async () => {
+    const dbFile = path.join(
+      os.tmpdir(),
+      `stackflow-watchtower-http-${Date.now()}-${Math.random()}.db`,
+    );
+    const harness = await startHarness({
+      dbFile,
+      extraEnv: {
+        STACKFLOW_NODE_SIGNATURE_VERIFIER_MODE: 'accept-all',
+        STACKFLOW_NODE_DISPUTE_EXECUTOR_MODE: 'noop',
+        STACKFLOW_NODE_COUNTERPARTY_KEY: COUNTERPARTY_SIGNER_KEY,
+      },
+    });
+
+    try {
+      const healthResponse = await fetch(`${harness.baseUrl}/health`);
+      expect(healthResponse.status).toBe(200);
+      const health = (await healthResponse.json()) as {
+        counterpartyPrincipal: string | null;
+      };
+      expect(typeof health.counterpartyPrincipal).toBe('string');
+      const counterpartyPrincipal = health.counterpartyPrincipal as string;
+      const withPrincipal = counterpartyPrincipal === P1 ? P2 : P1;
+
+      const baselineState = signatureStatePayload(counterpartyPrincipal);
+      baselineState.withPrincipal = withPrincipal;
+      baselineState.actor = withPrincipal;
+
+      const seedResponse = await fetch(`${harness.baseUrl}/signature-states`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(baselineState),
+      });
+      expect(seedResponse.status).toBe(200);
+
+      const closeResponse = await fetch(
+        `${harness.baseUrl}/counterparty/signature-request`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(
+            signatureRequestPayload({
+              forPrincipal: counterpartyPrincipal,
+              withPrincipal,
+              action: '0',
+              amount: '0',
+              myBalance: '900',
+              theirBalance: '100',
+              nonce: '6',
+              actor: withPrincipal,
+            }),
+          ),
+        },
+      );
+      expect(closeResponse.status).toBe(200);
+      const closeBody = (await closeResponse.json()) as {
+        action: string;
+        nonce: string;
+        stored: boolean;
+        replaced: boolean;
+        mySignature: string;
+      };
+      expect(closeBody.action).toBe('0');
+      expect(closeBody.nonce).toBe('6');
+      expect(closeBody.stored).toBe(true);
+      expect(closeBody.replaced).toBe(true);
+      expect(closeBody.mySignature).toMatch(/^0x[0-9a-f]{130}$/);
+
+      const depositResponse = await fetch(
+        `${harness.baseUrl}/counterparty/signature-request`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(
+            signatureRequestPayload({
+              forPrincipal: counterpartyPrincipal,
+              withPrincipal,
+              action: '2',
+              amount: '50',
+              myBalance: '900',
+              theirBalance: '150',
+              nonce: '7',
+              actor: withPrincipal,
+            }),
+          ),
+        },
+      );
+      expect(depositResponse.status).toBe(200);
+      const depositBody = (await depositResponse.json()) as {
+        action: string;
+        nonce: string;
+      };
+      expect(depositBody.action).toBe('2');
+      expect(depositBody.nonce).toBe('7');
+
+      const withdrawalResponse = await fetch(
+        `${harness.baseUrl}/counterparty/signature-request`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(
+            signatureRequestPayload({
+              forPrincipal: counterpartyPrincipal,
+              withPrincipal,
+              action: '3',
+              amount: '25',
+              myBalance: '900',
+              theirBalance: '125',
+              nonce: '8',
+              actor: withPrincipal,
+            }),
+          ),
+        },
+      );
+      expect(withdrawalResponse.status).toBe(200);
+      const withdrawalBody = (await withdrawalResponse.json()) as {
+        action: string;
+        nonce: string;
+      };
+      expect(withdrawalBody.action).toBe('3');
+      expect(withdrawalBody.nonce).toBe('8');
+
+      const duplicateNonce = await fetch(
+        `${harness.baseUrl}/counterparty/signature-request`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(
+            signatureRequestPayload({
+              forPrincipal: counterpartyPrincipal,
+              withPrincipal,
+              action: '0',
+              amount: '0',
+              myBalance: '900',
+              theirBalance: '125',
+              nonce: '8',
+              actor: withPrincipal,
+            }),
+          ),
+        },
+      );
+      expect(duplicateNonce.status).toBe(409);
+      const duplicateNonceBody = (await duplicateNonce.json()) as {
+        reason: string;
+      };
+      expect(duplicateNonceBody.reason).toBe('nonce-too-low');
+
+      const balanceDecrease = await fetch(
+        `${harness.baseUrl}/counterparty/signature-request`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(
+            signatureRequestPayload({
+              forPrincipal: counterpartyPrincipal,
+              withPrincipal,
+              action: '0',
+              amount: '0',
+              myBalance: '899',
+              theirBalance: '126',
+              nonce: '9',
+              actor: withPrincipal,
+            }),
+          ),
+        },
+      );
+      expect(balanceDecrease.status).toBe(403);
+      const balanceDecreaseBody = (await balanceDecrease.json()) as {
+        reason: string;
+      };
+      expect(balanceDecreaseBody.reason).toBe('counterparty-balance-decrease');
+    } finally {
+      await harness.stop();
       cleanupDbFiles(dbFile);
     }
   });

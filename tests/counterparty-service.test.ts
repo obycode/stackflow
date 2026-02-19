@@ -94,6 +94,19 @@ function transferPayload(counterpartyAddress: string) {
   };
 }
 
+function signatureRequestPayload(
+  counterpartyAddress: string,
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    ...transferPayload(counterpartyAddress),
+    action: '0',
+    amount: '0',
+    actor: COUNTERPARTY,
+    ...overrides,
+  };
+}
+
 function seedObservedPipeState({
   store,
   counterpartyAddress,
@@ -251,6 +264,98 @@ describe('counterparty signing service', () => {
     }
   });
 
+  it('requires amount for deposit signature requests', async () => {
+    const { counterpartyAddress, dbFile, store, service } = makeHarness({});
+
+    try {
+      seedObservedPipeState({
+        store,
+        counterpartyAddress,
+        withPrincipal: COUNTERPARTY,
+        token: null,
+        contractId: CONTRACT_ID,
+        myBalance: '200',
+        theirBalance: '100',
+        nonce: '4',
+      });
+
+      await expect(
+        service.signSignatureRequest({
+          ...signatureRequestPayload(counterpartyAddress),
+          action: '2',
+          actor: COUNTERPARTY,
+          amount: null,
+          myBalance: '200',
+          theirBalance: '150',
+          nonce: '5',
+        }),
+      ).rejects.toMatchObject<Partial<CounterpartyServiceError>>({
+        statusCode: 400,
+      });
+    } finally {
+      cleanupDb(store, dbFile);
+    }
+  });
+
+  it('signs close, deposit, and withdrawal signature requests', async () => {
+    const { counterpartyAddress, dbFile, store, service } = makeHarness({});
+
+    try {
+      seedObservedPipeState({
+        store,
+        counterpartyAddress,
+        withPrincipal: COUNTERPARTY,
+        token: null,
+        contractId: CONTRACT_ID,
+        myBalance: '200',
+        theirBalance: '100',
+        nonce: '4',
+      });
+
+      const closeResult = await service.signSignatureRequest({
+        ...signatureRequestPayload(counterpartyAddress),
+        action: '0',
+        amount: '0',
+        myBalance: '200',
+        theirBalance: '100',
+        nonce: '5',
+      });
+      expect(closeResult.request.action).toBe('0');
+      expect(closeResult.request.nonce).toBe('5');
+      expect(closeResult.upsert.stored).toBe(true);
+      expect(closeResult.upsert.replaced).toBe(false);
+
+      const depositResult = await service.signSignatureRequest({
+        ...signatureRequestPayload(counterpartyAddress),
+        action: '2',
+        amount: '50',
+        myBalance: '200',
+        theirBalance: '150',
+        nonce: '6',
+      });
+      expect(depositResult.request.action).toBe('2');
+      expect(depositResult.request.nonce).toBe('6');
+      expect(depositResult.upsert.stored).toBe(true);
+      expect(depositResult.upsert.replaced).toBe(true);
+
+      const withdrawalResult = await service.signSignatureRequest({
+        ...signatureRequestPayload(counterpartyAddress),
+        action: '3',
+        amount: '25',
+        myBalance: '200',
+        theirBalance: '125',
+        nonce: '7',
+      });
+      expect(withdrawalResult.request.action).toBe('3');
+      expect(withdrawalResult.request.nonce).toBe('7');
+      expect(withdrawalResult.upsert.stored).toBe(true);
+      expect(withdrawalResult.upsert.replaced).toBe(true);
+      expect(withdrawalResult.mySignature).toMatch(/^0x[0-9a-f]{130}$/);
+    } finally {
+      cleanupDb(store, dbFile);
+    }
+  });
+
   it('rejects transfer when nonce is not higher than stored state', async () => {
     const { counterpartyAddress, dbFile, store, service } = makeHarness({});
 
@@ -283,6 +388,52 @@ describe('counterparty signing service', () => {
     }
   });
 
+  it('rejects signature requests when nonce is not higher than stored state', async () => {
+    const { counterpartyAddress, dbFile, store, service } = makeHarness({});
+
+    try {
+      seedObservedPipeState({
+        store,
+        counterpartyAddress,
+        withPrincipal: COUNTERPARTY,
+        token: null,
+        contractId: CONTRACT_ID,
+        myBalance: '200',
+        theirBalance: '100',
+        nonce: '4',
+      });
+
+      const first = await service.signSignatureRequest({
+        ...signatureRequestPayload(counterpartyAddress),
+        action: '0',
+        amount: '0',
+        myBalance: '200',
+        theirBalance: '100',
+        nonce: '5',
+      });
+      expect(first.upsert.stored).toBe(true);
+
+      await expect(
+        service.signSignatureRequest({
+          ...signatureRequestPayload(counterpartyAddress),
+          action: '0',
+          amount: '0',
+          myBalance: '200',
+          theirBalance: '100',
+          nonce: '5',
+        }),
+      ).rejects.toMatchObject<Partial<CounterpartyServiceError>>({
+        statusCode: 409,
+        details: {
+          reason: 'nonce-too-low',
+          existingNonce: '5',
+        },
+      });
+    } finally {
+      cleanupDb(store, dbFile);
+    }
+  });
+
   it('rejects transfer when counterparty balance decreases', async () => {
     const { counterpartyAddress, dbFile, store, service } = makeHarness({});
 
@@ -303,6 +454,41 @@ describe('counterparty signing service', () => {
           ...transferPayload(counterpartyAddress),
           myBalance: '150',
           theirBalance: '150',
+          nonce: '5',
+        }),
+      ).rejects.toMatchObject<Partial<CounterpartyServiceError>>({
+        statusCode: 403,
+        details: {
+          reason: 'counterparty-balance-decrease',
+        },
+      });
+    } finally {
+      cleanupDb(store, dbFile);
+    }
+  });
+
+  it('rejects signature requests when counterparty balance decreases', async () => {
+    const { counterpartyAddress, dbFile, store, service } = makeHarness({});
+
+    try {
+      seedObservedPipeState({
+        store,
+        counterpartyAddress,
+        withPrincipal: COUNTERPARTY,
+        token: null,
+        contractId: CONTRACT_ID,
+        myBalance: '200',
+        theirBalance: '100',
+        nonce: '4',
+      });
+
+      await expect(
+        service.signSignatureRequest({
+          ...signatureRequestPayload(counterpartyAddress),
+          action: '0',
+          amount: '0',
+          myBalance: '199',
+          theirBalance: '101',
           nonce: '5',
         }),
       ).rejects.toMatchObject<Partial<CounterpartyServiceError>>({
