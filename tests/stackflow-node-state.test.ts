@@ -15,10 +15,12 @@ import { describe, expect, it } from 'vitest';
 import { normalizePipeId } from '../server/src/observer-parser.ts';
 import { SqliteStateStore } from '../server/src/state-store.ts';
 import { StackflowNode } from '../server/src/stackflow-node.ts';
+import type { ForwardingPaymentRecord } from '../server/src/types.ts';
 
 const P1 = 'ST1SJ3DTE5DN7X54YDH5D64R3BCB6A2AG2ZQ8YPD5';
 const P2 = 'ST2CY5V39NHDPWSXMW9QDT3HC3GD6Q6XX4CFRK9AG';
 const P3 = 'ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM';
+const CONTRACT_ID = 'ST126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT59ZTE2J.stackflow-0-6-0';
 
 function cleanupDb(store: SqliteStateStore, dbFile: string): void {
   store.close();
@@ -28,6 +30,44 @@ function cleanupDb(store: SqliteStateStore, dbFile: string): void {
       fs.unlinkSync(target);
     }
   }
+}
+
+function forwardingPaymentRecord(args: {
+  paymentId: string;
+  pipeId: string;
+  pipeNonce: string;
+  hashedSecret: string;
+  revealedSecret: string | null;
+  now?: string;
+}): ForwardingPaymentRecord {
+  const now = args.now ?? new Date().toISOString();
+  return {
+    paymentId: args.paymentId,
+    contractId: CONTRACT_ID,
+    pipeId: args.pipeId,
+    pipeNonce: args.pipeNonce,
+    status: 'completed',
+    incomingAmount: '100',
+    outgoingAmount: '99',
+    feeAmount: '1',
+    hashedSecret: args.hashedSecret,
+    revealedSecret: args.revealedSecret,
+    revealedAt: args.revealedSecret ? now : null,
+    upstreamBaseUrl: null,
+    upstreamRevealEndpoint: null,
+    upstreamPaymentId: null,
+    revealPropagationStatus: 'not-applicable',
+    revealPropagationAttempts: 0,
+    revealLastError: null,
+    revealNextRetryAt: null,
+    revealPropagatedAt: null,
+    nextHopBaseUrl: 'http://127.0.0.1:9797',
+    nextHopEndpoint: '/counterparty/transfer',
+    resultJson: { ok: true, paymentId: args.paymentId },
+    error: null,
+    createdAt: now,
+    updatedAt: now,
+  };
 }
 
 function forceEventHex(
@@ -66,8 +106,7 @@ function payloadFor(
       {
         txid: `0x${eventName}`,
         contract_event: {
-          contract_identifier:
-            'ST126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT59ZTE2J.stackflow-0-6-0',
+          contract_identifier: CONTRACT_ID,
           topic: 'print',
           raw_value: forceEventHex(eventName, principal1, principal2),
         },
@@ -237,9 +276,9 @@ describe('watchtower state transitions', () => {
     }
 
     store.setObservedPipe({
-      stateId: `ST126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT59ZTE2J.stackflow-0-6-0|${pipeId}`,
+      stateId: `${CONTRACT_ID}|${pipeId}`,
       pipeId,
-      contractId: 'ST126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT59ZTE2J.stackflow-0-6-0',
+      contractId: CONTRACT_ID,
       pipeKey,
       balance1: '0',
       balance2: '0',
@@ -273,6 +312,106 @@ describe('watchtower state transitions', () => {
     expect(status.observedPipes[0].balance1).toBe('4000000');
     expect(status.observedPipes[0].pending1Amount).toBeNull();
     expect(status.observedPipes[0].pending1BurnHeight).toBeNull();
+
+    cleanupDb(store, dbFile);
+  });
+
+  it('keeps only the latest forwarding payment per pipe nonce and preserves revealed secret mapping', () => {
+    const dbFile = path.join(
+      os.tmpdir(),
+      `stackflow-watchtower-${Date.now()}-${Math.random()}.db`,
+    );
+
+    const store = new SqliteStateStore({ dbFile, maxRecentEvents: 10 });
+    store.load();
+
+    const pipeId = normalizePipeId({
+      token: null,
+      'principal-1': P1,
+      'principal-2': P2,
+    });
+    if (!pipeId) {
+      throw new Error('failed to build pipe id');
+    }
+
+    store.setForwardingPayment(
+      forwardingPaymentRecord({
+        paymentId: 'pay-retain-0001',
+        pipeId,
+        pipeNonce: '5',
+        hashedSecret:
+          '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        revealedSecret:
+          '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      }),
+    );
+    store.setForwardingPayment(
+      forwardingPaymentRecord({
+        paymentId: 'pay-retain-0002',
+        pipeId,
+        pipeNonce: '6',
+        hashedSecret:
+          '0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+        revealedSecret: null,
+      }),
+    );
+
+    const oldPayment = store.getForwardingPayment('pay-retain-0001');
+    expect(oldPayment).toBeNull();
+    const latestPayment = store.getForwardingPayment('pay-retain-0002');
+    expect(latestPayment).toBeTruthy();
+    expect(latestPayment?.pipeNonce).toBe('6');
+
+    expect(
+      store.getRevealedSecretByHash(
+        '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      ),
+    ).toBe('0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
+    expect(
+      store.hasForwardingPaymentHash(
+        '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      ),
+    ).toBe(true);
+
+    cleanupDb(store, dbFile);
+  });
+
+  it('prunes idempotent responses older than retention window', () => {
+    const dbFile = path.join(
+      os.tmpdir(),
+      `stackflow-watchtower-${Date.now()}-${Math.random()}.db`,
+    );
+
+    const store = new SqliteStateStore({ dbFile, maxRecentEvents: 10 });
+    store.load();
+
+    const now = new Date();
+    const stale = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000).toISOString();
+    const fresh = now.toISOString();
+
+    store.setIdempotentResponse({
+      endpoint: '/counterparty/transfer',
+      idempotencyKey: 'idem-prune-old-1',
+      requestHash: 'hash-old',
+      statusCode: 200,
+      responseJson: { ok: true },
+      createdAt: stale,
+    });
+    store.setIdempotentResponse({
+      endpoint: '/counterparty/transfer',
+      idempotencyKey: 'idem-prune-fresh-1',
+      requestHash: 'hash-fresh',
+      statusCode: 200,
+      responseJson: { ok: true },
+      createdAt: fresh,
+    });
+
+    expect(
+      store.getIdempotentResponse('/counterparty/transfer', 'idem-prune-old-1'),
+    ).toBeNull();
+    expect(
+      store.getIdempotentResponse('/counterparty/transfer', 'idem-prune-fresh-1'),
+    ).toBeTruthy();
 
     cleanupDb(store, dbFile);
   });

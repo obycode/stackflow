@@ -11,9 +11,6 @@ import {
   noneCV,
 } from "@stacks/transactions";
 
-const DEFAULT_DEVNET_DEPLOYER_KEY =
-  "753b7cc01a1a2e86221266a154af739463fce51219d97e4f856cd7200c3bd2a601";
-
 function normalizePrivateKey(input) {
   const trimmed = input.trim();
   return trimmed.startsWith("0x") ? trimmed.slice(2) : trimmed;
@@ -48,11 +45,10 @@ async function main() {
         ? "https://api.testnet.hiro.so"
         : "http://localhost:20443");
 
-  const deployerKeyInput =
-    process.env.DEPLOYER_PRIVATE_KEY?.trim() || DEFAULT_DEVNET_DEPLOYER_KEY;
-  if (!process.env.DEPLOYER_PRIVATE_KEY?.trim()) {
-    console.warn(
-      "[init-stackflow] DEPLOYER_PRIVATE_KEY not set; using default Clarinet devnet deployer key",
+  const deployerKeyInput = process.env.DEPLOYER_PRIVATE_KEY?.trim();
+  if (!deployerKeyInput) {
+    throw new Error(
+      "DEPLOYER_PRIVATE_KEY is required; refusing to use embedded fixture keys",
     );
   }
 

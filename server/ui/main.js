@@ -12,10 +12,12 @@ var CHAIN_IDS = {
   devnet: 2147483648n,
   mocknet: 2147483648n
 };
+var PEER_PROTOCOL_VERSION = "1";
 var STORAGE_KEY = "stackflow-console-config-v1";
 var connectedAddress = null;
 var stackflowNodeCounterpartyEnabled = false;
 var stackflowNodeCounterpartyPrincipal = null;
+var peerRequestCounter = 0;
 var ids = {
   serverUrl: "stackflow-node-url",
   contractId: "contract-id",
@@ -397,6 +399,16 @@ function updateActionUi() {
 }
 function normalizedText(value) {
   return String(value || "").trim();
+}
+function createPeerProtocolHeaders() {
+  peerRequestCounter += 1;
+  const seed = `${Date.now().toString(36)}-${peerRequestCounter.toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  return {
+    "content-type": "application/json",
+    "x-stackflow-protocol-version": PEER_PROTOCOL_VERSION,
+    "x-stackflow-request-id": `req-${seed}`,
+    "idempotency-key": `idem-${seed}`
+  };
 }
 function splitContractPrincipal(contractId) {
   const value = normalizedText(contractId);
@@ -1221,7 +1233,7 @@ async function requestCounterpartySignature(action) {
   const requestPayload = buildCounterpartyRequestPayload(action);
   const response = await fetch(`${baseUrl}${requestPayload.endpoint}`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: createPeerProtocolHeaders(),
     body: JSON.stringify(requestPayload.payload)
   });
   const body = await response.json().catch(() => ({}));
@@ -1231,6 +1243,14 @@ async function requestCounterpartySignature(action) {
     setStatus(
       ids.txResult,
       `Counterparty request rejected: nonce must be higher (incoming ${incomingNonce}, existing ${existingNonce}).`,
+      true
+    );
+    return;
+  }
+  if (response.status === 409 && body?.reason === "idempotency-key-reused") {
+    setStatus(
+      ids.txResult,
+      "Counterparty request rejected: idempotency key was reused with a different payload.",
       true
     );
     return;

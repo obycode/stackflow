@@ -220,7 +220,7 @@ npm run stackflow-node
 Optional environment variables:
 
 ```bash
-STACKFLOW_NODE_HOST=0.0.0.0
+STACKFLOW_NODE_HOST=127.0.0.1
 STACKFLOW_NODE_PORT=8787
 STACKFLOW_NODE_DB_FILE=server/data/stackflow-node-state.db
 STACKFLOW_NODE_MAX_RECENT_EVENTS=500
@@ -240,6 +240,20 @@ STACKFLOW_NODE_STACKFLOW_MESSAGE_VERSION=0.6.0
 STACKFLOW_NODE_SIGNATURE_VERIFIER_MODE=readonly
 STACKFLOW_NODE_DISPUTE_EXECUTOR_MODE=auto
 STACKFLOW_NODE_DISPUTE_ONLY_BENEFICIAL=false
+STACKFLOW_NODE_PEER_WRITE_RATE_LIMIT_PER_MINUTE=120
+STACKFLOW_NODE_TRUST_PROXY=false
+STACKFLOW_NODE_OBSERVER_LOCALHOST_ONLY=true
+STACKFLOW_NODE_OBSERVER_ALLOWED_IPS=127.0.0.1,192.0.2.10
+STACKFLOW_NODE_ADMIN_READ_TOKEN=<optional bearer/admin token for sensitive reads>
+STACKFLOW_NODE_ADMIN_READ_LOCALHOST_ONLY=true
+STACKFLOW_NODE_REDACT_SENSITIVE_READ_DATA=true
+STACKFLOW_NODE_FORWARDING_ENABLED=false
+STACKFLOW_NODE_FORWARDING_MIN_FEE=0
+STACKFLOW_NODE_FORWARDING_TIMEOUT_MS=10000
+STACKFLOW_NODE_FORWARDING_ALLOW_PRIVATE_DESTINATIONS=false
+STACKFLOW_NODE_FORWARDING_ALLOWED_BASE_URLS=https://node-b.example.com,http://127.0.0.1:9797
+STACKFLOW_NODE_FORWARDING_REVEAL_RETRY_INTERVAL_MS=15000
+STACKFLOW_NODE_FORWARDING_REVEAL_RETRY_MAX_ATTEMPTS=20
 ```
 
 If `STACKFLOW_CONTRACTS` is omitted, the stackflow-node automatically monitors any
@@ -255,6 +269,42 @@ address from the KMS public key at startup.
 KMS mode requires the AWS KMS SDK package: `npm install @aws-sdk/client-kms`.
 Set `STACKFLOW_NODE_LOG_RAW_EVENTS=true` to print raw stackflow `print` event
 objects received via `/new_block` for payload inspection/debugging.
+`STACKFLOW_NODE_PEER_WRITE_RATE_LIMIT_PER_MINUTE` applies per-IP write limits to
+`POST /signature-states`, `POST /counterparty/transfer`, and
+`POST /counterparty/signature-request` (`0` disables rate limiting).
+`STACKFLOW_NODE_TRUST_PROXY` defaults to `false`; when enabled, the server uses
+`x-forwarded-for` for client IP extraction (rate limiting and localhost checks).
+`STACKFLOW_NODE_HOST` defaults to `127.0.0.1` to reduce accidental network
+exposure. Use a public bind only with hardened ingress controls.
+Observer ingress controls:
+
+- `STACKFLOW_NODE_OBSERVER_LOCALHOST_ONLY` defaults to `true` and restricts
+  `POST /new_block` and `POST /new_burn_block` to loopback sources.
+- `STACKFLOW_NODE_OBSERVER_ALLOWED_IPS` (optional CSV) restricts observer
+  routes to explicit source IPs. When set, this allowlist takes precedence
+  over localhost-only mode.
+Sensitive read controls:
+
+- `STACKFLOW_NODE_ADMIN_READ_TOKEN` (optional) requires this token (via
+  `Authorization: Bearer ...` or `x-stackflow-admin-token`) for
+  `GET /signature-states` and `GET /forwarding/payments`.
+- `STACKFLOW_NODE_ADMIN_READ_LOCALHOST_ONLY` defaults to `true`; when no
+  admin token is configured, sensitive reads are limited to localhost sources.
+- `STACKFLOW_NODE_REDACT_SENSITIVE_READ_DATA` defaults to `true`; without an
+  admin token, signatures and revealed secrets are redacted in response bodies.
+`STACKFLOW_NODE_FORWARDING_ENABLED` enables routed transfer forwarding support.
+`STACKFLOW_NODE_FORWARDING_MIN_FEE` sets the minimum forwarding spread:
+`incomingAmount - outgoingAmount`.
+`STACKFLOW_NODE_FORWARDING_TIMEOUT_MS` controls timeout for next-hop signing calls.
+`STACKFLOW_NODE_FORWARDING_ALLOW_PRIVATE_DESTINATIONS` defaults to `false`; when
+`false`, forwarding destinations resolving to loopback/private/link-local/non-public
+IP ranges are rejected.
+`STACKFLOW_NODE_FORWARDING_ALLOWED_BASE_URLS` (optional) restricts allowed next-hop
+base URLs for forwarding.
+`STACKFLOW_NODE_FORWARDING_REVEAL_RETRY_INTERVAL_MS` controls how often pending
+upstream reveal propagation retries are attempted.
+`STACKFLOW_NODE_FORWARDING_REVEAL_RETRY_MAX_ATTEMPTS` sets the maximum reveal
+propagation attempts before a payment is marked `failed`.
 If `STACKFLOW_NODE_PRINCIPALS` is set, the stackflow-node only:
 
 1. accepts `POST /signature-states` for `forPrincipal` values in that list
@@ -275,6 +325,20 @@ Health and inspection endpoints:
 5. `GET /dispute-attempts?limit=100`
 6. `GET /events?limit=100`
 7. `GET /app` (built-in browser UI)
+8. `GET /forwarding/payments?limit=100`
+9. `GET /forwarding/payments?paymentId=<id>`
+
+Sensitive inspection endpoints (`/signature-states`, `/forwarding/payments`)
+return `401` when an admin token is configured but missing/invalid, and return
+`403` for non-local access when tokenless localhost-only mode is active.
+
+Public deployment hardening checklist:
+
+1. terminate TLS at ingress (or run end-to-end TLS/mTLS)
+2. require authn/authz for external callers at ingress
+3. restrict observer ingress (`STACKFLOW_NODE_OBSERVER_ALLOWED_IPS` and/or localhost-only)
+4. set `STACKFLOW_NODE_ADMIN_READ_TOKEN` for sensitive read endpoints
+5. keep `STACKFLOW_NODE_TRUST_PROXY=false` unless behind a trusted proxy chain
 
 Counterparty signing endpoints:
 
@@ -287,17 +351,105 @@ Counterparty signing endpoints:
 For `action = 2|3` (deposit/withdraw), include `amount` in the request body.
 Both endpoints:
 
-1. check local signing policy against stored state:
+1. require peer-protocol headers:
+   - `x-stackflow-protocol-version: 1`
+   - `x-stackflow-request-id: <8-128 chars [a-zA-Z0-9._:-]>`
+   - `idempotency-key: <8-128 chars [a-zA-Z0-9._:-]>`
+2. enforce idempotency per endpoint:
+   - same `idempotency-key` + same payload replays the original response
+   - same `idempotency-key` + different payload returns `409` (`idempotency-key-reused`)
+   - idempotency records are retention-pruned (24h TTL and capped history)
+3. check local signing policy against stored state:
    - reject if nonce is not strictly higher than latest known nonce
    - reject if counterparty balance would decrease
    - for transfer (`action = 1`), require counterparty balance to strictly increase
-2. verify the counterparty signature (`verify-signature-request`)
-3. generate the counterparty signature
-4. store the full signature pair via the existing signature-state pipeline
+4. verify the counterparty signature (`verify-signature-request`)
+5. generate the counterparty signature
+6. store the full signature pair via the existing signature-state pipeline
 
-Counterparty signature verification uses `verify-signature-request` (read-only) to
-apply action-aware on-chain balance logic, including `amount` checks for
-deposit/withdraw requests.
+Responses from counterparty endpoints include:
+
+- `protocolVersion`
+- `requestId` (echoed from request header)
+- `idempotencyKey` (echoed from request header)
+- `processedAt` (server timestamp)
+
+If the per-IP write limit is exceeded, these endpoints return `429` with
+`reason = "rate-limit-exceeded"` and a `Retry-After` header.
+
+Forwarding endpoint:
+
+1. `POST /forwarding/transfer`
+2. `POST /forwarding/reveal`
+
+`/forwarding/transfer` coordinates a routed transfer by:
+
+1. requesting a downstream signature from the configured next hop (`outgoing`)
+2. signing the upstream state locally (`incoming`)
+3. enforcing `incomingAmount - outgoingAmount >= STACKFLOW_NODE_FORWARDING_MIN_FEE`
+4. requiring a 32-byte `hashedSecret` for lock/reveal tracking
+5. persisting forwarding payment outcomes in SQLite
+6. retaining only the latest nonce record per `(contractId, pipeId)` in forwarding history
+
+Request body shape:
+
+```json
+{
+  "paymentId": "pay-2026-02-28-0001",
+  "incomingAmount": "1000",
+  "outgoingAmount": "950",
+  "hashedSecret": "0x...",
+  "upstream": {
+    "baseUrl": "http://127.0.0.1:8787",
+    "paymentId": "upstream-pay-0001",
+    "revealEndpoint": "/forwarding/reveal"
+  },
+  "incoming": { "...": "same payload as /counterparty/transfer" },
+  "outgoing": {
+    "baseUrl": "http://127.0.0.1:9797",
+    "endpoint": "/counterparty/transfer",
+    "payload": { "...": "payload sent to next hop counterparty endpoint" }
+  }
+}
+```
+
+`POST /forwarding/transfer` requires the same peer protocol headers as
+counterparty endpoints.
+For SSRF hardening, only these forwarding API paths are supported:
+
+- downstream next-hop endpoint: `/counterparty/transfer`
+- upstream reveal endpoint: `/forwarding/reveal`
+
+Custom endpoint paths are rejected.
+
+`POST /forwarding/reveal` request body:
+
+```json
+{
+  "paymentId": "pay-2026-02-28-0001",
+  "secret": "0x...32-byte-preimage"
+}
+```
+
+The server checks `sha256(secret) == hashedSecret` for that payment and stores
+the revealed secret for later dispute/finality workflows.
+If an `upstream` route is stored on that payment, the server immediately tries
+to propagate the reveal upstream and persists retry state in SQLite:
+
+1. `revealPropagationStatus = pending|propagated|failed|not-applicable`
+2. `revealPropagationAttempts` increments on each upstream attempt
+3. `revealNextRetryAt` schedules the next retry timestamp for pending records
+4. background retries resume automatically on process restart
+
+Forwarding retention notes:
+
+1. forwarding payment history keeps only the latest nonce entry per pipe
+2. older nonce entries are pruned once newer nonce data is stored for that pipe
+3. revealed-secret resolution is retained separately for dispute/recovery lookups
+
+Counterparty signature verification uses `verify-signature` for transfer actions
+and `verify-signature-request` for close/deposit/withdraw actions, preserving
+on-chain validation semantics for each action type.
 
 Signature state ingestion endpoint:
 
@@ -332,6 +484,7 @@ request returns `401` and nothing is stored.
 If the incoming nonce is not strictly higher than the stored nonce for that
 `(contract, pipe, forPrincipal)`, the request returns `409`.
 If `forPrincipal` is not in the effective watchlist, the request returns `403`.
+If the per-IP write limit is exceeded, the request returns `429`.
 
 On-chain pipe tracking:
 

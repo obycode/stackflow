@@ -1,3 +1,7 @@
+# SECURITY NOTE:
+# This file contains deterministic Clarinet devnet fixture mnemonics/keys.
+# They are public test fixtures only and must never be used in production.
+
 [network]
 name = "devnet"
 deployment_fee_rate = 10
@@ -154,4 +158,3 @@ auto_extend = true
 wallet = "wallet_3"
 slots = 2
 btc_address = "mvZtbibDAAA3WLpY7zXXFqRa3T4XSknBX7"
-

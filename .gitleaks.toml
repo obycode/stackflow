@@ -1,0 +1,9 @@
+title = "stackflow-gitleaks-config"
+
+[allowlist]
+description = "Known public test fixtures for Clarinet/devnet and deterministic test keys."
+paths = [
+  '''settings/Devnet\.toml''',
+  '''tests/stackflow-node-http\.integration\.test\.ts''',
+  '''tests/counterparty-service\.test\.ts''',
+]

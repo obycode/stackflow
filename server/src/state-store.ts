@@ -5,6 +5,8 @@ import { DatabaseSync } from 'node:sqlite';
 import type {
   ClosureRecord,
   DisputeAttemptRecord,
+  ForwardingPaymentRecord,
+  IdempotentResponseRecord,
   ObservedPipeRecord,
   PipeKey,
   RecordedStackflowNodeEvent,
@@ -16,6 +18,11 @@ interface SqliteStateStoreOptions {
   dbFile: string;
   maxRecentEvents?: number;
 }
+
+const IDEMPOTENT_RESPONSE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const IDEMPOTENT_RESPONSE_MAX_ROWS = 50_000;
+const FORWARDING_ORPHAN_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const FORWARDING_ORPHAN_MAX_ROWS = 5_000;
 
 interface ClosureRow {
   pipe_id: string;
@@ -83,8 +90,64 @@ interface DisputeAttemptRow {
   created_at: string;
 }
 
+interface IdempotentResponseRow {
+  endpoint: string;
+  idempotency_key: string;
+  request_hash: string;
+  status_code: number;
+  response_json: string;
+  created_at: string;
+}
+
+interface ForwardingPaymentRow {
+  payment_id: string;
+  contract_id: string | null;
+  pipe_id: string | null;
+  pipe_nonce: string | null;
+  status: string;
+  incoming_amount: string;
+  outgoing_amount: string;
+  fee_amount: string;
+  hashed_secret: string | null;
+  revealed_secret: string | null;
+  revealed_at: string | null;
+  upstream_base_url: string | null;
+  upstream_reveal_endpoint: string | null;
+  upstream_payment_id: string | null;
+  reveal_propagation_status: string;
+  reveal_propagation_attempts: number;
+  reveal_last_error: string | null;
+  reveal_next_retry_at: string | null;
+  reveal_propagated_at: string | null;
+  next_hop_base_url: string;
+  next_hop_endpoint: string;
+  result_json: string;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface RevealedSecretRow {
+  hashed_secret: string;
+  revealed_secret: string;
+  first_revealed_at: string;
+  last_revealed_at: string;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function parseUnsignedBigInt(value: string | null): bigint | null {
+  if (value === null || !/^\d+$/.test(value)) {
+    return null;
+  }
+
+  try {
+    return BigInt(value);
+  } catch {
+    return null;
+  }
 }
 
 function isLegacyState(value: unknown): value is StackflowNodePersistedState {
@@ -247,10 +310,68 @@ export class SqliteStateStore {
         event_json TEXT NOT NULL,
         observed_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS idempotent_responses (
+        endpoint TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        request_hash TEXT NOT NULL,
+        status_code INTEGER NOT NULL,
+        response_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (endpoint, idempotency_key)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_idempotent_responses_created_at
+        ON idempotent_responses(created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS forwarding_payments (
+        payment_id TEXT PRIMARY KEY,
+        contract_id TEXT,
+        pipe_id TEXT,
+        pipe_nonce TEXT,
+        status TEXT NOT NULL,
+        incoming_amount TEXT NOT NULL,
+        outgoing_amount TEXT NOT NULL,
+        fee_amount TEXT NOT NULL,
+        hashed_secret TEXT,
+        revealed_secret TEXT,
+        revealed_at TEXT,
+        upstream_base_url TEXT,
+        upstream_reveal_endpoint TEXT,
+        upstream_payment_id TEXT,
+        reveal_propagation_status TEXT NOT NULL DEFAULT 'not-applicable',
+        reveal_propagation_attempts INTEGER NOT NULL DEFAULT 0,
+        reveal_last_error TEXT,
+        reveal_next_retry_at TEXT,
+        reveal_propagated_at TEXT,
+        next_hop_base_url TEXT NOT NULL,
+        next_hop_endpoint TEXT NOT NULL,
+        result_json TEXT NOT NULL,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_forwarding_payments_updated_at
+        ON forwarding_payments(updated_at DESC);
+
+      CREATE INDEX IF NOT EXISTS idx_forwarding_payments_pipe
+        ON forwarding_payments(contract_id, pipe_id, updated_at DESC);
+
+      CREATE INDEX IF NOT EXISTS idx_forwarding_payments_reveal_retry
+        ON forwarding_payments(reveal_propagation_status, reveal_next_retry_at);
+
+      CREATE TABLE IF NOT EXISTS revealed_secrets (
+        hashed_secret TEXT PRIMARY KEY,
+        revealed_secret TEXT NOT NULL,
+        first_revealed_at TEXT NOT NULL,
+        last_revealed_at TEXT NOT NULL
+      );
     `);
 
     this.ensureObservedPipeColumns();
     this.ensureSignatureStateColumns();
+    this.ensureForwardingPaymentColumns();
 
     const setMeta = this.db.prepare(
       'INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)',
@@ -261,6 +382,10 @@ export class SqliteStateStore {
     if (legacyState) {
       this.importLegacyState(legacyState);
     }
+
+    this.pruneIdempotentResponses();
+    this.pruneForwardingPaymentOrphans();
+    this.pruneForwardingPaymentsLatestPerPipe();
   }
 
   close(): void {
@@ -312,6 +437,62 @@ export class SqliteStateStore {
     if (!existing.has('amount')) {
       db.exec("ALTER TABLE signature_states ADD COLUMN amount TEXT NOT NULL DEFAULT '0'");
     }
+  }
+
+  private ensureForwardingPaymentColumns(): void {
+    const db = this.getDb();
+    const columns = db
+      .prepare('PRAGMA table_info(forwarding_payments)')
+      .all() as Array<{ name: string }>;
+    const existing = new Set(columns.map((column) => column.name));
+
+    const required: Array<{ name: string; type: string }> = [
+      { name: 'contract_id', type: 'TEXT' },
+      { name: 'pipe_id', type: 'TEXT' },
+      { name: 'pipe_nonce', type: 'TEXT' },
+      { name: 'hashed_secret', type: 'TEXT' },
+      { name: 'revealed_secret', type: 'TEXT' },
+      { name: 'revealed_at', type: 'TEXT' },
+      { name: 'upstream_base_url', type: 'TEXT' },
+      { name: 'upstream_reveal_endpoint', type: 'TEXT' },
+      { name: 'upstream_payment_id', type: 'TEXT' },
+      {
+        name: 'reveal_propagation_status',
+        type: "TEXT NOT NULL DEFAULT 'not-applicable'",
+      },
+      { name: 'reveal_propagation_attempts', type: 'INTEGER NOT NULL DEFAULT 0' },
+      { name: 'reveal_last_error', type: 'TEXT' },
+      { name: 'reveal_next_retry_at', type: 'TEXT' },
+      { name: 'reveal_propagated_at', type: 'TEXT' },
+    ];
+
+    for (const column of required) {
+      if (existing.has(column.name)) {
+        continue;
+      }
+      db.exec(
+        `ALTER TABLE forwarding_payments ADD COLUMN ${column.name} ${column.type}`,
+      );
+    }
+
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_forwarding_payments_pipe
+        ON forwarding_payments(contract_id, pipe_id, updated_at DESC)
+    `);
+
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_forwarding_payments_reveal_retry
+        ON forwarding_payments(reveal_propagation_status, reveal_next_retry_at)
+    `);
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS revealed_secrets (
+        hashed_secret TEXT PRIMARY KEY,
+        revealed_secret TEXT NOT NULL,
+        first_revealed_at TEXT NOT NULL,
+        last_revealed_at TEXT NOT NULL
+      )
+    `);
   }
 
   private loadLegacyJsonState(): StackflowNodePersistedState | null {
@@ -619,6 +800,244 @@ export class SqliteStateStore {
       error: row.error,
       createdAt: row.created_at,
     };
+  }
+
+  private mapIdempotentResponseRow(
+    row: IdempotentResponseRow,
+  ): IdempotentResponseRecord | null {
+    try {
+      const parsed = JSON.parse(row.response_json);
+      if (!isRecord(parsed)) {
+        return null;
+      }
+
+      return {
+        endpoint: row.endpoint,
+        idempotencyKey: row.idempotency_key,
+        requestHash: row.request_hash,
+        statusCode: row.status_code,
+        responseJson: parsed,
+        createdAt: row.created_at,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private mapForwardingPaymentRow(
+    row: ForwardingPaymentRow,
+  ): ForwardingPaymentRecord | null {
+    if (row.status !== 'completed' && row.status !== 'failed') {
+      return null;
+    }
+
+    if (
+      row.reveal_propagation_status !== 'not-applicable' &&
+      row.reveal_propagation_status !== 'pending' &&
+      row.reveal_propagation_status !== 'propagated' &&
+      row.reveal_propagation_status !== 'failed'
+    ) {
+      return null;
+    }
+
+    try {
+      const parsed = JSON.parse(row.result_json);
+      if (!isRecord(parsed)) {
+        return null;
+      }
+
+      return {
+        paymentId: row.payment_id,
+        contractId: row.contract_id,
+        pipeId: row.pipe_id,
+        pipeNonce: row.pipe_nonce,
+        status: row.status,
+        incomingAmount: row.incoming_amount,
+        outgoingAmount: row.outgoing_amount,
+        feeAmount: row.fee_amount,
+        hashedSecret: row.hashed_secret,
+        revealedSecret: row.revealed_secret,
+        revealedAt: row.revealed_at,
+        upstreamBaseUrl: row.upstream_base_url,
+        upstreamRevealEndpoint: row.upstream_reveal_endpoint,
+        upstreamPaymentId: row.upstream_payment_id,
+        revealPropagationStatus: row.reveal_propagation_status,
+        revealPropagationAttempts: Math.max(
+          0,
+          Number.isFinite(row.reveal_propagation_attempts)
+            ? row.reveal_propagation_attempts
+            : 0,
+        ),
+        revealLastError: row.reveal_last_error,
+        revealNextRetryAt: row.reveal_next_retry_at,
+        revealPropagatedAt: row.reveal_propagated_at,
+        nextHopBaseUrl: row.next_hop_base_url,
+        nextHopEndpoint: row.next_hop_endpoint,
+        resultJson: parsed,
+        error: row.error,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private syncRevealedSecret(record: ForwardingPaymentRecord): void {
+    if (!record.hashedSecret || !record.revealedSecret) {
+      return;
+    }
+
+    const db = this.getDb();
+    const observedAt = record.revealedAt ?? record.updatedAt;
+    db.prepare(`
+      INSERT INTO revealed_secrets (
+        hashed_secret,
+        revealed_secret,
+        first_revealed_at,
+        last_revealed_at
+      ) VALUES (?, ?, ?, ?)
+      ON CONFLICT(hashed_secret) DO UPDATE SET
+        revealed_secret = excluded.revealed_secret,
+        last_revealed_at = excluded.last_revealed_at
+    `).run(
+      record.hashedSecret,
+      record.revealedSecret,
+      observedAt,
+      observedAt,
+    );
+  }
+
+  private pruneIdempotentResponses(): void {
+    const db = this.getDb();
+    const cutoffIso = new Date(Date.now() - IDEMPOTENT_RESPONSE_MAX_AGE_MS).toISOString();
+    db.prepare(`
+      DELETE FROM idempotent_responses
+      WHERE created_at < ?
+    `).run(cutoffIso);
+
+    db.prepare(`
+      DELETE FROM idempotent_responses
+      WHERE rowid NOT IN (
+        SELECT rowid FROM idempotent_responses
+        ORDER BY created_at DESC
+        LIMIT ?
+      )
+    `).run(IDEMPOTENT_RESPONSE_MAX_ROWS);
+  }
+
+  private pruneForwardingPaymentOrphans(): void {
+    const db = this.getDb();
+    const cutoffIso = new Date(Date.now() - FORWARDING_ORPHAN_MAX_AGE_MS).toISOString();
+    db.prepare(`
+      DELETE FROM forwarding_payments
+      WHERE (
+        contract_id IS NULL OR contract_id = '' OR
+        pipe_id IS NULL OR pipe_id = '' OR
+        pipe_nonce IS NULL OR pipe_nonce = ''
+      )
+      AND reveal_propagation_status <> 'pending'
+      AND updated_at < ?
+    `).run(cutoffIso);
+
+    db.prepare(`
+      DELETE FROM forwarding_payments
+      WHERE payment_id IN (
+        SELECT payment_id
+        FROM forwarding_payments
+        WHERE (
+          contract_id IS NULL OR contract_id = '' OR
+          pipe_id IS NULL OR pipe_id = '' OR
+          pipe_nonce IS NULL OR pipe_nonce = ''
+        )
+        AND reveal_propagation_status <> 'pending'
+        ORDER BY updated_at DESC
+        LIMIT -1 OFFSET ?
+      )
+    `).run(FORWARDING_ORPHAN_MAX_ROWS);
+  }
+
+  private selectLatestForwardingPaymentId(
+    rows: Array<{ payment_id: string; pipe_nonce: string | null; updated_at: string }>,
+  ): string | null {
+    let keep: { paymentId: string; nonce: bigint | null; updatedAt: string } | null = null;
+    for (const row of rows) {
+      const candidate = {
+        paymentId: row.payment_id,
+        nonce: parseUnsignedBigInt(row.pipe_nonce),
+        updatedAt: row.updated_at,
+      };
+      if (!keep) {
+        keep = candidate;
+        continue;
+      }
+
+      if (candidate.nonce !== null && keep.nonce === null) {
+        keep = candidate;
+        continue;
+      }
+      if (candidate.nonce === null && keep.nonce !== null) {
+        continue;
+      }
+
+      if (candidate.nonce !== null && keep.nonce !== null) {
+        if (candidate.nonce > keep.nonce) {
+          keep = candidate;
+          continue;
+        }
+        if (candidate.nonce < keep.nonce) {
+          continue;
+        }
+      }
+
+      if (candidate.updatedAt > keep.updatedAt) {
+        keep = candidate;
+      }
+    }
+
+    return keep?.paymentId ?? null;
+  }
+
+  private pruneForwardingPaymentsForPipe(contractId: string, pipeId: string): void {
+    const db = this.getDb();
+    const rows = db.prepare(`
+      SELECT payment_id, pipe_nonce, updated_at
+      FROM forwarding_payments
+      WHERE contract_id = ? AND pipe_id = ?
+      ORDER BY updated_at DESC
+    `).all(contractId, pipeId) as Array<{
+      payment_id: string;
+      pipe_nonce: string | null;
+      updated_at: string;
+    }>;
+
+    if (rows.length <= 1) {
+      return;
+    }
+
+    const keepPaymentId = this.selectLatestForwardingPaymentId(rows);
+    if (!keepPaymentId) {
+      return;
+    }
+
+    db.prepare(`
+      DELETE FROM forwarding_payments
+      WHERE contract_id = ? AND pipe_id = ? AND payment_id <> ?
+    `).run(contractId, pipeId, keepPaymentId);
+  }
+
+  private pruneForwardingPaymentsLatestPerPipe(): void {
+    const db = this.getDb();
+    const pipes = db.prepare(`
+      SELECT DISTINCT contract_id, pipe_id
+      FROM forwarding_payments
+      WHERE contract_id IS NOT NULL AND contract_id <> ''
+        AND pipe_id IS NOT NULL AND pipe_id <> ''
+    `).all() as Array<{ contract_id: string; pipe_id: string }>;
+
+    for (const pipe of pipes) {
+      this.pruneForwardingPaymentsForPipe(pipe.contract_id, pipe.pipe_id);
+    }
   }
 
   getSnapshot(): StackflowNodePersistedState {
@@ -1005,5 +1424,242 @@ export class SqliteStateStore {
       .prepare('SELECT * FROM dispute_attempts ORDER BY created_at DESC')
       .all() as unknown as DisputeAttemptRow[];
     return rows.map((row) => this.mapDisputeAttemptRow(row));
+  }
+
+  getIdempotentResponse(
+    endpoint: string,
+    idempotencyKey: string,
+  ): IdempotentResponseRecord | null {
+    const db = this.getDb();
+    const row = db
+      .prepare(`
+        SELECT * FROM idempotent_responses
+        WHERE endpoint = ? AND idempotency_key = ?
+      `)
+      .get(endpoint, idempotencyKey) as IdempotentResponseRow | undefined;
+    if (!row) {
+      return null;
+    }
+    return this.mapIdempotentResponseRow(row);
+  }
+
+  setIdempotentResponse(response: IdempotentResponseRecord): boolean {
+    const db = this.getDb();
+    const result = db.prepare(`
+      INSERT OR IGNORE INTO idempotent_responses (
+        endpoint,
+        idempotency_key,
+        request_hash,
+        status_code,
+        response_json,
+        created_at
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      response.endpoint,
+      response.idempotencyKey,
+      response.requestHash,
+      response.statusCode,
+      JSON.stringify(response.responseJson),
+      response.createdAt,
+    );
+
+    if (result.changes > 0) {
+      this.pruneIdempotentResponses();
+      this.touchUpdatedAt();
+      return true;
+    }
+
+    return false;
+  }
+
+  setForwardingPayment(record: ForwardingPaymentRecord): void {
+    const db = this.getDb();
+    db.prepare(`
+      INSERT INTO forwarding_payments (
+        payment_id,
+        contract_id,
+        pipe_id,
+        pipe_nonce,
+        status,
+        incoming_amount,
+        outgoing_amount,
+        fee_amount,
+        hashed_secret,
+        revealed_secret,
+        revealed_at,
+        upstream_base_url,
+        upstream_reveal_endpoint,
+        upstream_payment_id,
+        reveal_propagation_status,
+        reveal_propagation_attempts,
+        reveal_last_error,
+        reveal_next_retry_at,
+        reveal_propagated_at,
+        next_hop_base_url,
+        next_hop_endpoint,
+        result_json,
+        error,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(payment_id) DO UPDATE SET
+        contract_id = excluded.contract_id,
+        pipe_id = excluded.pipe_id,
+        pipe_nonce = excluded.pipe_nonce,
+        status = excluded.status,
+        incoming_amount = excluded.incoming_amount,
+        outgoing_amount = excluded.outgoing_amount,
+        fee_amount = excluded.fee_amount,
+        hashed_secret = excluded.hashed_secret,
+        revealed_secret = excluded.revealed_secret,
+        revealed_at = excluded.revealed_at,
+        upstream_base_url = excluded.upstream_base_url,
+        upstream_reveal_endpoint = excluded.upstream_reveal_endpoint,
+        upstream_payment_id = excluded.upstream_payment_id,
+        reveal_propagation_status = excluded.reveal_propagation_status,
+        reveal_propagation_attempts = excluded.reveal_propagation_attempts,
+        reveal_last_error = excluded.reveal_last_error,
+        reveal_next_retry_at = excluded.reveal_next_retry_at,
+        reveal_propagated_at = excluded.reveal_propagated_at,
+        next_hop_base_url = excluded.next_hop_base_url,
+        next_hop_endpoint = excluded.next_hop_endpoint,
+        result_json = excluded.result_json,
+        error = excluded.error,
+        updated_at = excluded.updated_at
+    `).run(
+      record.paymentId,
+      record.contractId,
+      record.pipeId,
+      record.pipeNonce,
+      record.status,
+      record.incomingAmount,
+      record.outgoingAmount,
+      record.feeAmount,
+      record.hashedSecret,
+      record.revealedSecret,
+      record.revealedAt,
+      record.upstreamBaseUrl,
+      record.upstreamRevealEndpoint,
+      record.upstreamPaymentId,
+      record.revealPropagationStatus,
+      record.revealPropagationAttempts,
+      record.revealLastError,
+      record.revealNextRetryAt,
+      record.revealPropagatedAt,
+      record.nextHopBaseUrl,
+      record.nextHopEndpoint,
+      JSON.stringify(record.resultJson),
+      record.error,
+      record.createdAt,
+      record.updatedAt,
+    );
+    this.syncRevealedSecret(record);
+    if (record.contractId && record.pipeId) {
+      this.pruneForwardingPaymentsForPipe(record.contractId, record.pipeId);
+    } else {
+      this.pruneForwardingPaymentOrphans();
+    }
+    this.touchUpdatedAt();
+  }
+
+  getForwardingPayment(paymentId: string): ForwardingPaymentRecord | null {
+    const db = this.getDb();
+    const row = db.prepare(`
+      SELECT * FROM forwarding_payments
+      WHERE payment_id = ?
+    `).get(paymentId) as ForwardingPaymentRow | undefined;
+
+    if (!row) {
+      return null;
+    }
+    return this.mapForwardingPaymentRow(row);
+  }
+
+  listForwardingPayments(limit = 100): ForwardingPaymentRecord[] {
+    const db = this.getDb();
+    const normalizedLimit = Math.max(1, Math.min(limit, 500));
+    const rows = db.prepare(`
+      SELECT * FROM forwarding_payments
+      ORDER BY updated_at DESC
+      LIMIT ?
+    `).all(normalizedLimit) as unknown as ForwardingPaymentRow[];
+
+    const out: ForwardingPaymentRecord[] = [];
+    for (const row of rows) {
+      const mapped = this.mapForwardingPaymentRow(row);
+      if (mapped) {
+        out.push(mapped);
+      }
+    }
+    return out;
+  }
+
+  listForwardingRevealRetriesDue(
+    nowIso: string,
+    limit = 25,
+  ): ForwardingPaymentRecord[] {
+    const db = this.getDb();
+    const normalizedLimit = Math.max(1, Math.min(limit, 500));
+    const rows = db.prepare(`
+      SELECT * FROM forwarding_payments
+      WHERE reveal_propagation_status = 'pending'
+        AND reveal_next_retry_at IS NOT NULL
+        AND reveal_next_retry_at <= ?
+      ORDER BY reveal_next_retry_at ASC, updated_at ASC
+      LIMIT ?
+    `).all(nowIso, normalizedLimit) as unknown as ForwardingPaymentRow[];
+
+    const out: ForwardingPaymentRecord[] = [];
+    for (const row of rows) {
+      const mapped = this.mapForwardingPaymentRow(row);
+      if (mapped) {
+        out.push(mapped);
+      }
+    }
+    return out;
+  }
+
+  getRevealedSecretByHash(hashedSecret: string): string | null {
+    const db = this.getDb();
+    const revealed = db.prepare(`
+      SELECT revealed_secret
+      FROM revealed_secrets
+      WHERE hashed_secret = ?
+      LIMIT 1
+    `).get(hashedSecret) as RevealedSecretRow | undefined;
+    if (revealed?.revealed_secret) {
+      return revealed.revealed_secret;
+    }
+
+    const row = db.prepare(`
+      SELECT revealed_secret
+      FROM forwarding_payments
+      WHERE hashed_secret = ? AND revealed_secret IS NOT NULL
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `).get(hashedSecret) as { revealed_secret: string } | undefined;
+
+    return row?.revealed_secret ?? null;
+  }
+
+  hasForwardingPaymentHash(hashedSecret: string): boolean {
+    const db = this.getDb();
+    const revealed = db.prepare(`
+      SELECT 1 as present
+      FROM revealed_secrets
+      WHERE hashed_secret = ?
+      LIMIT 1
+    `).get(hashedSecret) as { present: number } | undefined;
+    if (Boolean(revealed?.present)) {
+      return true;
+    }
+
+    const row = db.prepare(`
+      SELECT 1 as present
+      FROM forwarding_payments
+      WHERE hashed_secret = ?
+      LIMIT 1
+    `).get(hashedSecret) as { present: number } | undefined;
+    return Boolean(row?.present);
   }
 }

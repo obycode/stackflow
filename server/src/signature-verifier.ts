@@ -18,6 +18,8 @@ import type {
   StackflowNodeConfig,
 } from './types.js';
 
+const ACTION_TRANSFER = '1';
+
 const STACKFLOW_CONTRACT_ERROR_MESSAGES: Record<string, string> = {
   '100': 'deposit failed',
   '101': 'no such pipe',
@@ -128,13 +130,31 @@ export class ReadOnlySignatureVerifier implements SignatureVerifier {
       signature: string,
       signer: string,
     ): Promise<SignatureVerificationResult> => {
+      const isTransfer = input.action === ACTION_TRANSFER;
       const response = await fetchCallReadOnlyFunction({
         network: this.network,
         senderAddress: senderAddressForPrincipal(input.forPrincipal),
         contractAddress: contract.address,
         contractName: contract.name,
-        functionName: 'verify-signature-request',
-        functionArgs: functionArgs(signature, signer),
+        functionName: isTransfer ? 'verify-signature' : 'verify-signature-request',
+        functionArgs: isTransfer
+          ? [
+              bufferCV(hexToBytes(signature)),
+              principalCV(signer),
+              tupleCV({
+                token: tokenArg,
+                'principal-1': principalCV(pipeKey['principal-1']),
+                'principal-2': principalCV(pipeKey['principal-2']),
+              }),
+              uintCV(BigInt(balance1)),
+              uintCV(BigInt(balance2)),
+              uintCV(BigInt(input.nonce)),
+              uintCV(BigInt(input.action)),
+              principalCV(input.actor),
+              secretArg,
+              validAfterArg,
+            ]
+          : functionArgs(signature, signer),
       });
 
       if (response.type === ClarityType.ResponseErr) {

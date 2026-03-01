@@ -49,6 +49,12 @@ On startup the store configures:
 - `dispute_attempts(attempt_id PRIMARY KEY, ...)`
   - Index: `created_at DESC`
 - `recent_events(seq INTEGER PRIMARY KEY AUTOINCREMENT, event_json, observed_at)`
+- `idempotent_responses((endpoint,idempotency_key) PRIMARY KEY, ...)`
+  - Index: `created_at DESC`
+- `forwarding_payments(payment_id PRIMARY KEY, contract_id, pipe_id, pipe_nonce, ...)`
+  - Indexes: `(updated_at DESC)`, `(contract_id, pipe_id, updated_at DESC)`,
+    `(reveal_propagation_status, reveal_next_retry_at)`
+- `revealed_secrets(hashed_secret PRIMARY KEY, revealed_secret, ...)`
 
 ### Logical keys
 
@@ -61,6 +67,10 @@ On startup the store configures:
 - Every write updates `meta.updated_at`.
 - `recent_events` is capped by `STACKFLOW_NODE_MAX_RECENT_EVENTS` (default `500`).
 - `recent_events` is pruned after each insert.
+- `idempotent_responses` is retention-pruned (TTL + max-row cap).
+- `forwarding_payments` keeps only the latest nonce entry per `(contract_id, pipe_id)`.
+- `revealed_secrets` persists hashed-secret to revealed-secret resolution for
+  dispute/recovery lookups after forwarding-history pruning.
 
 ## API
 
@@ -168,9 +178,24 @@ Deduping:
 - `STACKFLOW_NODE_SIGNATURE_VERIFIER_MODE` (`readonly|accept-all|reject-all`)
 - `STACKFLOW_NODE_DISPUTE_EXECUTOR_MODE` (`auto|noop|mock`)
 - `STACKFLOW_NODE_DISPUTE_ONLY_BENEFICIAL`
+- `STACKFLOW_NODE_TRUST_PROXY` (default `false`)
+- `STACKFLOW_NODE_OBSERVER_LOCALHOST_ONLY` (default `true`)
+- `STACKFLOW_NODE_OBSERVER_ALLOWED_IPS` (CSV source allowlist for observer routes)
+- `STACKFLOW_NODE_ADMIN_READ_TOKEN` (optional admin token for sensitive reads)
+- `STACKFLOW_NODE_ADMIN_READ_LOCALHOST_ONLY` (default `true`)
+- `STACKFLOW_NODE_REDACT_SENSITIVE_READ_DATA` (default `true`)
+- `STACKFLOW_NODE_FORWARDING_ENABLED`
+- `STACKFLOW_NODE_FORWARDING_MIN_FEE`
+- `STACKFLOW_NODE_FORWARDING_TIMEOUT_MS`
+- `STACKFLOW_NODE_FORWARDING_ALLOW_PRIVATE_DESTINATIONS` (default `false`)
+- `STACKFLOW_NODE_FORWARDING_ALLOWED_BASE_URLS`
+- `STACKFLOW_NODE_FORWARDING_REVEAL_RETRY_INTERVAL_MS`
+- `STACKFLOW_NODE_FORWARDING_REVEAL_RETRY_MAX_ATTEMPTS`
 
 ## Production Notes
 
+- Default bind host is `127.0.0.1`; expose publicly only behind hardened ingress.
+- For non-local deployments, terminate TLS and enforce authn/authz at ingress.
 - SQLite provides transactional durability and better recovery than JSON file snapshots.
 - WAL mode improves write reliability and read concurrency for status endpoints.
 - This implementation uses `node:sqlite`; on current Node versions it may emit an experimental warning.

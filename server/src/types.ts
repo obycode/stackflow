@@ -145,6 +145,43 @@ export interface StackflowNodePersistedState {
   recentEvents: RecordedStackflowNodeEvent[];
 }
 
+export interface IdempotentResponseRecord {
+  endpoint: string;
+  idempotencyKey: string;
+  requestHash: string;
+  statusCode: number;
+  responseJson: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface ForwardingPaymentRecord {
+  paymentId: string;
+  contractId: string | null;
+  pipeId: string | null;
+  pipeNonce: string | null;
+  status: 'completed' | 'failed';
+  incomingAmount: string;
+  outgoingAmount: string;
+  feeAmount: string;
+  hashedSecret: string | null;
+  revealedSecret: string | null;
+  revealedAt: string | null;
+  upstreamBaseUrl: string | null;
+  upstreamRevealEndpoint: string | null;
+  upstreamPaymentId: string | null;
+  revealPropagationStatus: 'not-applicable' | 'pending' | 'propagated' | 'failed';
+  revealPropagationAttempts: number;
+  revealLastError: string | null;
+  revealNextRetryAt: string | null;
+  revealPropagatedAt: string | null;
+  nextHopBaseUrl: string;
+  nextHopEndpoint: string;
+  resultJson: Record<string, unknown>;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface RecordedStackflowNodeEvent extends StackflowPrintEvent {
   source: string | null;
   observedAt: string;
@@ -200,6 +237,20 @@ export interface StackflowNodeConfig {
   signatureVerifierMode: SignatureVerifierMode;
   disputeExecutorMode: DisputeExecutorMode;
   disputeOnlyBeneficial: boolean;
+  peerWriteRateLimitPerMinute: number;
+  trustProxy: boolean;
+  observerLocalhostOnly: boolean;
+  observerAllowedIps: string[];
+  adminReadToken: string | null;
+  adminReadLocalhostOnly: boolean;
+  redactSensitiveReadData: boolean;
+  forwardingEnabled: boolean;
+  forwardingMinFee: string;
+  forwardingTimeoutMs: number;
+  forwardingAllowPrivateDestinations: boolean;
+  forwardingAllowedBaseUrls: string[];
+  forwardingRevealRetryIntervalMs: number;
+  forwardingRevealRetryMaxAttempts: number;
 }
 
 export interface SubmitDisputeResult {
@@ -211,6 +262,7 @@ export interface DisputeExecutor {
   readonly signerAddress: string | null;
   submitDispute(args: {
     signatureState: SignatureStateRecord;
+    resolvedSecret: string | null;
     closure: ClosureRecord;
     triggerEvent: StackflowPrintEvent;
   }): Promise<SubmitDisputeResult>;

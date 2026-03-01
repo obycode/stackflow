@@ -107,6 +107,11 @@ function normalizeOptionalHexBuff(
   return normalizeHexBuff(input, bytes, fieldName);
 }
 
+function sha256Hex(inputHex: string): string {
+  const bytes = Buffer.from(normalizeHex(inputHex).slice(2), 'hex');
+  return `0x${createHash('sha256').update(bytes).digest('hex')}`;
+}
+
 function normalizeBool(input: unknown, fallback: boolean): boolean {
   if (input === undefined || input === null || input === '') {
     return fallback;
@@ -394,7 +399,7 @@ function buildCounterpartySigningContext(request: CounterpartySignRequest): Coun
       : request.myBalance;
 
   const tokenArg = request.token ? someCV(principalCV(request.token)) : noneCV();
-  const secretArg = request.secret
+  const hashedSecretArg = request.secret
     ? someCV(bufferCV(hexToBytes(request.secret)))
     : noneCV();
   const validAfterArg = request.validAfter
@@ -406,7 +411,7 @@ function buildCounterpartySigningContext(request: CounterpartySignRequest): Coun
     balance1,
     balance2,
     tokenArg,
-    secretArg,
+    secretArg: hashedSecretArg,
     validAfterArg,
   };
 }
@@ -482,24 +487,43 @@ async function verifyCounterpartyWithReadonly(
     senderAddress: senderAddressForPrincipal(counterpartyPrincipal),
     contractAddress: contract.address,
     contractName: contract.name,
-    functionName: 'verify-signature-request',
-    functionArgs: [
-      bufferCV(hexToBytes(request.theirSignature)),
-      principalCV(request.withPrincipal),
-      tupleCV({
-        token: context.tokenArg,
-        'principal-1': principalCV(context.pipeKey['principal-1']),
-        'principal-2': principalCV(context.pipeKey['principal-2']),
-      }),
-      uintCV(BigInt(context.balance1)),
-      uintCV(BigInt(context.balance2)),
-      uintCV(BigInt(request.nonce)),
-      uintCV(BigInt(request.action)),
-      principalCV(request.actor),
-      context.secretArg,
-      context.validAfterArg,
-      uintCV(BigInt(request.amount)),
-    ],
+    functionName: request.action === ACTION_TRANSFER
+      ? 'verify-signature'
+      : 'verify-signature-request',
+    functionArgs: request.action === ACTION_TRANSFER
+      ? [
+          bufferCV(hexToBytes(request.theirSignature)),
+          principalCV(request.withPrincipal),
+          tupleCV({
+            token: context.tokenArg,
+            'principal-1': principalCV(context.pipeKey['principal-1']),
+            'principal-2': principalCV(context.pipeKey['principal-2']),
+          }),
+          uintCV(BigInt(context.balance1)),
+          uintCV(BigInt(context.balance2)),
+          uintCV(BigInt(request.nonce)),
+          uintCV(BigInt(request.action)),
+          principalCV(request.actor),
+          context.secretArg,
+          context.validAfterArg,
+        ]
+      : [
+          bufferCV(hexToBytes(request.theirSignature)),
+          principalCV(request.withPrincipal),
+          tupleCV({
+            token: context.tokenArg,
+            'principal-1': principalCV(context.pipeKey['principal-1']),
+            'principal-2': principalCV(context.pipeKey['principal-2']),
+          }),
+          uintCV(BigInt(context.balance1)),
+          uintCV(BigInt(context.balance2)),
+          uintCV(BigInt(request.nonce)),
+          uintCV(BigInt(request.action)),
+          principalCV(request.actor),
+          context.secretArg,
+          context.validAfterArg,
+          uintCV(BigInt(request.amount)),
+        ],
   });
 
   if (response.type === ClarityType.ResponseErr) {
@@ -583,6 +607,25 @@ function parseCounterpartySignRequest(
       ? parseUIntField(data.amount, 'amount')
       : parseOptionalUIntField(data.amount, 'amount') || '0';
 
+  const hashedSecret = normalizeOptionalHexBuff(data.hashedSecret, 32, 'hashedSecret');
+  const rawSecret = normalizeOptionalHexBuff(data.secret, 32, 'secret');
+  if (hashedSecret && rawSecret && hashedSecret !== rawSecret) {
+    throw new CounterpartyServiceError(
+      400,
+      'hashedSecret and secret must match when both are provided',
+    );
+  }
+  if (
+    action !== ACTION_TRANSFER &&
+    hashedSecret &&
+    !rawSecret
+  ) {
+    throw new CounterpartyServiceError(
+      400,
+      'hashedSecret is only supported for transfer actions',
+    );
+  }
+
   return {
     contractId: normalizeContractId(data.contractId),
     forPrincipal: options.counterpartyPrincipal,
@@ -599,7 +642,18 @@ function parseCounterpartySignRequest(
     nonce: parseUIntField(data.nonce, 'nonce'),
     action,
     actor: parsePrincipalField(data.actor, 'actor'),
-    secret: normalizeOptionalHexBuff(data.secret, 32, 'secret'),
+    secret: (() => {
+      if (hashedSecret) {
+        return hashedSecret;
+      }
+      if (rawSecret && action === ACTION_TRANSFER) {
+        return rawSecret;
+      }
+      if (rawSecret) {
+        return sha256Hex(rawSecret);
+      }
+      return null;
+    })(),
     validAfter: parseOptionalUIntField(data.validAfter, 'validAfter'),
     beneficialOnly: normalizeBool(data.beneficialOnly, false),
   };

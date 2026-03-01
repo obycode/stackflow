@@ -55,8 +55,10 @@ export class StacksDisputeExecutor implements DisputeExecutor {
 
   async submitDispute({
     signatureState,
+    resolvedSecret,
   }: {
     signatureState: SignatureStateRecord;
+    resolvedSecret: string | null;
     closure: ClosureRecord;
     triggerEvent: StackflowPrintEvent;
   }): Promise<SubmitDisputeResult> {
@@ -70,8 +72,8 @@ export class StacksDisputeExecutor implements DisputeExecutor {
       ? someCV(principalCV(signatureState.token))
       : noneCV();
 
-    const secretArg = signatureState.secret
-      ? someCV(bufferCV(hexToBytes(signatureState.secret)))
+    const secretArg = resolvedSecret
+      ? someCV(bufferCV(hexToBytes(resolvedSecret)))
       : noneCV();
 
     const validAfterArg = signatureState.validAfter

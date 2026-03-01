@@ -42,6 +42,7 @@ interface UpsertSignatureStateOptions {
 
 const OPEN_CLOSURE_EVENTS = new Set(['force-cancel', 'force-close']);
 const TERMINAL_EVENTS = new Set(['close-pipe', 'dispute-closure', 'finalize']);
+const ACTION_TRANSFER = '1';
 const ACTION_DEPOSIT = '2';
 const ACTION_WITHDRAWAL = '3';
 
@@ -179,6 +180,11 @@ function parseSignatureStateInput(
   const withPrincipal = parsePrincipal(data.withPrincipal, 'withPrincipal');
   const token = normalizeToken(data.token);
   const action = parseUInt(data.action);
+  const hashedSecret = normalizeOptionalHexBuff(data.hashedSecret, 32, 'hashedSecret');
+  const secret = normalizeOptionalHexBuff(data.secret, 32, 'secret');
+  if (hashedSecret && secret && hashedSecret !== secret) {
+    throw new Error('hashedSecret and secret must match when both are provided');
+  }
   const amount =
     action === ACTION_DEPOSIT || action === ACTION_WITHDRAWAL
       ? parseUInt(data.amount)
@@ -197,7 +203,9 @@ function parseSignatureStateInput(
     nonce: parseUInt(data.nonce),
     action,
     actor: parsePrincipal(data.actor, 'actor'),
-    secret: normalizeOptionalHexBuff(data.secret, 32, 'secret'),
+    secret: action === ACTION_TRANSFER
+      ? (hashedSecret ?? secret)
+      : secret,
     validAfter: parseOptionalUInt(data.validAfter),
     beneficialOnly: normalizeBool(data.beneficialOnly, defaultBeneficialOnly),
   };
@@ -699,12 +707,25 @@ export class StackflowNode {
 
       const useBeneficialPolicy = this.disputeOnlyBeneficial || state.beneficialOnly;
       if (!useBeneficialPolicy) {
+        if (state.action === ACTION_TRANSFER && state.secret) {
+          if (this.stateStore.hasForwardingPaymentHash(state.secret)) {
+            return this.stateStore.getRevealedSecretByHash(state.secret) !== null;
+          }
+        }
         return true;
       }
 
       const closureBalance = getClosureSideBalance(triggerEvent, state.forPrincipal);
       if (closureBalance === null) {
         return false;
+      }
+
+      if (state.action === ACTION_TRANSFER && state.secret) {
+        if (this.stateStore.hasForwardingPaymentHash(state.secret)) {
+          if (this.stateStore.getRevealedSecretByHash(state.secret) === null) {
+            return false;
+          }
+        }
       }
 
       return BigInt(state.myBalance) > BigInt(closureBalance);
@@ -734,8 +755,13 @@ export class StackflowNode {
     );
 
     try {
+      const resolvedSecret =
+        eligible.action === ACTION_TRANSFER && eligible.secret
+          ? (this.stateStore.getRevealedSecretByHash(eligible.secret) ?? eligible.secret)
+          : eligible.secret;
       const result = await this.disputeExecutor.submitDispute({
         signatureState: eligible,
+        resolvedSecret,
         closure,
         triggerEvent,
       });
