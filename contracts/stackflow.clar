@@ -29,8 +29,7 @@
 ;; SOFTWARE.
 
 (use-trait sip-010 'SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE.sip-010-trait-ft-standard.sip-010-trait)
-;; (impl-trait 'SP126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT6AD08RV.stackflow-token-0-6-0.stackflow-token)
-(impl-trait .stackflow-token.stackflow-token)
+(impl-trait 'SP126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT6AD08RV.stackflow-token-0-6-0.stackflow-token)
 
 (define-constant CONTRACT_DEPLOYER tx-sender)
 (define-constant MAX_HEIGHT u340282366920938463463374607431768211455)

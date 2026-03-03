@@ -8,6 +8,9 @@ cache_dir = './.cache'
 [[project.requirements]]
 contract_id = 'SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE.sip-010-trait-ft-standard'
 
+[[project.requirements]]
+contract_id = "SP126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT6AD08RV.stackflow-token-0-6-0.stackflow-token"
+
 [contracts.reservoir]
 path = 'contracts/reservoir.clar'
 clarity_version = 4
