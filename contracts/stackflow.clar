@@ -828,7 +828,7 @@
     )
     (try! (balance-check pipe-key balance-1 balance-2 valid-after))
     (try! (nonce-check pipe-key nonce))
-    (try! (verify-hash-signature hash signature signer actor))
+    (try! (verify-hash-signature hash signature signer))
     (if (> after burn-block-height)
       (ok (some (- after burn-block-height)))
       (ok none)
@@ -915,7 +915,7 @@
     (try! (validate-transition pipe-key balance-1 balance-2 nonce action actor amount
       valid-after
     ))
-    (try! (verify-hash-signature hash signature signer actor))
+    (try! (verify-hash-signature hash signature signer))
     (if (> after burn-block-height)
       (ok (some (- after burn-block-height)))
       (ok none)
@@ -959,10 +959,10 @@
       )))
     )
     (try! (balance-check pipe-key balance-1 balance-2 valid-after))
-    (unwrap! (verify-hash-signature hash signature-1 signer-1 actor)
+    (unwrap! (verify-hash-signature hash signature-1 signer-1)
       ERR_INVALID_SENDER_SIGNATURE
     )
-    (unwrap! (verify-hash-signature hash signature-2 signer-2 actor)
+    (unwrap! (verify-hash-signature hash signature-2 signer-2)
       ERR_INVALID_OTHER_SIGNATURE
     )
     (ok true)
@@ -1294,7 +1294,6 @@
     (hash (buff 32))
     (signature (buff 65))
     (signer principal)
-    (actor principal)
   )
   (let ((recovered (unwrap!
       (principal-of? (unwrap! (secp256k1-recover? hash signature) ERR_INVALID_SIGNATURE))
