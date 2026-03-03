@@ -1,0 +1,13 @@
+{
+  "stacksNetwork": "devnet",
+  "stacksApiUrl": "http://127.0.0.1:20443",
+  "contractId": "ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM.stackflow",
+  "priceAmount": "10",
+  "priceAsset": "STX",
+  "openPipeAmount": "1000",
+  "stackflowNodeHost": "127.0.0.1",
+  "stackflowNodePort": 8787,
+  "stacksNodeEventsObserver": "host.docker.internal:8787",
+  "observerLocalhostOnly": false,
+  "observerAllowedIps": []
+}

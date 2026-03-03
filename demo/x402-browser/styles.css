@@ -1,0 +1,186 @@
+:root {
+  color-scheme: light;
+  --bg: #f2f5eb;
+  --ink: #14231c;
+  --muted: #4f6358;
+  --line: #c7d3c0;
+  --card: #ffffff;
+  --accent: #0b7f4a;
+  --accent-ink: #ffffff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: radial-gradient(circle at top right, #e4ecdc 0%, var(--bg) 45%);
+  color: var(--ink);
+  font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+}
+
+.page {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 2rem 1rem 3rem;
+  display: grid;
+  gap: 1rem;
+}
+
+.hero {
+  background: linear-gradient(120deg, #183f2f 0%, #23563d 100%);
+  color: #f4f8f1;
+  border-radius: 1rem;
+  padding: 1.2rem 1.2rem 1.4rem;
+}
+
+.eyebrow {
+  margin: 0 0 0.5rem;
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.9;
+}
+
+.hero h1 {
+  margin: 0;
+  font-size: 1.6rem;
+}
+
+.sub {
+  margin: 0.7rem 0 0;
+  max-width: 70ch;
+  line-height: 1.45;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  padding: 1rem;
+}
+
+.card h2 {
+  margin: 0 0 0.6rem;
+  font-size: 1.1rem;
+}
+
+.field-grid {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.field-grid label {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.config-line {
+  margin: 0;
+  display: flex;
+  gap: 0.6rem;
+  align-items: baseline;
+}
+
+.config-key {
+  color: var(--muted);
+  min-width: 5rem;
+}
+
+.config-value {
+  font-family: "IBM Plex Mono", "Consolas", monospace;
+  font-size: 0.86rem;
+  overflow-wrap: anywhere;
+}
+
+.field-grid input,
+.field-grid select {
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  font: inherit;
+  color: var(--ink);
+  background: #fff;
+}
+
+.cta,
+button {
+  display: inline-block;
+  border: 0;
+  border-radius: 0.6rem;
+  padding: 0.55rem 0.8rem;
+  background: var(--accent);
+  color: var(--accent-ink);
+  text-decoration: none;
+  font: inherit;
+  cursor: pointer;
+}
+
+.cta:hover,
+button:hover {
+  filter: brightness(1.05);
+}
+
+.log,
+.response {
+  margin: 0;
+  background: #14231c;
+  color: #d6f9d1;
+  padding: 0.8rem;
+  border-radius: 0.6rem;
+  overflow: auto;
+  min-height: 6rem;
+  font-family: "IBM Plex Mono", "Consolas", monospace;
+  font-size: 0.88rem;
+  line-height: 1.35;
+}
+
+.response {
+  min-height: 10rem;
+}
+
+#wallet-status {
+  margin: 0 0 0.75rem;
+  color: var(--muted);
+}
+
+dialog {
+  border: 1px solid var(--line);
+  border-radius: 0.8rem;
+  max-width: 420px;
+  width: calc(100% - 2rem);
+}
+
+.dialog-body {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.dialog-body h3 {
+  margin: 0;
+}
+
+.dialog-body p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.dialog-actions {
+  margin: 0;
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding: 0;
+}
+
+#open-pipe {
+  background: #2264a2;
+}
+
+.dialog-actions button[value="cancel"] {
+  background: #becbbf;
+  color: #1e3026;
+}

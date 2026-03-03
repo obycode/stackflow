@@ -13,7 +13,10 @@
     "test:report": "vitest run -- --coverage --costs",
     "test:watch": "chokidar \"tests/**/*.ts\" \"contracts/**/*.clar\" -c \"npm run test:report\"",
     "build:stackflow-node": "tsc -p tsconfig.server.json",
-    "stackflow-node": "npm run build:stackflow-node && node server/dist/index.js"
+    "stackflow-node": "npm run build:stackflow-node && node server/dist/index.js",
+    "x402-gateway": "npm run build:stackflow-node && node server/dist/x402-gateway.js",
+    "demo:x402-e2e": "node scripts/demo-x402-e2e.js",
+    "demo:x402-browser": "node scripts/demo-x402-browser.js"
   },
   "author": "",
   "license": "ISC",

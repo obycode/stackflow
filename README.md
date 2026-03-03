@@ -534,6 +534,177 @@ The UI lets you:
 5. call Stackflow contract methods (`fund-pipe`, `deposit`, `withdraw`,
    `force-cancel`, `force-close`, `close-pipe`, `finalize`) via wallet popup
 
+## x402 Gateway Scaffold
+
+This repo includes a starter x402-style gateway at
+`server/src/x402-gateway.ts`. It sits in front of your app server and:
+
+1. protects one route (`STACKFLOW_X402_PROTECTED_PATH`, default `/paid-content`)
+2. returns `402` when no payment proof is provided
+3. supports two payment modes:
+   - `direct`: verifies payment immediately via `POST /counterparty/transfer`
+   - `indirect`: waits for forwarded payment arrival, checks who paid, then
+     verifies the provided secret via `POST /forwarding/reveal`
+4. proxies the request to your upstream app only after verification succeeds
+
+Detailed technical design and production guidance:
+
+- `server/X402_GATEWAY_DESIGN.md`
+
+Run it with:
+
+```bash
+npm run x402-gateway
+```
+
+Run a full local end-to-end demo (unpaid + direct + indirect):
+
+```bash
+npm run demo:x402-e2e
+```
+
+The demo script starts:
+
+1. stackflow-node (`accept-all` verifier, forwarding enabled)
+2. x402 gateway
+3. mock upstream app
+4. mock forwarding next-hop
+
+Then it automatically exercises:
+
+1. unpaid request -> `402`
+2. direct payment proof -> payload delivered
+3. indirect payment signal (wait for forwarding payment + reveal) -> payload delivered
+
+Run an interactive browser demo (click link -> `402` -> sign -> unlock):
+
+```bash
+npm run demo:x402-browser
+```
+
+Browser demo flow:
+
+1. open the printed local URL (gateway front door)
+2. click `Read premium story`
+3. gateway returns `402 Payment Required`
+4. demo queries `stackflow-node /pipes` for pipe status:
+   - if no open pipe, prompt `Open Pipe` (wallet `fund-pipe`) first
+   - if pipe is observer-confirmed and spendable, prompt `Sign and Pay` (`stx_signStructuredMessage`)
+5. browser retries with `x-x402-payment`
+6. gateway verifies payment with stackflow-node and returns paywalled content
+
+Notes about the browser demo:
+
+1. Network/contract selection is loaded from `demo/x402-browser/config.json`
+   (or `DEMO_X402_CONFIG_FILE`) rather than editable in the browser UI.
+2. The demo starts stackflow-node in `accept-all` signature verification mode
+   for local UX walkthrough.
+3. Pipe readiness checks are routed through stackflow-node (`GET /pipes`) via
+   demo endpoints (`/demo/pipe-status`).
+4. `Open Pipe` does not fake state. It waits for real observer updates from
+   stacks-node into stackflow-node.
+5. If the connected wallet is the same principal as the server counterparty,
+   the demo returns a clear `409` and asks you to switch accounts.
+6. Browser-demo network/contract/node settings are defined in
+   `demo/x402-browser/config.json`. Predefine your stacks-node observer using:
+   `stacks_node_events_observers = ["host:port"]` matching
+   `stacksNodeEventsObserver` in that file.
+7. Browser-demo starts stackflow-node with `STACKFLOW_NODE_DISPUTE_EXECUTOR_MODE=auto`.
+   It uses `DEMO_X402_DISPUTE_SIGNER_KEY` if provided.
+   On `devnet`, if unset, it defaults to Clarinet `wallet_1` fixture key.
+   On other networks, if unset, it reuses `DEMO_X402_COUNTERPARTY_KEY`.
+8. Child process logs are streamed by default (`DEMO_X402_SHOW_CHILD_LOGS=true`).
+   Set `DEMO_X402_SHOW_CHILD_LOGS=false` to silence stackflow-node/gateway logs.
+
+Example browser demo config:
+
+```json
+{
+  "stacksNetwork": "devnet",
+  "stacksApiUrl": "http://127.0.0.1:20443",
+  "contractId": "ST1...stackflow",
+  "priceAmount": "10",
+  "priceAsset": "STX",
+  "openPipeAmount": "1000",
+  "stackflowNodeHost": "127.0.0.1",
+  "stackflowNodePort": 8787,
+  "stacksNodeEventsObserver": "host.docker.internal:8787",
+  "observerLocalhostOnly": false,
+  "observerAllowedIps": []
+}
+```
+
+Gateway environment variables:
+
+```bash
+STACKFLOW_X402_GATEWAY_HOST=127.0.0.1
+STACKFLOW_X402_GATEWAY_PORT=8790
+STACKFLOW_X402_UPSTREAM_BASE_URL=http://127.0.0.1:3000
+STACKFLOW_X402_STACKFLOW_NODE_BASE_URL=http://127.0.0.1:8787
+STACKFLOW_X402_PROTECTED_PATH=/paid-content
+STACKFLOW_X402_PRICE_AMOUNT=1000
+STACKFLOW_X402_PRICE_ASSET=STX
+STACKFLOW_X402_STACKFLOW_TIMEOUT_MS=10000
+STACKFLOW_X402_UPSTREAM_TIMEOUT_MS=10000
+STACKFLOW_X402_PROOF_REPLAY_TTL_MS=86400000
+STACKFLOW_X402_INDIRECT_WAIT_TIMEOUT_MS=30000
+STACKFLOW_X402_INDIRECT_POLL_INTERVAL_MS=1000
+STACKFLOW_X402_STACKFLOW_ADMIN_READ_TOKEN=<optional token for GET /forwarding/payments>
+```
+
+The client supplies `x-x402-payment` containing JSON (or base64url-encoded JSON)
+for one of these modes:
+
+1. `direct` payment proof (`action = 1`) including:
+
+- `contractId`
+- `forPrincipal`
+- `withPrincipal`
+- `amount` (must be `>= STACKFLOW_X402_PRICE_AMOUNT`)
+- `myBalance`
+- `theirBalance`
+- `theirSignature`
+- `nonce`
+- `actor`
+
+2. `indirect` payment signal including:
+
+- `mode: "indirect"`
+- `paymentId` (forwarding payment id to wait for)
+- `secret` (32-byte hex preimage)
+- `expectedFromPrincipal` (immediate payer principal expected by receiver)
+
+Example flow (direct):
+
+```bash
+# 1) Unpaid request gets 402 challenge
+curl -i http://127.0.0.1:8790/paid-content
+
+# 2) Build proof header from a local JSON file
+PAYMENT_PROOF=$(node -e "const fs=require('node:fs');const v=JSON.parse(fs.readFileSync('proof.json','utf8'));process.stdout.write(Buffer.from(JSON.stringify(v)).toString('base64url'));")
+
+# 3) Paid request is verified by stackflow-node then proxied upstream
+curl -i \
+  -H "x-x402-payment: ${PAYMENT_PROOF}" \
+  http://127.0.0.1:8790/paid-content
+```
+
+Example flow (indirect):
+
+```bash
+INDIRECT_PROOF=$(node -e "const v={mode:'indirect',paymentId:'pay-2026-03-01-0001',secret:'0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',expectedFromPrincipal:'ST2...'};process.stdout.write(Buffer.from(JSON.stringify(v)).toString('base64url'));")
+
+curl -i \
+  -H "x-x402-payment: ${INDIRECT_PROOF}" \
+  http://127.0.0.1:8790/paid-content
+```
+
+Current scaffold scope:
+
+1. supports direct and indirect receive-side verification
+2. one-time proof consumption per method/path within replay TTL
+3. single protected route configuration (expand to route policy map as next step)
+
 Integration tests for the HTTP server are opt-in (they spawn a real process and
 bind a local port):
 

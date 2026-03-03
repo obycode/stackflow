@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Stackflow x402 Browser Demo</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="hero">
+        <p class="eyebrow">Stackflow x402 Demo</p>
+        <h1>Click Through a Browser Paywall</h1>
+        <p class="sub">
+          This demo simulates a real user flow: visit a page, hit a 402 challenge,
+          sign the payment, then unlock the premium content.
+        </p>
+      </header>
+
+      <section class="card">
+        <h2>Node Config</h2>
+        <div class="field-grid">
+          <p class="config-line">
+            <span class="config-key">Network</span>
+            <span id="config-network" class="config-value">-</span>
+          </p>
+          <p class="config-line">
+            <span class="config-key">Contract</span>
+            <span id="config-contract" class="config-value">-</span>
+          </p>
+          <p class="config-line">
+            <span class="config-key">Observer</span>
+            <span id="config-observer" class="config-value">-</span>
+          </p>
+          <label>
+            Open Pipe Amount
+            <input
+              id="settings-open-amount"
+              type="number"
+              min="1"
+              step="1"
+              value="1000"
+            />
+          </label>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Public Preview</h2>
+        <p>
+          Read this teaser and then open the paywalled story.
+        </p>
+        <a id="premium-link" class="cta" href="/paywalled-story">Read premium story</a>
+      </section>
+
+      <section class="card">
+        <h2>Wallet</h2>
+        <p id="wallet-status">Wallet not connected</p>
+        <button id="connect-wallet" type="button">Connect Wallet</button>
+      </section>
+
+      <section class="card">
+        <h2>Flow Log</h2>
+        <pre id="log-output" class="log">Ready.</pre>
+      </section>
+
+      <section class="card">
+        <h2>Response</h2>
+        <pre id="response-output" class="response">No paywalled response yet.</pre>
+      </section>
+    </main>
+
+    <dialog id="paywall-dialog">
+      <form method="dialog" class="dialog-body">
+        <h3>Payment Required</h3>
+        <p id="challenge-text">
+          The server requires payment before this resource can be accessed.
+        </p>
+        <menu class="dialog-actions">
+          <button id="open-pipe" type="button">Open Pipe</button>
+          <button id="pay-wallet" type="button">Sign and Pay</button>
+          <button value="cancel">Cancel</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
