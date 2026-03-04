@@ -550,6 +550,9 @@ This repo includes a starter x402-style gateway at
 Detailed technical design and production guidance:
 
 - `server/X402_GATEWAY_DESIGN.md`
+- `server/X402_CLIENT_SDK_DESIGN.md`
+- `packages/x402-client/` (SDK scaffold with SQLite-backed client state store)
+- `server/STACKFLOW_AGENT_DESIGN.md` (simple agent runtime without local node)
 
 Run it with:
 
@@ -704,6 +707,26 @@ Current scaffold scope:
 1. supports direct and indirect receive-side verification
 2. one-time proof consumption per method/path within replay TTL
 3. single protected route configuration (expand to route policy map as next step)
+
+## Agent Scaffold
+
+This repo includes an agent-first Stackflow scaffold at
+`packages/stackflow-agent/` for deployments that do not run local
+`stacks-node`/`stackflow-node`.
+
+It provides:
+
+1. SQLite persistence for tracked pipes and latest signatures
+2. AIBTC MCP wallet adapter hooks for `sip018_sign`, `call_contract`, and
+   read-only `get-pipe`
+3. hourly closure watcher (default `60 * 60 * 1000`) that polls tracked pipes
+   via read-only `get-pipe` and can auto-submit
+   disputes when a newer beneficial local signature state exists
+
+See:
+
+1. `packages/stackflow-agent/README.md`
+2. `server/STACKFLOW_AGENT_DESIGN.md`
 
 Integration tests for the HTTP server are opt-in (they spawn a real process and
 bind a local port):

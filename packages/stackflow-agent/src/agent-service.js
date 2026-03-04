@@ -1,0 +1,450 @@
+import {
+  buildDisputeCallInput,
+  buildPipeId,
+  isDisputeBeneficial,
+  normalizeHex,
+  normalizeClosureEvent,
+  parseUnsignedBigInt,
+  toUnsignedString,
+} from "./utils.js";
+
+function assertNonEmptyString(value, fieldName) {
+  const text = String(value ?? "").trim();
+  if (!text) {
+    throw new Error(`${fieldName} must be non-empty`);
+  }
+  return text;
+}
+
+function normalizeBoolean(value, fallback = false) {
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+  return value === true;
+}
+
+export class StackflowAgentService {
+  constructor({
+    stateStore,
+    signer,
+    chainClient = null,
+    network = "devnet",
+    disputeOnlyBeneficial = true,
+  }) {
+    if (!stateStore) {
+      throw new Error("stateStore is required");
+    }
+    if (!signer) {
+      throw new Error("signer is required");
+    }
+
+    this.stateStore = stateStore;
+    this.signer = signer;
+    this.chainClient = chainClient;
+    this.network = String(network || "devnet").trim();
+    this.disputeOnlyBeneficial = normalizeBoolean(disputeOnlyBeneficial, true);
+  }
+
+  trackPipe({
+    contractId,
+    pipeKey,
+    localPrincipal,
+    counterpartyPrincipal,
+    token = null,
+  }) {
+    const pipeId = buildPipeId({ contractId, pipeKey });
+    this.stateStore.upsertTrackedPipe({
+      pipeId,
+      contractId,
+      pipeKey,
+      localPrincipal,
+      counterpartyPrincipal,
+      token,
+      status: "open",
+      lastChainNonce: null,
+    });
+    return {
+      pipeId,
+      contractId,
+      pipeKey,
+      localPrincipal,
+      counterpartyPrincipal,
+      token: token ?? null,
+    };
+  }
+
+  recordSignedState(input) {
+    return this.stateStore.upsertSignatureState(input);
+  }
+
+  getTrackedPipes() {
+    return this.stateStore.listTrackedPipes();
+  }
+
+  getPipeLatestState({ pipeId, forPrincipal }) {
+    return this.stateStore.getLatestSignatureState(pipeId, forPrincipal);
+  }
+
+  buildOutgoingTransfer({
+    pipeId,
+    amount,
+    actor,
+    action = "1",
+    secret = null,
+    validAfter = null,
+    beneficialOnly = false,
+    baseMyBalance = null,
+    baseTheirBalance = null,
+    baseNonce = null,
+  }) {
+    const tracked = this.stateStore.getTrackedPipe(pipeId);
+    if (!tracked) {
+      throw new Error(`pipe is not tracked: ${pipeId}`);
+    }
+
+    const latest = this.stateStore.getLatestSignatureState(
+      tracked.pipeId,
+      tracked.localPrincipal,
+    );
+    const currentMy = latest
+      ? parseUnsignedBigInt(latest.myBalance, "latest.myBalance")
+      : parseUnsignedBigInt(
+          baseMyBalance ?? "0",
+          "baseMyBalance",
+        );
+    const currentTheir = latest
+      ? parseUnsignedBigInt(latest.theirBalance, "latest.theirBalance")
+      : parseUnsignedBigInt(
+          baseTheirBalance ?? "0",
+          "baseTheirBalance",
+        );
+    const currentNonce = latest
+      ? parseUnsignedBigInt(latest.nonce, "latest.nonce")
+      : parseUnsignedBigInt(baseNonce ?? "0", "baseNonce");
+
+    const transferAmount = parseUnsignedBigInt(amount, "amount");
+    if (transferAmount <= 0n) {
+      throw new Error("amount must be > 0");
+    }
+    if (currentMy < transferAmount) {
+      throw new Error("insufficient local balance for transfer");
+    }
+
+    const nextMy = currentMy - transferAmount;
+    const nextTheir = currentTheir + transferAmount;
+    const nextNonce = currentNonce + 1n;
+
+    return {
+      contractId: tracked.contractId,
+      pipeKey: tracked.pipeKey,
+      forPrincipal: tracked.localPrincipal,
+      withPrincipal: tracked.counterpartyPrincipal,
+      token: tracked.token,
+      myBalance: nextMy.toString(10),
+      theirBalance: nextTheir.toString(10),
+      nonce: nextNonce.toString(10),
+      action: toUnsignedString(action, "action"),
+      actor: assertNonEmptyString(actor, "actor"),
+      secret,
+      validAfter,
+      beneficialOnly: beneficialOnly === true,
+    };
+  }
+
+  validateIncomingTransfer({ pipeId, payload }) {
+    const tracked = this.stateStore.getTrackedPipe(pipeId);
+    if (!tracked) {
+      return {
+        valid: false,
+        reason: "pipe-not-tracked",
+      };
+    }
+    const data = payload && typeof payload === "object" ? payload : null;
+    if (!data) {
+      return {
+        valid: false,
+        reason: "payload-invalid",
+      };
+    }
+    const contractId = String(data.contractId ?? tracked.contractId).trim();
+    if (contractId !== tracked.contractId) {
+      return {
+        valid: false,
+        reason: "contract-mismatch",
+      };
+    }
+    const forPrincipal = String(data.forPrincipal ?? "").trim();
+    if (forPrincipal !== tracked.localPrincipal) {
+      return {
+        valid: false,
+        reason: "for-principal-mismatch",
+      };
+    }
+    const withPrincipal = String(data.withPrincipal ?? "").trim();
+    if (withPrincipal !== tracked.counterpartyPrincipal) {
+      return {
+        valid: false,
+        reason: "with-principal-mismatch",
+      };
+    }
+    const theirSignature = (() => {
+      try {
+        return normalizeHex(data.theirSignature, "theirSignature");
+      } catch {
+        return null;
+      }
+    })();
+    if (!theirSignature) {
+      return {
+        valid: false,
+        reason: "missing-or-invalid-their-signature",
+      };
+    }
+    let nonce;
+    let action;
+    let myBalance;
+    let theirBalance;
+    try {
+      nonce = toUnsignedString(data.nonce, "nonce");
+      action = toUnsignedString(data.action ?? "1", "action");
+      myBalance = toUnsignedString(data.myBalance, "myBalance");
+      theirBalance = toUnsignedString(data.theirBalance, "theirBalance");
+    } catch (error) {
+      return {
+        valid: false,
+        reason: error instanceof Error ? error.message : "invalid-payload",
+      };
+    }
+    const actor = String(data.actor ?? "").trim();
+    if (!actor) {
+      return {
+        valid: false,
+        reason: "actor-missing",
+      };
+    }
+    const latest = this.stateStore.getLatestSignatureState(
+      tracked.pipeId,
+      tracked.localPrincipal,
+    );
+    if (latest) {
+      const existingNonce = parseUnsignedBigInt(latest.nonce, "existing nonce");
+      const incomingNonce = parseUnsignedBigInt(nonce, "incoming nonce");
+      if (incomingNonce <= existingNonce) {
+        return {
+          valid: false,
+          reason: "nonce-too-low",
+          existingNonce: latest.nonce,
+        };
+      }
+    }
+
+    let secret = null;
+    try {
+      secret = data.secret == null ? null : normalizeHex(data.secret, "secret");
+    } catch (error) {
+      return {
+        valid: false,
+        reason: error instanceof Error ? error.message : "invalid-secret",
+      };
+    }
+
+    return {
+      valid: true,
+      state: {
+        contractId,
+        pipeId: tracked.pipeId,
+        pipeKey: tracked.pipeKey,
+        forPrincipal,
+        withPrincipal,
+        token: data.token == null ? tracked.token : String(data.token).trim(),
+        myBalance,
+        theirBalance,
+        nonce,
+        action,
+        actor,
+        mySignature: null,
+        theirSignature,
+        secret,
+        validAfter:
+          data.validAfter == null
+            ? null
+            : toUnsignedString(data.validAfter, "validAfter"),
+        beneficialOnly: data.beneficialOnly === true,
+      },
+    };
+  }
+
+  async signTransferMessage({
+    contractId,
+    message,
+    walletPassword = null,
+  }) {
+    if (typeof this.signer.sip018Sign !== "function") {
+      throw new Error("signer.sip018Sign is required");
+    }
+    return this.signer.sip018Sign({
+      contract: contractId,
+      message,
+      walletPassword,
+    });
+  }
+
+  async acceptIncomingTransfer({
+    pipeId,
+    payload,
+    walletPassword = null,
+  }) {
+    const validation = this.validateIncomingTransfer({
+      pipeId,
+      payload,
+    });
+    if (!validation.valid) {
+      return {
+        accepted: false,
+        ...validation,
+      };
+    }
+
+    const state = validation.state;
+    const mySignature = await this.signTransferMessage({
+      contractId: state.contractId,
+      message: {
+        "pipe-key": state.pipeKey,
+        "balance-1": state.myBalance,
+        "balance-2": state.theirBalance,
+        nonce: state.nonce,
+        action: state.action,
+        actor: state.actor,
+        "hashed-secret": state.secret,
+        "valid-after": state.validAfter,
+      },
+      walletPassword,
+    });
+
+    const upsert = this.stateStore.upsertSignatureState({
+      ...state,
+      mySignature,
+    });
+
+    return {
+      accepted: true,
+      mySignature,
+      upsert,
+      state,
+    };
+  }
+
+  buildOpenPipeCall({
+    contractId,
+    token = null,
+    amount,
+    counterpartyPrincipal,
+    nonce = "0",
+  }) {
+    return {
+      contractId: assertNonEmptyString(contractId, "contractId"),
+      functionName: "fund-pipe",
+      functionArgs: [
+        token,
+        toUnsignedString(amount, "amount"),
+        assertNonEmptyString(counterpartyPrincipal, "counterpartyPrincipal"),
+        toUnsignedString(nonce, "nonce"),
+      ],
+    };
+  }
+
+  async openPipe(args) {
+    const call = this.buildOpenPipeCall(args);
+    return this.signer.callContract({
+      contractId: call.contractId,
+      functionName: call.functionName,
+      functionArgs: call.functionArgs,
+      network: this.network,
+    });
+  }
+
+  evaluateClosureForDispute(event) {
+    const closure = normalizeClosureEvent(event);
+    const trackedPipe = this.stateStore.getTrackedPipe(closure.pipeId);
+    if (!trackedPipe) {
+      return {
+        closure,
+        tracked: false,
+        shouldDispute: false,
+        reason: "pipe-not-tracked",
+      };
+    }
+
+    const latestState = this.stateStore.getLatestSignatureState(
+      closure.pipeId,
+      trackedPipe.localPrincipal,
+    );
+    if (!latestState) {
+      return {
+        closure,
+        tracked: true,
+        shouldDispute: false,
+        reason: "no-local-signature-state",
+      };
+    }
+
+    const shouldDispute = isDisputeBeneficial({
+      closureEvent: closure,
+      signatureState: latestState,
+      onlyBeneficial: this.disputeOnlyBeneficial,
+    });
+
+    return {
+      closure,
+      tracked: true,
+      shouldDispute,
+      reason: shouldDispute ? "eligible" : "not-beneficial-or-stale",
+      latestState,
+    };
+  }
+
+  async disputeClosure({
+    closureEvent,
+    walletPassword = null,
+  }) {
+    const decision = this.evaluateClosureForDispute(closureEvent);
+    if (!decision.shouldDispute) {
+      return {
+        submitted: false,
+        reason: decision.reason,
+        decision,
+      };
+    }
+
+    const result = await this.signer.submitDispute({
+      closureEvent: decision.closure,
+      signatureState: decision.latestState,
+      network: this.network,
+      walletPassword,
+    });
+
+    const disputeTxid =
+      typeof result.txid === "string"
+        ? result.txid
+        : typeof result.data?.txid === "string"
+          ? result.data.txid
+          : null;
+    if (disputeTxid) {
+      this.stateStore.markClosureDisputed({
+        txid: decision.closure.txid,
+        disputeTxid,
+      });
+    }
+
+    return {
+      submitted: true,
+      disputeTxid,
+      callInput: buildDisputeCallInput({
+        closureEvent: decision.closure,
+        signatureState: decision.latestState,
+      }),
+      decision,
+      raw: result,
+    };
+  }
+}

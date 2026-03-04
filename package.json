@@ -9,6 +9,7 @@
     "init:stackflow": "node scripts/init-stackflow.js",
     "build:ui": "node scripts/build-ui.js",
     "test": "vitest run",
+    "test:node-utils": "vitest run -c vitest.node.config.js tests/x402-client.test.ts tests/stackflow-agent.test.ts",
     "test:stackflow-node:http": "STACKFLOW_NODE_HTTP_INTEGRATION=1 vitest run tests/stackflow-node-http.integration.test.ts",
     "test:report": "vitest run -- --coverage --costs",
     "test:watch": "chokidar \"tests/**/*.ts\" \"contracts/**/*.clar\" -c \"npm run test:report\"",
