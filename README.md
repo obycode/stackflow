@@ -764,6 +764,28 @@ See:
 1. `packages/stackflow-agent/README.md`
 2. `server/STACKFLOW_AGENT_DESIGN.md`
 
+## Testing commands
+
+Use these commands depending on what changed:
+
+1. Full project checks (Clarity + Node suites):
+
+```bash
+npm test
+```
+
+2. Clarity contract tests only:
+
+```bash
+npm run test:clarity
+```
+
+3. Node/agent/x402 suites only:
+
+```bash
+npm run test:node
+```
+
 Integration tests for the HTTP server are opt-in (they spawn a real process and
 bind a local port):
 
