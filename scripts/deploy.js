@@ -48,6 +48,11 @@ const CONTRACTS = [
     file: "../contracts/stackflow.clar",
   },
   {
+    name: `stackflow-sbtc-${VERSION_TAG}`,
+    kind: "stackflow",
+    file: "../contracts/stackflow.clar",
+  },
+  {
     name: `reservoir-${VERSION_TAG}`,
     kind: "reservoir",
     file: "../contracts/reservoir.clar",

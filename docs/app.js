@@ -22,15 +22,49 @@ const DEFAULT_API_BY_NETWORK = {
 
 const STACKFLOW_MESSAGE_VERSION = "0.6.0";
 const BNSV2_API_BASE = "https://api.bnsv2.com";
-const CONTRACT_PRESETS = {
-  "stx-mainnet": {
-    contractId: "SP126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT6AD08RV.stackflow-0-6-0",
-    tokenContract: "",
-  },
-  "sbtc-mainnet": {
-    contractId: "SP126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT6AD08RV.stackflow-sbtc-0-6-0",
-    tokenContract: "SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-token",
-  },
+const CONTRACT_PRESETS_BY_NETWORK = {
+  devnet: [
+    {
+      key: "stx-devnet",
+      label: "STX (devnet default)",
+      contractId: "ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM.stackflow",
+      tokenContract: "",
+    },
+    {
+      key: "sbtc-devnet",
+      label: "sBTC (devnet default)",
+      contractId: "ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM.stackflow-sbtc",
+      tokenContract: "ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM.test-token",
+    },
+  ],
+  testnet: [
+    {
+      key: "stx-testnet",
+      label: "STX (testnet default)",
+      contractId: "ST126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT59ZTE2J.stackflow-0-6-0",
+      tokenContract: "",
+    },
+    {
+      key: "sbtc-testnet",
+      label: "sBTC (testnet default)",
+      contractId: "ST126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT59ZTE2J.stackflow-sbtc-0-6-0",
+      tokenContract: "",
+    },
+  ],
+  mainnet: [
+    {
+      key: "stx-mainnet",
+      label: "STX (mainnet default)",
+      contractId: "SP126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT6AD08RV.stackflow-0-6-0",
+      tokenContract: "",
+    },
+    {
+      key: "sbtc-mainnet",
+      label: "sBTC (mainnet default)",
+      contractId: "SP126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT6AD08RV.stackflow-sbtc-0-6-0",
+      tokenContract: "SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-token",
+    },
+  ],
 };
 
 const elements = {
@@ -482,22 +516,46 @@ function updateNetworkDefaults() {
   }
 }
 
-function getPresetKeyByValues(contractId, tokenContract) {
+function getPresetsForNetwork(network = readNetwork()) {
+  return CONTRACT_PRESETS_BY_NETWORK[network] || [];
+}
+
+function findPresetByKey(presetKey, network = readNetwork()) {
+  return getPresetsForNetwork(network).find((preset) => preset.key === presetKey) || null;
+}
+
+function renderPresetOptions(network = readNetwork()) {
+  const presets = getPresetsForNetwork(network);
+  const selected = normalizedText(elements.contractPreset.value) || "custom";
+  const options = [
+    ...presets.map((preset) => `<option value="${preset.key}">${preset.label}</option>`),
+    '<option value="custom">Custom (manual)</option>',
+  ];
+  elements.contractPreset.innerHTML = options.join("");
+
+  if (presets.some((preset) => preset.key === selected) || selected === "custom") {
+    elements.contractPreset.value = selected;
+  } else {
+    elements.contractPreset.value = "custom";
+  }
+}
+
+function getPresetKeyByValues(contractId, tokenContract, network = readNetwork()) {
   const contractText = normalizedText(contractId);
   const tokenText = normalizedText(tokenContract);
-  for (const [presetKey, preset] of Object.entries(CONTRACT_PRESETS)) {
+  for (const preset of getPresetsForNetwork(network)) {
     if (
       normalizedText(preset.contractId) === contractText &&
       normalizedText(preset.tokenContract) === tokenText
     ) {
-      return presetKey;
+      return preset.key;
     }
   }
   return "custom";
 }
 
 function applyContractPreset(presetKey, { log = true } = {}) {
-  const preset = CONTRACT_PRESETS[presetKey];
+  const preset = findPresetByKey(presetKey);
   if (!preset) {
     return;
   }
@@ -821,10 +879,28 @@ function wireEvents() {
   elements.buildPayload.addEventListener("click", handleBuildPayload);
   elements.copyOutput.addEventListener("click", handleCopyOutput);
   elements.network.addEventListener("change", () => {
+    const previousPresetKey = elements.contractPreset.value;
     elements.stacksApiUrl.value = DEFAULT_API_BY_NETWORK[readNetwork()];
+    renderPresetOptions();
+    if (previousPresetKey !== "custom") {
+      const presets = getPresetsForNetwork();
+      if (presets.length > 0) {
+        elements.contractPreset.value = presets[0].key;
+        applyContractPreset(presets[0].key);
+      }
+      return;
+    }
+    elements.contractPreset.value = getPresetKeyByValues(
+      elements.contractId.value,
+      elements.tokenContract.value,
+    );
   });
   elements.contractPreset.addEventListener("change", () => {
-    applyContractPreset(elements.contractPreset.value);
+    const presetKey = elements.contractPreset.value;
+    if (presetKey === "custom") {
+      return;
+    }
+    applyContractPreset(presetKey);
   });
   elements.contractId.addEventListener("input", () => {
     elements.contractPreset.value = getPresetKeyByValues(
@@ -843,9 +919,15 @@ function wireEvents() {
 async function bootstrap() {
   wireEvents();
   updateNetworkDefaults();
+  renderPresetOptions();
   if (!normalizedText(elements.contractId.value) && !normalizedText(elements.tokenContract.value)) {
-    elements.contractPreset.value = "stx-mainnet";
-    applyContractPreset("stx-mainnet", { log: false });
+    const presets = getPresetsForNetwork();
+    if (presets.length > 0) {
+      elements.contractPreset.value = presets[0].key;
+      applyContractPreset(presets[0].key, { log: false });
+    } else {
+      elements.contractPreset.value = "custom";
+    }
   } else {
     elements.contractPreset.value = getPresetKeyByValues(
       elements.contractId.value,

@@ -519,6 +519,15 @@ For Clarinet devnet, set the observer in `settings/Devnet.toml`:
 stacks_node_events_observers = ["host.docker.internal:8787"]
 ```
 
+Devnet contracts and initialization plan:
+
+1. deployment plan: `deployments/default.devnet-plan.yaml` (publishes `stackflow` and `stackflow-sbtc`)
+2. the same devnet plan also runs post-deploy `init` contract calls:
+   - `stackflow` with `none` token (STX mode)
+   - `stackflow-sbtc` with `ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM.sbtc-token`
+3. optional/manual fallback: `./init-stackflow.sh`
+4. full plan details: `deployments/DEVNET_STACKFLOW_SBTC_PLAN.md`
+
 Open the built-in UI in your browser:
 
 ```text
@@ -601,7 +610,9 @@ It includes forms/buttons for:
 4. `force-cancel`
 5. structured transfer message signing + payload JSON builder
 6. principal resolution for `.btc` names (for example `brice.btc`) via BNSv2 API
-7. preset Stackflow contract selection with token auto-fill for official STX/sBTC mainnet contracts
+7. network-aware preset Stackflow contract selection with token auto-fill:
+   - devnet: `ST1...stackflow` and `ST1...stackflow-sbtc`
+   - mainnet: official `stackflow-0-6-0` and `stackflow-sbtc-0-6-0`
 
 To publish with GitHub Pages (no build step):
 
