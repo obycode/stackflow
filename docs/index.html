@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Stackflow Pipe Console</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="hero">
+        <p class="eyebrow">Stackflow Tools</p>
+        <h1>Pipe Console</h1>
+        <p class="sub">
+          A browser utility page for common pipe operations: connect wallet, read
+          pipe state, open a pipe, force-cancel, and sign transfer messages.
+        </p>
+      </header>
+
+      <section class="card">
+        <h2>Config</h2>
+        <div class="grid two">
+          <label>
+            Network
+            <select id="network">
+              <option value="devnet">devnet</option>
+              <option value="testnet">testnet</option>
+              <option value="mainnet">mainnet</option>
+            </select>
+          </label>
+          <label>
+            Stacks API URL
+            <input id="stacks-api-url" type="url" value="http://127.0.0.1:3999" />
+          </label>
+          <label>
+            Stackflow Contract (ADDRESS.NAME)
+            <input id="contract-id" type="text" placeholder="ST...stackflow-0-6-0" />
+          </label>
+          <label>
+            Counterparty Principal
+            <input id="counterparty" type="text" placeholder="SP..." />
+          </label>
+          <label>
+            Token Contract (optional)
+            <input id="token-contract" type="text" placeholder="SP...token-contract" />
+          </label>
+          <label>
+            For Principal (read-only caller)
+            <input id="for-principal" type="text" placeholder="SP..." />
+          </label>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Wallet</h2>
+        <p id="wallet-status">Wallet not connected.</p>
+        <div class="actions">
+          <button id="connect-wallet" type="button">Connect Wallet</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Pipe Actions</h2>
+        <div class="grid three">
+          <label>
+            Amount (uSTX / token amount)
+            <input id="open-amount" type="number" min="1" step="1" value="1000" />
+          </label>
+          <label>
+            Nonce (optional)
+            <input id="open-nonce" type="number" min="0" step="1" placeholder="auto or 0" />
+          </label>
+          <label>
+            Notes
+            <input id="notes" type="text" value="STX uses deny-mode post condition." disabled />
+          </label>
+        </div>
+        <div class="actions">
+          <button id="get-pipe" type="button">Get Pipe (read-only)</button>
+          <button id="open-pipe" type="button">Open Pipe (fund-pipe)</button>
+          <button id="force-cancel" type="button">Force Cancel</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Transfer Signer</h2>
+        <div class="grid three">
+          <label>
+            My Balance
+            <input id="my-balance" type="number" min="0" step="1" value="90" />
+          </label>
+          <label>
+            Their Balance
+            <input id="their-balance" type="number" min="0" step="1" value="10" />
+          </label>
+          <label>
+            Nonce
+            <input id="transfer-nonce" type="number" min="0" step="1" value="1" />
+          </label>
+          <label>
+            Action
+            <input id="transfer-action" type="number" min="0" step="1" value="1" />
+          </label>
+          <label>
+            Actor Principal
+            <input id="transfer-actor" type="text" placeholder="SP..." />
+          </label>
+          <label>
+            Hashed Secret (optional 0x32-byte hex)
+            <input id="transfer-secret" type="text" placeholder="0x..." />
+          </label>
+          <label>
+            Valid After (optional uint)
+            <input id="transfer-valid-after" type="number" min="0" step="1" placeholder="burn height" />
+          </label>
+        </div>
+        <div class="actions">
+          <button id="sign-transfer" type="button">Sign Structured Message</button>
+          <button id="build-payload" type="button">Build Transfer Payload JSON</button>
+          <button id="copy-output" type="button">Copy Output</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Output</h2>
+        <pre id="output" class="terminal">Ready.</pre>
+      </section>
+
+      <section class="card">
+        <h2>Log</h2>
+        <pre id="log" class="terminal">Ready.</pre>
+      </section>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

@@ -585,6 +585,29 @@ Run an interactive browser demo (click link -> `402` -> sign -> unlock):
 npm run demo:x402-browser
 ```
 
+## Pipe Console (GitHub Pages)
+
+This repo now includes a static pipe interaction page at `docs/`:
+
+- `docs/index.html`
+- `docs/app.js`
+- `docs/styles.css`
+
+It includes forms/buttons for:
+
+1. wallet connect
+2. read-only `get-pipe`
+3. `fund-pipe` (open pipe)
+4. `force-cancel`
+5. structured transfer message signing + payload JSON builder
+
+To publish with GitHub Pages (no build step):
+
+1. go to repository Settings -> Pages
+2. Source: GitHub Actions
+3. push changes to `docs/` on `main` (or run `Deploy Pipe Console` manually)
+4. wait for the `Deploy Pipe Console` workflow to publish
+
 Browser demo flow:
 
 1. open the printed local URL (gateway front door)

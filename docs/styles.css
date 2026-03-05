@@ -1,0 +1,164 @@
+:root {
+  color-scheme: light;
+  --bg: #f4f6f2;
+  --ink: #162018;
+  --muted: #4e6050;
+  --line: #cfd8cb;
+  --card: #ffffff;
+  --accent: #136a4a;
+  --accent-ink: #f3fff8;
+  --danger: #9f2f2f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+  color: var(--ink);
+  background:
+    radial-gradient(1000px 400px at 100% 0%, #e4ecdf 0%, transparent 80%),
+    radial-gradient(700px 300px at 0% 10%, #e9ede2 0%, transparent 70%),
+    var(--bg);
+}
+
+.page {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 1.25rem 1rem 2.5rem;
+  display: grid;
+  gap: 0.95rem;
+}
+
+.hero {
+  border-radius: 1rem;
+  background: linear-gradient(120deg, #204835 0%, #2d6b4b 100%);
+  color: #f2f8f4;
+  padding: 1.2rem;
+}
+
+.eyebrow {
+  margin: 0 0 0.4rem;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.9;
+}
+
+.hero h1 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.sub {
+  margin: 0.6rem 0 0;
+  line-height: 1.45;
+  max-width: 72ch;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  padding: 1rem;
+}
+
+.card h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1.06rem;
+}
+
+.grid {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.grid.two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.grid.three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+label {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.86rem;
+  color: var(--muted);
+}
+
+input,
+select,
+button {
+  font: inherit;
+}
+
+input,
+select {
+  border: 1px solid var(--line);
+  border-radius: 0.55rem;
+  padding: 0.55rem 0.65rem;
+  color: var(--ink);
+  background: #fff;
+}
+
+input:disabled {
+  background: #f7faf6;
+  color: #778579;
+}
+
+.actions {
+  margin-top: 0.8rem;
+  display: flex;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+button {
+  border: 0;
+  border-radius: 0.62rem;
+  padding: 0.58rem 0.88rem;
+  background: var(--accent);
+  color: var(--accent-ink);
+  cursor: pointer;
+}
+
+button:hover {
+  filter: brightness(1.05);
+}
+
+#force-cancel {
+  background: #8b4a1f;
+}
+
+#copy-output {
+  background: #2c5c86;
+}
+
+.terminal {
+  margin: 0;
+  padding: 0.85rem;
+  border-radius: 0.62rem;
+  background: #15241a;
+  color: #ccf3d7;
+  min-height: 7rem;
+  max-height: 24rem;
+  overflow: auto;
+  font-family: "IBM Plex Mono", "Consolas", monospace;
+  font-size: 0.86rem;
+  line-height: 1.36;
+}
+
+#wallet-status.error {
+  color: var(--danger);
+}
+
+@media (max-width: 860px) {
+  .grid.two,
+  .grid.three {
+    grid-template-columns: 1fr;
+  }
+}
