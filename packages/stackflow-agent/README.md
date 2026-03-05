@@ -132,4 +132,5 @@ const result = await agent.acceptIncomingTransfer({
 3. `HourlyClosureWatcher` supports two sources:
    - `getPipeState` (recommended): per-pipe read-only polling (`get-pipe`)
    - `listClosureEvents`: event scan mode
-4. For production hardening, add alerting, signer balance checks, and idempotency audit logs.
+4. Watcher retries are idempotent for already-disputed closures (same closure txid is skipped on later polls).
+5. For production hardening, add alerting, signer balance checks, and idempotency audit logs.

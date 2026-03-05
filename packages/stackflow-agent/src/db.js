@@ -197,6 +197,9 @@ export class AgentStateStore {
           dispute_txid = ?
       WHERE txid = ?
     `);
+    this.getClosureStmt = this.db.prepare(`
+      SELECT * FROM closures WHERE txid = ?
+    `);
 
     this.getCursorStmt = this.db.prepare(`
       SELECT last_block_height FROM watcher_cursor WHERE id = 1
@@ -384,6 +387,29 @@ export class AgentStateStore {
       assertNonEmptyString(disputeTxid, "disputeTxid"),
       assertNonEmptyString(txid, "txid"),
     );
+  }
+
+  getClosure(txid) {
+    this.assertOpen();
+    const row = this.getClosureStmt.get(assertNonEmptyString(txid, "txid"));
+    if (!row) {
+      return null;
+    }
+    return {
+      txid: row.txid,
+      contractId: row.contract_id,
+      pipeId: row.pipe_id,
+      pipeKey: JSON.parse(row.pipe_key_json),
+      eventName: row.event_name,
+      nonce: row.nonce,
+      closer: row.closer,
+      blockHeight: row.block_height,
+      expiresAt: row.expires_at,
+      closureMyBalance: row.closure_my_balance,
+      disputed: row.disputed === 1,
+      disputeTxid: row.dispute_txid,
+      createdAt: row.created_at,
+    };
   }
 
   getWatcherCursor() {

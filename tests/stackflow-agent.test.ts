@@ -208,6 +208,87 @@ describe("stackflow agent", () => {
     store.close();
   });
 
+  it("skips duplicate disputes for closures already marked disputed", async () => {
+    const dbFile = tempDbFile("agent-duplicate-dispute");
+    const store = new AgentStateStore({ dbFile });
+
+    const contractId = "ST1TESTABC.contract";
+    const pipeKey = {
+      "principal-1": "ST1LOCAL",
+      "principal-2": "ST1OTHER",
+      token: null,
+    };
+    const pipeId = buildPipeId({ contractId, pipeKey });
+
+    store.upsertTrackedPipe({
+      pipeId,
+      contractId,
+      pipeKey,
+      localPrincipal: "ST1LOCAL",
+      counterpartyPrincipal: "ST1OTHER",
+      token: null,
+    });
+    store.upsertSignatureState({
+      contractId,
+      pipeKey,
+      forPrincipal: "ST1LOCAL",
+      withPrincipal: "ST1OTHER",
+      token: null,
+      myBalance: "90",
+      theirBalance: "10",
+      nonce: "8",
+      action: "1",
+      actor: "ST1LOCAL",
+      mySignature: "0x" + "11".repeat(65),
+      theirSignature: "0x" + "22".repeat(65),
+      secret: null,
+      validAfter: null,
+      beneficialOnly: false,
+    });
+
+    let disputeCalls = 0;
+    const agent = new StackflowAgentService({
+      stateStore: store,
+      signer: {
+        async submitDispute() {
+          disputeCalls += 1;
+          return { txid: "0xdispute-dup" };
+        },
+        async sip018Sign() {
+          return "0x" + "44".repeat(65);
+        },
+        async callContract() {
+          return { ok: true };
+        },
+      },
+      network: "devnet",
+      disputeOnlyBeneficial: true,
+    });
+
+    const watcher = new HourlyClosureWatcher({
+      agentService: agent,
+      getPipeState: async () => ({
+        "balance-1": "20",
+        "balance-2": "80",
+        "expires-at": "200",
+        nonce: "5",
+        closer: "ST1OTHER",
+      }),
+    });
+
+    const first = await watcher.runOnce();
+    expect(first.disputesSubmitted).toBe(1);
+    expect(first.skippedAlreadyDisputed).toBe(0);
+
+    const second = await watcher.runOnce();
+    expect(second.disputesSubmitted).toBe(0);
+    expect(second.skippedAlreadyDisputed).toBe(1);
+    expect(disputeCalls).toBe(1);
+
+    watcher.stop();
+    store.close();
+  });
+
   it("validates and signs incoming transfer requests", async () => {
     const dbFile = tempDbFile("agent-sign");
     const store = new AgentStateStore({ dbFile });
