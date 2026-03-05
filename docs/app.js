@@ -1,9 +1,15 @@
-import { connect, isConnected, request } from "https://esm.sh/@stacks/connect?bundle&target=es2020";
+import {
+  connect,
+  disconnect,
+  isConnected,
+  request,
+} from "https://esm.sh/@stacks/connect?bundle&target=es2020";
+import { createNetwork } from "https://esm.sh/@stacks/network@7.2.0?bundle&target=es2020";
 import {
   Cl,
   Pc,
   cvToJSON,
-  deserializeCV,
+  fetchCallReadOnlyFunction,
   principalCV,
   serializeCV,
 } from "https://esm.sh/@stacks/transactions@7.2.0?bundle&target=es2020";
@@ -86,6 +92,7 @@ const elements = {
   transferValidAfter: document.getElementById("transfer-valid-after"),
   walletStatus: document.getElementById("wallet-status"),
   connectWallet: document.getElementById("connect-wallet"),
+  disconnectWallet: document.getElementById("disconnect-wallet"),
   getPipe: document.getElementById("get-pipe"),
   openPipe: document.getElementById("open-pipe"),
   forceCancel: document.getElementById("force-cancel"),
@@ -108,7 +115,18 @@ function normalizedText(value) {
 }
 
 function isStacksAddress(value) {
-  return /^S[PMT][A-Z0-9]{38,42}$/i.test(normalizedText(value));
+  return /^S[PMTN][A-Z0-9]{38,42}$/i.test(normalizedText(value));
+}
+
+function isAddressOnNetwork(address, network = readNetwork()) {
+  const text = normalizedText(address).toUpperCase();
+  if (!text) {
+    return false;
+  }
+  if (network === "mainnet") {
+    return /^S[PM]/.test(text);
+  }
+  return /^S[TN]/.test(text);
 }
 
 function isPrincipalText(value) {
@@ -217,15 +235,6 @@ function unwrapClarityJson(value) {
     output[key] = unwrapClarityJson(nested);
   }
   return output;
-}
-
-function decodeReadOnlyResult(resultHex) {
-  const hex = normalizedText(resultHex);
-  if (!hex) {
-    return null;
-  }
-  const decoded = deserializeCV(hex);
-  return unwrapClarityJson(cvToJSON(decoded));
 }
 
 function parseContractId() {
@@ -431,33 +440,35 @@ function parseValidAfterCV() {
   return { cv: Cl.some(Cl.uint(value)), text: value.toString(10) };
 }
 
-function extractAddress(response) {
+function extractAddress(response, network = readNetwork()) {
   const seen = new Set();
+  const found = [];
   const crawl = (value) => {
-    if (value == null) return null;
-    if (typeof value === "string" && isStacksAddress(value)) return value;
-    if (typeof value !== "object") return null;
-    if (seen.has(value)) return null;
+    if (value == null) return;
+    if (typeof value === "string" && isStacksAddress(value)) {
+      found.push(value);
+      return;
+    }
+    if (typeof value !== "object") return;
+    if (seen.has(value)) return;
     seen.add(value);
 
     if (Array.isArray(value)) {
       for (const entry of value) {
-        const found = crawl(entry);
-        if (found) return found;
+        crawl(entry);
       }
-      return null;
+      return;
     }
 
     if (typeof value.address === "string" && isStacksAddress(value.address)) {
-      return value.address;
+      found.push(value.address);
     }
     for (const nested of Object.values(value)) {
-      const found = crawl(nested);
-      if (found) return found;
+      crawl(nested);
     }
-    return null;
   };
-  return crawl(response);
+  crawl(response);
+  return found.find((address) => isAddressOnNetwork(address, network)) || found[0] || null;
 }
 
 function extractSignature(response) {
@@ -495,7 +506,7 @@ async function ensureWallet({ interactive }) {
 
   if (connected || interactive) {
     const addresses = await request("getAddresses");
-    const address = extractAddress(addresses);
+    const address = extractAddress(addresses, readNetwork());
     if (!address) {
       throw new Error("No Stacks address was returned by the wallet");
     }
@@ -581,59 +592,80 @@ async function handleConnectWallet() {
   }
 }
 
-function toClarityPrincipalLiteral(principal) {
-  return `'${normalizedText(principal)}`;
-}
-
-function toOptionalPrincipalLiteral(principalOrNull) {
-  const text = normalizedText(principalOrNull);
-  return text ? `(some '${text})` : "none";
-}
-
-async function postReadOnlyCall(url, sender, encodedArgs) {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      sender,
-      arguments: encodedArgs,
-    }),
-  });
-  const body = await response.json().catch(() => null);
-  return { response, body };
-}
-
-function readOnlyErrorMessage(status, body) {
-  if (!body || typeof body !== "object") {
-    return `Read-only call failed (${status})`;
+async function handleDisconnectWallet() {
+  const previousAddress = state.connectedAddress;
+  try {
+    await disconnect();
+  } catch {
+    // Some providers may not implement explicit disconnect cleanly; still clear local state.
   }
-  if (body.okay === false) {
-    return `Read-only call returned error: ${body.cause || "unknown"}`;
+
+  state.connectedAddress = null;
+  state.lastSignature = null;
+  if (previousAddress && normalizedText(elements.forPrincipal.value) === previousAddress) {
+    elements.forPrincipal.value = "";
   }
-  return `Read-only call failed (${status})`;
+  if (previousAddress && normalizedText(elements.transferActor.value) === previousAddress) {
+    elements.transferActor.value = "";
+  }
+  setWalletStatus("Wallet not connected.");
+  appendLog(previousAddress ? `Wallet disconnected: ${previousAddress}` : "Wallet disconnected.");
 }
 
-async function fetchReadOnly(functionName, functionArgs, sender, options = {}) {
+function getReadOnlySenderCandidates(sender, contractAddress, network = readNetwork()) {
+  const candidates = [];
+  const senderText = normalizedText(sender);
+  const contractAddressText = normalizedText(contractAddress);
+
+  if (senderText && isAddressOnNetwork(senderText, network)) {
+    candidates.push(senderText);
+  }
+  if (
+    contractAddressText &&
+    isAddressOnNetwork(contractAddressText, network) &&
+    !candidates.includes(contractAddressText)
+  ) {
+    candidates.push(contractAddressText);
+  }
+  if (senderText && !candidates.includes(senderText)) {
+    candidates.push(senderText);
+  }
+  if (contractAddressText && !candidates.includes(contractAddressText)) {
+    candidates.push(contractAddressText);
+  }
+  return candidates;
+}
+
+async function fetchReadOnly(functionName, functionArgs, sender) {
   const { contractAddress, contractName } = parseContractId();
-  const apiBase = getStacksApiBase();
-  const url = `${apiBase}/v2/contracts/call-read/${contractAddress}/${contractName}/${functionName}`;
-  const hexArgs = functionArgs.map((cv) => cvHex(cv));
-  const firstAttempt = await postReadOnlyCall(url, sender, hexArgs);
-  if (firstAttempt.response.ok && firstAttempt.body && firstAttempt.body.okay !== false) {
-    return firstAttempt.body.result;
-  }
+  const network = createNetwork({
+    network: readNetwork(),
+    client: { baseUrl: getStacksApiBase() },
+  });
+  const senders = getReadOnlySenderCandidates(sender, contractAddress);
 
-  const clarityArgs = Array.isArray(options.clarityArgs) ? options.clarityArgs : null;
-  if (clarityArgs && clarityArgs.length === functionArgs.length) {
-    const secondAttempt = await postReadOnlyCall(url, sender, clarityArgs);
-    if (secondAttempt.response.ok && secondAttempt.body && secondAttempt.body.okay !== false) {
-      appendLog("Read-only call retried with Clarity literal arguments.");
-      return secondAttempt.body.result;
+  let lastError = null;
+  for (const senderCandidate of senders) {
+    try {
+      const result = await fetchCallReadOnlyFunction({
+        network,
+        senderAddress: senderCandidate,
+        contractAddress,
+        contractName,
+        functionName,
+        functionArgs,
+      });
+      if (senderCandidate !== sender) {
+        appendLog(`Read-only ${functionName} used fallback sender=${senderCandidate}.`);
+      }
+      return result;
+    } catch (error) {
+      lastError = error;
     }
-    throw new Error(readOnlyErrorMessage(secondAttempt.response.status, secondAttempt.body));
   }
-
-  throw new Error(readOnlyErrorMessage(firstAttempt.response.status, firstAttempt.body));
+  const message =
+    lastError instanceof Error ? lastError.message : "Read-only call failed for all sender candidates";
+  throw new Error(message);
 }
 
 async function handleGetPipe() {
@@ -646,20 +678,15 @@ async function handleGetPipe() {
       "For Principal",
       elements.forPrincipal.value || state.connectedAddress,
     );
-    const { cv: tokenCV, tokenText } = parseOptionalTokenCV();
+    const { cv: tokenCV } = parseOptionalTokenCV();
 
-    const resultHex = await fetchReadOnly(
+    const resultCv = await fetchReadOnly(
       "get-pipe",
       [tokenCV, Cl.principal(withPrincipal)],
       forPrincipal,
-      {
-        clarityArgs: [
-          toOptionalPrincipalLiteral(tokenText),
-          toClarityPrincipalLiteral(withPrincipal),
-        ],
-      },
     );
-    const decoded = decodeReadOnlyResult(resultHex);
+    const resultHex = cvHex(resultCv);
+    const decoded = unwrapClarityJson(cvToJSON(resultCv));
     setOutput({
       call: "get-pipe",
       forPrincipal,
@@ -836,6 +863,7 @@ async function handleSignTransfer() {
     await ensureWallet({ interactive: true });
     const context = await buildTransferContext();
     const response = await request("stx_signStructuredMessage", {
+      network: readNetwork(),
       domain: context.domain,
       message: context.message,
     });
@@ -857,7 +885,7 @@ async function handleSignTransfer() {
       actor: context.actor,
       hashedSecret: context.hashedSecret,
       validAfter: context.validAfter,
-      theirSignature: signature,
+      signature,
     };
     state.lastPayload = payload;
     setOutput(payload);
@@ -884,7 +912,7 @@ async function handleBuildPayload() {
       actor: context.actor,
       hashedSecret: context.hashedSecret,
       validAfter: context.validAfter,
-      theirSignature: state.lastSignature,
+      signature: state.lastSignature,
     };
     state.lastPayload = payload;
     setOutput(payload);
@@ -908,6 +936,7 @@ async function handleCopyOutput() {
 
 function wireEvents() {
   elements.connectWallet.addEventListener("click", handleConnectWallet);
+  elements.disconnectWallet.addEventListener("click", handleDisconnectWallet);
   elements.getPipe.addEventListener("click", handleGetPipe);
   elements.openPipe.addEventListener("click", handleOpenPipe);
   elements.forceCancel.addEventListener("click", handleForceCancel);
