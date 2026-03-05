@@ -75,6 +75,56 @@ watcher.start();
 8. `disputeClosure(...)`
 9. `watcher.runOnce()` or `watcher.start()` for hourly checks
 
+## Quick workflow (setup pipe + send + receive)
+
+1. Track pipe locally:
+
+```js
+const tracked = agent.trackPipe({
+  contractId: "ST...stackflow-0-6-0",
+  pipeKey: { "principal-1": "SP...ME", "principal-2": "SP...THEM", token: null },
+  localPrincipal: "SP...ME",
+  counterpartyPrincipal: "SP...THEM",
+});
+```
+
+2. Open/fund the pipe on-chain:
+
+```js
+await agent.openPipe({
+  contractId: tracked.contractId,
+  token: null,
+  amount: "1000",
+  counterpartyPrincipal: tracked.counterpartyPrincipal,
+  nonce: "0",
+});
+```
+
+3. Build an outgoing state update to send to counterparty:
+
+```js
+const outgoing = agent.buildOutgoingTransfer({
+  pipeId: tracked.pipeId,
+  amount: "25",
+  actor: tracked.localPrincipal,
+});
+```
+
+4. Validate + accept incoming counterparty update:
+
+```js
+const result = await agent.acceptIncomingTransfer({
+  pipeId: tracked.pipeId,
+  payload: {
+    ...outgoing,
+    actor: tracked.counterpartyPrincipal,
+    theirSignature: "0x...",
+  },
+});
+```
+
+5. Persisted local latest state is now available via `getPipeLatestState(...)`.
+
 ## Notes
 
 1. This scaffold intentionally avoids observer endpoints and local chain node.
