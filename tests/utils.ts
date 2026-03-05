@@ -5,7 +5,7 @@ import {
   serializeCVBytes,
   signWithKey,
 } from "@stacks/transactions";
-import { createHash } from "crypto";
+import { sha256 as nobleSha256 } from "@noble/hashes/sha256";
 
 export const accounts = simnet.getAccounts();
 export const deployer = accounts.get("deployer")!;
@@ -90,7 +90,7 @@ const chainIds = {
 };
 
 export function sha256(data: Buffer): Buffer {
-  return createHash("sha256").update(data).digest();
+  return Buffer.from(nobleSha256(data));
 }
 
 function structuredDataHash(structuredData: ClarityValue): Buffer {
