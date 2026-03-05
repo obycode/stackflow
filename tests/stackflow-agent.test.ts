@@ -965,9 +965,9 @@ describe("stackflow agent", () => {
     const outgoing = agent.buildOutgoingTransfer({
       pipeId,
       amount: "25",
-      actor: "ST1LOCAL",
     });
 
+    expect(outgoing.actor).toBe("ST1LOCAL");
     expect(outgoing.myBalance).toBe("75");
     expect(outgoing.theirBalance).toBe("25");
     expect(outgoing.nonce).toBe("1");
@@ -988,6 +988,71 @@ describe("stackflow agent", () => {
     expect(latest?.nonce).toBe("1");
     expect(latest?.myBalance).toBe("75");
     expect(latest?.theirBalance).toBe("25");
+
+    store.close();
+  });
+
+  it("rejects outgoing transfer requests with actor mismatch", () => {
+    const dbFile = tempDbFile("agent-send-actor-mismatch");
+    const store = new AgentStateStore({ dbFile });
+
+    const contractId = "ST1TESTABC.contract";
+    const pipeKey = {
+      "principal-1": "ST1LOCAL",
+      "principal-2": "ST1OTHER",
+      token: null,
+    };
+    const pipeId = buildPipeId({ contractId, pipeKey });
+
+    store.upsertTrackedPipe({
+      pipeId,
+      contractId,
+      pipeKey,
+      localPrincipal: "ST1LOCAL",
+      counterpartyPrincipal: "ST1OTHER",
+      token: null,
+    });
+
+    store.upsertSignatureState({
+      contractId,
+      pipeKey,
+      forPrincipal: "ST1LOCAL",
+      withPrincipal: "ST1OTHER",
+      token: null,
+      myBalance: "100",
+      theirBalance: "0",
+      nonce: "0",
+      action: "1",
+      actor: "ST1LOCAL",
+      mySignature: "0x" + "11".repeat(65),
+      theirSignature: "0x" + "22".repeat(65),
+      secret: null,
+      validAfter: null,
+      beneficialOnly: false,
+    });
+
+    const agent = new StackflowAgentService({
+      stateStore: store,
+      signer: {
+        async sip018Sign() {
+          return "0x" + "44".repeat(65);
+        },
+        async submitDispute() {
+          return { txid: "0x1" };
+        },
+        async callContract() {
+          return { ok: true };
+        },
+      },
+    });
+
+    expect(() =>
+      agent.buildOutgoingTransfer({
+        pipeId,
+        amount: "25",
+        actor: "ST1THIRD",
+      }),
+    ).toThrow("actor must match tracked local principal");
 
     store.close();
   });
