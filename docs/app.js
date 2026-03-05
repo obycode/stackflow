@@ -581,29 +581,59 @@ async function handleConnectWallet() {
   }
 }
 
-async function fetchReadOnly(functionName, functionArgs, sender) {
-  const { contractAddress, contractName } = parseContractId();
-  const apiBase = getStacksApiBase();
-  const url = `${apiBase}/v2/contracts/call-read/${contractAddress}/${contractName}/${functionName}`;
+function toClarityPrincipalLiteral(principal) {
+  return `'${normalizedText(principal)}`;
+}
+
+function toOptionalPrincipalLiteral(principalOrNull) {
+  const text = normalizedText(principalOrNull);
+  return text ? `(some '${text})` : "none";
+}
+
+async function postReadOnlyCall(url, sender, encodedArgs) {
   const response = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       sender,
-      arguments: functionArgs.map((cv) => cvHex(cv)),
+      arguments: encodedArgs,
     }),
   });
   const body = await response.json().catch(() => null);
-  if (!response.ok) {
-    throw new Error(`Read-only call failed (${response.status})`);
-  }
+  return { response, body };
+}
+
+function readOnlyErrorMessage(status, body) {
   if (!body || typeof body !== "object") {
-    throw new Error("Read-only response was not JSON");
+    return `Read-only call failed (${status})`;
   }
   if (body.okay === false) {
-    throw new Error(`Read-only call returned error: ${body.cause || "unknown"}`);
+    return `Read-only call returned error: ${body.cause || "unknown"}`;
   }
-  return body.result;
+  return `Read-only call failed (${status})`;
+}
+
+async function fetchReadOnly(functionName, functionArgs, sender, options = {}) {
+  const { contractAddress, contractName } = parseContractId();
+  const apiBase = getStacksApiBase();
+  const url = `${apiBase}/v2/contracts/call-read/${contractAddress}/${contractName}/${functionName}`;
+  const hexArgs = functionArgs.map((cv) => cvHex(cv));
+  const firstAttempt = await postReadOnlyCall(url, sender, hexArgs);
+  if (firstAttempt.response.ok && firstAttempt.body && firstAttempt.body.okay !== false) {
+    return firstAttempt.body.result;
+  }
+
+  const clarityArgs = Array.isArray(options.clarityArgs) ? options.clarityArgs : null;
+  if (clarityArgs && clarityArgs.length === functionArgs.length) {
+    const secondAttempt = await postReadOnlyCall(url, sender, clarityArgs);
+    if (secondAttempt.response.ok && secondAttempt.body && secondAttempt.body.okay !== false) {
+      appendLog("Read-only call retried with Clarity literal arguments.");
+      return secondAttempt.body.result;
+    }
+    throw new Error(readOnlyErrorMessage(secondAttempt.response.status, secondAttempt.body));
+  }
+
+  throw new Error(readOnlyErrorMessage(firstAttempt.response.status, firstAttempt.body));
 }
 
 async function handleGetPipe() {
@@ -616,12 +646,18 @@ async function handleGetPipe() {
       "For Principal",
       elements.forPrincipal.value || state.connectedAddress,
     );
-    const { cv: tokenCV } = parseOptionalTokenCV();
+    const { cv: tokenCV, tokenText } = parseOptionalTokenCV();
 
     const resultHex = await fetchReadOnly(
       "get-pipe",
       [tokenCV, Cl.principal(withPrincipal)],
       forPrincipal,
+      {
+        clarityArgs: [
+          toOptionalPrincipalLiteral(tokenText),
+          toClarityPrincipalLiteral(withPrincipal),
+        ],
+      },
     );
     const decoded = decodeReadOnlyResult(resultHex);
     setOutput({

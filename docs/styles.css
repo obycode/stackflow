@@ -147,6 +147,8 @@ button:hover {
 .terminal {
   margin: 0;
   padding: 0.85rem;
+  max-width: 100%;
+  min-width: 0;
   border-radius: 0.62rem;
   background: #15241a;
   color: #ccf3d7;
@@ -156,6 +158,12 @@ button:hover {
   font-family: "IBM Plex Mono", "Consolas", monospace;
   font-size: 0.86rem;
   line-height: 1.36;
+}
+
+#log {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 #wallet-status.error {
