@@ -139,6 +139,41 @@ function normalizeToolResult(result, toolName) {
   return result;
 }
 
+function shouldRetrySip018WithDomain(error) {
+  const message = String(error instanceof Error ? error.message : error).toLowerCase();
+  return (
+    message.includes("domain") &&
+    (message.includes("required") || message.includes("missing") || message.includes("must"))
+  );
+}
+
+function shouldRetrySip018Legacy(error) {
+  const message = String(error instanceof Error ? error.message : error).toLowerCase();
+  return (
+    message.includes("domain") ||
+    message.includes("contract") ||
+    message.includes("input validation") ||
+    message.includes("invalid arguments")
+  );
+}
+
+function deriveSip018Domain(contract) {
+  const contractText = String(contract ?? "").trim();
+  if (!contractText) {
+    return { name: "stackflow", version: "1.0.0" };
+  }
+
+  const [, rawName = contractText] = contractText.split(".");
+  const name = rawName || "stackflow";
+
+  const versionMatch = name.match(/(\d+)-(\d+)-(\d+)$/);
+  const version = versionMatch
+    ? `${versionMatch[1]}.${versionMatch[2]}.${versionMatch[3]}`
+    : "1.0.0";
+
+  return { name, version };
+}
+
 export class AibtcWalletAdapter {
   constructor({
     invokeTool,
@@ -154,14 +189,33 @@ export class AibtcWalletAdapter {
     message,
     walletPassword = null,
   }) {
-    const result = normalizeToolResult(
-      await this.invokeTool("sip018_sign", {
-        contract,
-        message,
-        wallet_password: walletPassword ?? undefined,
-      }),
-      "sip018_sign",
-    );
+    const domainArgs = {
+      message,
+      domain: deriveSip018Domain(contract),
+      wallet_password: walletPassword ?? undefined,
+    };
+
+    const legacyArgs = {
+      contract,
+      message,
+      wallet_password: walletPassword ?? undefined,
+    };
+
+    let result;
+    try {
+      result = normalizeToolResult(
+        await this.invokeTool("sip018_sign", domainArgs),
+        "sip018_sign",
+      );
+    } catch (error) {
+      if (!shouldRetrySip018Legacy(error)) {
+        throw error;
+      }
+      result = normalizeToolResult(
+        await this.invokeTool("sip018_sign", legacyArgs),
+        "sip018_sign",
+      );
+    }
 
     const signature = result.signature ?? result.data?.signature ?? null;
     if (typeof signature !== "string" || !signature.trim()) {
