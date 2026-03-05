@@ -315,16 +315,34 @@ export class HourlyClosureWatcher {
     this.running = true;
     try {
       const fromBlockHeight = this.agentService.stateStore.getWatcherCursor();
-      const events = await this.listClosureEvents({
-        fromBlockHeight,
-      });
+      let events;
+      try {
+        events = await this.listClosureEvents({
+          fromBlockHeight,
+        });
+      } catch (error) {
+        this.reportError(error, "listClosureEvents");
+        return {
+          ok: false,
+          scanned: 0,
+          invalidEvents: 0,
+          disputesSubmitted: 0,
+          skippedAlreadyDisputed: 0,
+          disputeErrors: 0,
+          listErrors: 1,
+          fromBlockHeight,
+          toBlockHeight: fromBlockHeight,
+        };
+      }
       if (!Array.isArray(events) || events.length === 0) {
         return {
           ok: true,
           scanned: 0,
+          invalidEvents: 0,
           disputesSubmitted: 0,
           skippedAlreadyDisputed: 0,
           disputeErrors: 0,
+          listErrors: 0,
           fromBlockHeight,
           toBlockHeight: fromBlockHeight,
         };
@@ -334,6 +352,7 @@ export class HourlyClosureWatcher {
       let disputesSubmitted = 0;
       let skippedAlreadyDisputed = 0;
       let disputeErrors = 0;
+      let invalidEvents = 0;
       let hasDisputeErrors = false;
       let scanned = 0;
 
@@ -342,6 +361,7 @@ export class HourlyClosureWatcher {
         try {
           closure = normalizeClosureEvent(rawEvent);
         } catch {
+          invalidEvents += 1;
           continue;
         }
         scanned += 1;
@@ -382,9 +402,11 @@ export class HourlyClosureWatcher {
       return {
         ok: true,
         scanned,
+        invalidEvents,
         disputesSubmitted,
         skippedAlreadyDisputed,
         disputeErrors,
+        listErrors: 0,
         fromBlockHeight,
         toBlockHeight,
       };

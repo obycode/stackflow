@@ -510,6 +510,133 @@ describe("stackflow agent", () => {
     store.close();
   });
 
+  it("keeps event cursor and reports list source failures", async () => {
+    const dbFile = tempDbFile("agent-event-source-error");
+    const store = new AgentStateStore({ dbFile });
+
+    const errors: Error[] = [];
+    const agent = new StackflowAgentService({
+      stateStore: store,
+      signer: {
+        async submitDispute() {
+          return { txid: "0x1" };
+        },
+        async callContract() {
+          return { ok: true };
+        },
+      },
+      network: "devnet",
+    });
+
+    const watcher = new HourlyClosureWatcher({
+      agentService: agent,
+      listClosureEvents: async () => {
+        throw new Error("indexer timeout");
+      },
+      onError: (error) => {
+        errors.push(error as Error);
+      },
+    });
+
+    const result = await watcher.runOnce();
+    expect(result.ok).toBe(false);
+    expect(result.listErrors).toBe(1);
+    expect(result.scanned).toBe(0);
+    expect(result.toBlockHeight).toBe("0");
+    expect(store.getWatcherCursor()).toBe("0");
+    expect(errors).toHaveLength(1);
+
+    watcher.stop();
+    store.close();
+  });
+
+  it("counts invalid closure events without aborting scan", async () => {
+    const dbFile = tempDbFile("agent-event-invalid-event");
+    const store = new AgentStateStore({ dbFile });
+
+    const contractId = "ST1TESTABC.contract";
+    const pipeKey = {
+      "principal-1": "ST1LOCAL",
+      "principal-2": "ST1OTHER",
+      token: null,
+    };
+    const pipeId = buildPipeId({ contractId, pipeKey });
+
+    store.upsertTrackedPipe({
+      pipeId,
+      contractId,
+      pipeKey,
+      localPrincipal: "ST1LOCAL",
+      counterpartyPrincipal: "ST1OTHER",
+      token: null,
+    });
+    store.upsertSignatureState({
+      contractId,
+      pipeKey,
+      forPrincipal: "ST1LOCAL",
+      withPrincipal: "ST1OTHER",
+      token: null,
+      myBalance: "90",
+      theirBalance: "10",
+      nonce: "8",
+      action: "1",
+      actor: "ST1LOCAL",
+      mySignature: "0x" + "11".repeat(65),
+      theirSignature: "0x" + "22".repeat(65),
+      secret: null,
+      validAfter: null,
+      beneficialOnly: false,
+    });
+
+    let disputeCalls = 0;
+    const agent = new StackflowAgentService({
+      stateStore: store,
+      signer: {
+        async submitDispute() {
+          disputeCalls += 1;
+          return { txid: "0xdispute-ok" };
+        },
+        async callContract() {
+          return { ok: true };
+        },
+      },
+      network: "devnet",
+      disputeOnlyBeneficial: true,
+    });
+
+    const watcher = new HourlyClosureWatcher({
+      agentService: agent,
+      listClosureEvents: async () => [
+        {
+          eventName: "invalid",
+        },
+        {
+          contractId,
+          pipeKey,
+          eventName: "force-close",
+          nonce: "5",
+          closer: "ST1OTHER",
+          txid: "0xtx-valid",
+          blockHeight: "123",
+          expiresAt: "200",
+          closureMyBalance: "20",
+        },
+      ],
+    });
+
+    const result = await watcher.runOnce();
+    expect(result.ok).toBe(true);
+    expect(result.invalidEvents).toBe(1);
+    expect(result.scanned).toBe(1);
+    expect(result.disputesSubmitted).toBe(1);
+    expect(result.toBlockHeight).toBe("123");
+    expect(store.getWatcherCursor()).toBe("123");
+    expect(disputeCalls).toBe(1);
+
+    watcher.stop();
+    store.close();
+  });
+
   it("skips overlapping readonly watcher runs", async () => {
     const dbFile = tempDbFile("agent-readonly-overlap");
     const store = new AgentStateStore({ dbFile });

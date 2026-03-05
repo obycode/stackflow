@@ -135,7 +135,9 @@ const result = await agent.acceptIncomingTransfer({
 4. Watcher retries are idempotent for already-disputed closures (same closure txid is skipped on later polls).
 5. Read-only polling isolates per-pipe failures (`getPipeState` errors on one pipe do not stop others).
 6. Event scan mode intentionally holds the cursor when any dispute submission errors occur, so failed disputes are retried on next run.
-7. `buildOutgoingTransfer(...)` defaults `actor` to the tracked local principal and rejects mismatched actor values.
-8. Incoming transfer validation enforces tracked contract/pipe/principals/token consistency; mismatched `pipeId`, `pipeKey`, `actor`, or token payloads are rejected.
-9. Incoming transfer validation also enforces sequential nonces and balance invariants against the latest stored local state (same total balance, and counterparty-actor updates must not reduce local balance).
-10. For production hardening, add alerting, signer balance checks, and idempotency audit logs.
+7. Event scan mode now reports `listErrors` (event source/indexer failures) and keeps the watcher cursor unchanged on those failures.
+8. Invalid closure event payloads are skipped and counted in `invalidEvents` so one malformed record does not abort a full scan.
+9. `buildOutgoingTransfer(...)` defaults `actor` to the tracked local principal and rejects mismatched actor values.
+10. Incoming transfer validation enforces tracked contract/pipe/principals/token consistency; mismatched `pipeId`, `pipeKey`, `actor`, or token payloads are rejected.
+11. Incoming transfer validation also enforces sequential nonces and balance invariants against the latest stored local state (same total balance, and counterparty-actor updates must not reduce local balance).
+12. For production hardening, add alerting, signer balance checks, and idempotency audit logs.
