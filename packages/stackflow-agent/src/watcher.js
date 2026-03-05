@@ -205,6 +205,7 @@ export class HourlyClosureWatcher {
 
       let closuresFound = 0;
       let disputesSubmitted = 0;
+      let skippedAlreadyDisputed = 0;
       let pipesScanned = 0;
       for (const trackedPipe of trackedPipes) {
         pipesScanned += 1;
@@ -231,7 +232,13 @@ export class HourlyClosureWatcher {
         }
 
         closuresFound += 1;
+        const existingClosure = this.agentService.stateStore.getClosure(closure.txid);
         this.agentService.stateStore.recordClosure(closure);
+        if (existingClosure?.disputed) {
+          skippedAlreadyDisputed += 1;
+          continue;
+        }
+
         const disputeResult = await this.agentService.disputeClosure({
           closureEvent: closure,
           walletPassword: this.walletPassword,
@@ -247,6 +254,7 @@ export class HourlyClosureWatcher {
         pipesScanned,
         closuresFound,
         disputesSubmitted,
+        skippedAlreadyDisputed,
       };
     } finally {
       this.running = false;
@@ -280,6 +288,7 @@ export class HourlyClosureWatcher {
 
       let highestBlock = parseUnsignedBigInt(fromBlockHeight, "fromBlockHeight");
       let disputesSubmitted = 0;
+      let skippedAlreadyDisputed = 0;
       let scanned = 0;
 
       for (const rawEvent of events) {
@@ -290,14 +299,18 @@ export class HourlyClosureWatcher {
           continue;
         }
         scanned += 1;
+        const existingClosure = this.agentService.stateStore.getClosure(closure.txid);
         this.agentService.stateStore.recordClosure(closure);
-
-        const disputeResult = await this.agentService.disputeClosure({
-          closureEvent: closure,
-          walletPassword: this.walletPassword,
-        });
-        if (disputeResult.submitted) {
-          disputesSubmitted += 1;
+        if (existingClosure?.disputed) {
+          skippedAlreadyDisputed += 1;
+        } else {
+          const disputeResult = await this.agentService.disputeClosure({
+            closureEvent: closure,
+            walletPassword: this.walletPassword,
+          });
+          if (disputeResult.submitted) {
+            disputesSubmitted += 1;
+          }
         }
 
         const block = parseUnsignedBigInt(closure.blockHeight, "blockHeight");
@@ -311,6 +324,7 @@ export class HourlyClosureWatcher {
         ok: true,
         scanned,
         disputesSubmitted,
+        skippedAlreadyDisputed,
         fromBlockHeight,
         toBlockHeight: highestBlock.toString(10),
       };
