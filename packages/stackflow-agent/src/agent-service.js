@@ -187,6 +187,17 @@ export class StackflowAgentService {
         reason: "with-principal-mismatch",
       };
     }
+
+    const trackedToken =
+      tracked.token == null ? null : String(tracked.token).trim();
+    const payloadToken =
+      data.token == null ? trackedToken : String(data.token).trim();
+    if (payloadToken !== trackedToken) {
+      return {
+        valid: false,
+        reason: "token-mismatch",
+      };
+    }
     const theirSignature = (() => {
       try {
         return normalizeHex(data.theirSignature, "theirSignature");
@@ -256,7 +267,7 @@ export class StackflowAgentService {
         pipeKey: tracked.pipeKey,
         forPrincipal,
         withPrincipal,
-        token: data.token == null ? tracked.token : String(data.token).trim(),
+        token: trackedToken,
         myBalance,
         theirBalance,
         nonce,
