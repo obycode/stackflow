@@ -266,6 +266,130 @@ describe("stackflow agent", () => {
     store.close();
   });
 
+  it("opens a pipe via signer adapter with expected contract call", async () => {
+    const dbFile = tempDbFile("agent-open");
+    const store = new AgentStateStore({ dbFile });
+
+    const calls: Array<{ contractId: string; functionName: string; functionArgs: unknown[]; network?: string }> = [];
+
+    const agent = new StackflowAgentService({
+      stateStore: store,
+      signer: {
+        async submitDispute() {
+          return { txid: "0x1" };
+        },
+        async callContract(input) {
+          calls.push(input as { contractId: string; functionName: string; functionArgs: unknown[]; network?: string });
+          return { ok: true, txid: "0xopen" };
+        },
+      },
+      network: "devnet",
+    });
+
+    const result = await agent.openPipe({
+      contractId: "ST1STACKFLOW.stackflow-0-6-0",
+      token: null,
+      amount: "1000",
+      counterpartyPrincipal: "ST1COUNTERPARTY",
+      nonce: "0",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual({
+      contractId: "ST1STACKFLOW.stackflow-0-6-0",
+      functionName: "fund-pipe",
+      functionArgs: [null, "1000", "ST1COUNTERPARTY", "0"],
+      network: "devnet",
+    });
+
+    store.close();
+  });
+
+  it("builds outgoing transfer from tracked state and accepts signed incoming update", async () => {
+    const dbFile = tempDbFile("agent-send-receive");
+    const store = new AgentStateStore({ dbFile });
+
+    const contractId = "ST1TESTABC.contract";
+    const pipeKey = {
+      "principal-1": "ST1LOCAL",
+      "principal-2": "ST1OTHER",
+      token: null,
+    };
+    const pipeId = buildPipeId({ contractId, pipeKey });
+
+    store.upsertTrackedPipe({
+      pipeId,
+      contractId,
+      pipeKey,
+      localPrincipal: "ST1LOCAL",
+      counterpartyPrincipal: "ST1OTHER",
+      token: null,
+    });
+
+    store.upsertSignatureState({
+      contractId,
+      pipeKey,
+      forPrincipal: "ST1LOCAL",
+      withPrincipal: "ST1OTHER",
+      token: null,
+      myBalance: "100",
+      theirBalance: "0",
+      nonce: "0",
+      action: "1",
+      actor: "ST1LOCAL",
+      mySignature: "0x" + "11".repeat(65),
+      theirSignature: "0x" + "22".repeat(65),
+      secret: null,
+      validAfter: null,
+      beneficialOnly: false,
+    });
+
+    const agent = new StackflowAgentService({
+      stateStore: store,
+      signer: {
+        async sip018Sign() {
+          return "0x" + "44".repeat(65);
+        },
+        async submitDispute() {
+          return { txid: "0x1" };
+        },
+        async callContract() {
+          return { ok: true };
+        },
+      },
+    });
+
+    const outgoing = agent.buildOutgoingTransfer({
+      pipeId,
+      amount: "25",
+      actor: "ST1LOCAL",
+    });
+
+    expect(outgoing.myBalance).toBe("75");
+    expect(outgoing.theirBalance).toBe("25");
+    expect(outgoing.nonce).toBe("1");
+
+    const accepted = await agent.acceptIncomingTransfer({
+      pipeId,
+      payload: {
+        ...outgoing,
+        actor: "ST1OTHER",
+        theirSignature: "0x" + "33".repeat(65),
+      },
+    });
+
+    expect(accepted.accepted).toBe(true);
+    expect(accepted.mySignature).toMatch(/^0x[0-9a-f]+$/);
+
+    const latest = store.getLatestSignatureState(pipeId, "ST1LOCAL");
+    expect(latest?.nonce).toBe("1");
+    expect(latest?.myBalance).toBe("75");
+    expect(latest?.theirBalance).toBe("25");
+
+    store.close();
+  });
+
   it("defaults watcher interval to one hour", () => {
     const dbFile = tempDbFile("agent-interval");
     const store = new AgentStateStore({ dbFile });
