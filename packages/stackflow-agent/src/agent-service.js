@@ -268,6 +268,12 @@ export class StackflowAgentService {
         reason: "actor-missing",
       };
     }
+    if (actor !== tracked.counterpartyPrincipal) {
+      return {
+        valid: false,
+        reason: "actor-mismatch",
+      };
+    }
     const latest = this.stateStore.getLatestSignatureState(
       tracked.pipeId,
       tracked.localPrincipal,
