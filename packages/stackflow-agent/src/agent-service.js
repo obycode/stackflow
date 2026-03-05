@@ -173,6 +173,41 @@ export class StackflowAgentService {
         reason: "contract-mismatch",
       };
     }
+
+    if (data.pipeId != null && String(data.pipeId).trim() !== tracked.pipeId) {
+      return {
+        valid: false,
+        reason: "pipe-id-mismatch",
+      };
+    }
+
+    if (data.pipeKey != null) {
+      if (!data.pipeKey || typeof data.pipeKey !== "object" || Array.isArray(data.pipeKey)) {
+        return {
+          valid: false,
+          reason: "pipe-key-invalid",
+        };
+      }
+      let incomingPipeId;
+      try {
+        incomingPipeId = buildPipeId({
+          contractId,
+          pipeKey: data.pipeKey,
+        });
+      } catch {
+        return {
+          valid: false,
+          reason: "pipe-key-invalid",
+        };
+      }
+      if (incomingPipeId !== tracked.pipeId) {
+        return {
+          valid: false,
+          reason: "pipe-key-mismatch",
+        };
+      }
+    }
+
     const forPrincipal = String(data.forPrincipal ?? "").trim();
     if (forPrincipal !== tracked.localPrincipal) {
       return {
