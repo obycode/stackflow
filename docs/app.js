@@ -21,11 +21,23 @@ const DEFAULT_API_BY_NETWORK = {
 };
 
 const STACKFLOW_MESSAGE_VERSION = "0.6.0";
+const BNSV2_API_BASE = "https://api.bnsv2.com";
+const CONTRACT_PRESETS = {
+  "stx-mainnet": {
+    contractId: "SP126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT6AD08RV.stackflow-0-6-0",
+    tokenContract: "",
+  },
+  "sbtc-mainnet": {
+    contractId: "SP126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT6AD08RV.stackflow-sbtc-0-6-0",
+    tokenContract: "SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-token",
+  },
+};
 
 const elements = {
   network: document.getElementById("network"),
   stacksApiUrl: document.getElementById("stacks-api-url"),
   contractId: document.getElementById("contract-id"),
+  contractPreset: document.getElementById("contract-preset"),
   counterparty: document.getElementById("counterparty"),
   tokenContract: document.getElementById("token-contract"),
   forPrincipal: document.getElementById("for-principal"),
@@ -54,6 +66,7 @@ const state = {
   connectedAddress: null,
   lastSignature: null,
   lastPayload: null,
+  nameCache: new Map(),
 };
 
 function normalizedText(value) {
@@ -62,6 +75,32 @@ function normalizedText(value) {
 
 function isStacksAddress(value) {
   return /^S[PMT][A-Z0-9]{38,42}$/i.test(normalizedText(value));
+}
+
+function isPrincipalText(value) {
+  const text = normalizedText(value);
+  if (!text || !/^S/i.test(text)) {
+    return false;
+  }
+  try {
+    principalCV(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getStacksApiBase() {
+  const apiBase = normalizedText(elements.stacksApiUrl.value).replace(/\/+$/, "");
+  if (!apiBase) {
+    throw new Error("Stacks API URL is required");
+  }
+  return apiBase;
+}
+
+function looksLikeBtcName(value) {
+  const text = normalizedText(value).toLowerCase();
+  return /^[a-z0-9][a-z0-9-]{0,36}\.btc$/.test(text);
 }
 
 function nowStamp() {
@@ -176,12 +215,131 @@ function readNetwork() {
   return network;
 }
 
-function parseRequiredPrincipal(fieldName, value) {
-  const principal = normalizedText(value);
-  if (!isStacksAddress(principal)) {
-    throw new Error(`${fieldName} must be a valid Stacks principal`);
+function extractPrincipalFromNamePayload(payload) {
+  const visited = new Set();
+  const crawl = (value) => {
+    if (value == null) {
+      return null;
+    }
+    if (typeof value === "string") {
+      return isPrincipalText(value) ? value : null;
+    }
+    if (typeof value !== "object") {
+      return null;
+    }
+    if (visited.has(value)) {
+      return null;
+    }
+    visited.add(value);
+
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        const found = crawl(entry);
+        if (found) {
+          return found;
+        }
+      }
+      return null;
+    }
+
+    const priorityKeys = [
+      "address",
+      "owner",
+      "owner_address",
+      "ownerAddress",
+      "current_owner",
+      "principal",
+    ];
+    for (const key of priorityKeys) {
+      if (key in value) {
+        const found = crawl(value[key]);
+        if (found) {
+          return found;
+        }
+      }
+    }
+    for (const nested of Object.values(value)) {
+      const found = crawl(nested);
+      if (found) {
+        return found;
+      }
+    }
+    return null;
+  };
+
+  return crawl(payload);
+}
+
+async function resolveBtcNameToPrincipal(name) {
+  const normalizedName = normalizedText(name).toLowerCase();
+  const network = readNetwork();
+  const cacheKey = `${network}:${normalizedName}`;
+  const cached = state.nameCache.get(cacheKey);
+  if (cached) {
+    return cached;
   }
-  return principal;
+
+  const encoded = encodeURIComponent(normalizedName);
+  const endpoints =
+    network === "mainnet"
+      ? [`${BNSV2_API_BASE}/names/${encoded}`]
+      : network === "testnet"
+        ? [`${BNSV2_API_BASE}/testnet/names/${encoded}`]
+        : [`${BNSV2_API_BASE}/testnet/names/${encoded}`, `${BNSV2_API_BASE}/names/${encoded}`];
+
+  const failures = [];
+  for (const endpoint of endpoints) {
+    try {
+      const response = await fetch(endpoint, {
+        headers: { accept: "application/json" },
+      });
+      if (response.status === 404) {
+        failures.push(`${response.status} ${endpoint}`);
+        continue;
+      }
+      if (!response.ok) {
+        failures.push(`${response.status} ${endpoint}`);
+        continue;
+      }
+      const body = await response.json().catch(() => null);
+      const principal = extractPrincipalFromNamePayload(body);
+      if (principal) {
+        state.nameCache.set(cacheKey, principal);
+        return principal;
+      }
+      failures.push(`no-principal ${endpoint}`);
+    } catch (error) {
+      failures.push(
+        `error ${endpoint}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  throw new Error(
+    `Could not resolve ${normalizedName}. Tried: ${failures.slice(0, 3).join(" | ")}`,
+  );
+}
+
+async function resolvePrincipalInput(fieldName, value, { required = true } = {}) {
+  const input = normalizedText(value);
+  if (!input) {
+    if (required) {
+      throw new Error(`${fieldName} is required`);
+    }
+    return null;
+  }
+
+  if (isPrincipalText(input)) {
+    return input;
+  }
+
+  if (looksLikeBtcName(input)) {
+    const principal = await resolveBtcNameToPrincipal(input);
+    appendLog(`${fieldName}: resolved ${input} -> ${principal}`);
+    return principal;
+  }
+
+  throw new Error(`${fieldName} must be a Stacks principal or .btc name`);
 }
 
 function parseOptionalTokenCV() {
@@ -324,6 +482,36 @@ function updateNetworkDefaults() {
   }
 }
 
+function getPresetKeyByValues(contractId, tokenContract) {
+  const contractText = normalizedText(contractId);
+  const tokenText = normalizedText(tokenContract);
+  for (const [presetKey, preset] of Object.entries(CONTRACT_PRESETS)) {
+    if (
+      normalizedText(preset.contractId) === contractText &&
+      normalizedText(preset.tokenContract) === tokenText
+    ) {
+      return presetKey;
+    }
+  }
+  return "custom";
+}
+
+function applyContractPreset(presetKey, { log = true } = {}) {
+  const preset = CONTRACT_PRESETS[presetKey];
+  if (!preset) {
+    return;
+  }
+  elements.contractId.value = preset.contractId;
+  elements.tokenContract.value = preset.tokenContract;
+  if (log) {
+    appendLog(
+      `Applied preset ${presetKey}: contract=${preset.contractId}, token=${
+        preset.tokenContract || "(none)"
+      }`,
+    );
+  }
+}
+
 async function handleConnectWallet() {
   try {
     const address = await ensureWallet({ interactive: true });
@@ -337,10 +525,7 @@ async function handleConnectWallet() {
 
 async function fetchReadOnly(functionName, functionArgs, sender) {
   const { contractAddress, contractName } = parseContractId();
-  const apiBase = normalizedText(elements.stacksApiUrl.value).replace(/\/+$/, "");
-  if (!apiBase) {
-    throw new Error("Stacks API URL is required");
-  }
+  const apiBase = getStacksApiBase();
   const url = `${apiBase}/v2/contracts/call-read/${contractAddress}/${contractName}/${functionName}`;
   const response = await fetch(url, {
     method: "POST",
@@ -365,8 +550,11 @@ async function fetchReadOnly(functionName, functionArgs, sender) {
 
 async function handleGetPipe() {
   try {
-    const withPrincipal = parseRequiredPrincipal("Counterparty", elements.counterparty.value);
-    const forPrincipal = parseRequiredPrincipal(
+    const withPrincipal = await resolvePrincipalInput(
+      "Counterparty",
+      elements.counterparty.value,
+    );
+    const forPrincipal = await resolvePrincipalInput(
       "For Principal",
       elements.forPrincipal.value || state.connectedAddress,
     );
@@ -416,7 +604,10 @@ async function handleOpenPipe() {
     if (!sender) {
       throw new Error("Connect wallet first");
     }
-    const withPrincipal = parseRequiredPrincipal("Counterparty", elements.counterparty.value);
+    const withPrincipal = await resolvePrincipalInput(
+      "Counterparty",
+      elements.counterparty.value,
+    );
     const amount = parseUintInput("Amount", elements.openAmount.value, { min: 1n });
     const nonceText = normalizedText(elements.openNonce.value);
     const nonce = nonceText ? parseUintInput("Nonce", nonceText) : 0n;
@@ -458,7 +649,10 @@ async function handleOpenPipe() {
 async function handleForceCancel() {
   try {
     await ensureWallet({ interactive: true });
-    const withPrincipal = parseRequiredPrincipal("Counterparty", elements.counterparty.value);
+    const withPrincipal = await resolvePrincipalInput(
+      "Counterparty",
+      elements.counterparty.value,
+    );
     const { cv: tokenCV } = parseOptionalTokenCV();
 
     const response = await callContract("force-cancel", [
@@ -479,15 +673,18 @@ async function handleForceCancel() {
   }
 }
 
-function buildTransferContext() {
+async function buildTransferContext() {
   const network = readNetwork();
   const { contractId } = parseContractId();
-  const forPrincipal = parseRequiredPrincipal(
+  const forPrincipal = await resolvePrincipalInput(
     "For Principal",
     elements.forPrincipal.value || state.connectedAddress,
   );
-  const withPrincipal = parseRequiredPrincipal("Counterparty", elements.counterparty.value);
-  const actor = parseRequiredPrincipal(
+  const withPrincipal = await resolvePrincipalInput(
+    "Counterparty",
+    elements.counterparty.value,
+  );
+  const actor = await resolvePrincipalInput(
     "Actor Principal",
     elements.transferActor.value || forPrincipal,
   );
@@ -543,7 +740,7 @@ function buildTransferContext() {
 async function handleSignTransfer() {
   try {
     await ensureWallet({ interactive: true });
-    const context = buildTransferContext();
+    const context = await buildTransferContext();
     const response = await request("stx_signStructuredMessage", {
       domain: context.domain,
       message: context.message,
@@ -578,9 +775,9 @@ async function handleSignTransfer() {
   }
 }
 
-function handleBuildPayload() {
+async function handleBuildPayload() {
   try {
-    const context = buildTransferContext();
+    const context = await buildTransferContext();
     const payload = {
       contractId: context.contractId,
       forPrincipal: context.forPrincipal,
@@ -626,11 +823,35 @@ function wireEvents() {
   elements.network.addEventListener("change", () => {
     elements.stacksApiUrl.value = DEFAULT_API_BY_NETWORK[readNetwork()];
   });
+  elements.contractPreset.addEventListener("change", () => {
+    applyContractPreset(elements.contractPreset.value);
+  });
+  elements.contractId.addEventListener("input", () => {
+    elements.contractPreset.value = getPresetKeyByValues(
+      elements.contractId.value,
+      elements.tokenContract.value,
+    );
+  });
+  elements.tokenContract.addEventListener("input", () => {
+    elements.contractPreset.value = getPresetKeyByValues(
+      elements.contractId.value,
+      elements.tokenContract.value,
+    );
+  });
 }
 
 async function bootstrap() {
   wireEvents();
   updateNetworkDefaults();
+  if (!normalizedText(elements.contractId.value) && !normalizedText(elements.tokenContract.value)) {
+    elements.contractPreset.value = "stx-mainnet";
+    applyContractPreset("stx-mainnet", { log: false });
+  } else {
+    elements.contractPreset.value = getPresetKeyByValues(
+      elements.contractId.value,
+      elements.tokenContract.value,
+    );
+  }
   try {
     const address = await ensureWallet({ interactive: false });
     if (address) {

@@ -37,8 +37,16 @@
             <input id="contract-id" type="text" placeholder="ST...stackflow-0-6-0" />
           </label>
           <label>
+            Contract Preset
+            <select id="contract-preset">
+              <option value="stx-mainnet">STX (mainnet default)</option>
+              <option value="sbtc-mainnet">sBTC (mainnet default)</option>
+              <option value="custom">Custom (manual)</option>
+            </select>
+          </label>
+          <label>
             Counterparty Principal
-            <input id="counterparty" type="text" placeholder="SP..." />
+            <input id="counterparty" type="text" placeholder="SP... or brice.btc" />
           </label>
           <label>
             Token Contract (optional)
@@ -46,7 +54,7 @@
           </label>
           <label>
             For Principal (read-only caller)
-            <input id="for-principal" type="text" placeholder="SP..." />
+            <input id="for-principal" type="text" placeholder="SP... or alice.btc" />
           </label>
         </div>
       </section>
@@ -103,7 +111,7 @@
           </label>
           <label>
             Actor Principal
-            <input id="transfer-actor" type="text" placeholder="SP..." />
+            <input id="transfer-actor" type="text" placeholder="SP... or brice.btc" />
           </label>
           <label>
             Hashed Secret (optional 0x32-byte hex)

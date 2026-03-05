@@ -600,6 +600,8 @@ It includes forms/buttons for:
 3. `fund-pipe` (open pipe)
 4. `force-cancel`
 5. structured transfer message signing + payload JSON builder
+6. principal resolution for `.btc` names (for example `brice.btc`) via BNSv2 API
+7. preset Stackflow contract selection with token auto-fill for official STX/sBTC mainnet contracts
 
 To publish with GitHub Pages (no build step):
 
