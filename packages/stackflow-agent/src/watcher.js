@@ -145,6 +145,24 @@ export class HourlyClosureWatcher {
     this.running = false;
   }
 
+  reportError(error, context = null) {
+    if (!error) {
+      return;
+    }
+    if (this.onError) {
+      if (context && error instanceof Error && !error.context) {
+        error.context = context;
+      }
+      this.onError(error);
+      return;
+    }
+    console.error(
+      `[stackflow-agent] watcher error${
+        context ? ` (${context})` : ""
+      }: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
   start() {
     if (this.timer) {
       return;
@@ -200,23 +218,38 @@ export class HourlyClosureWatcher {
           pipesScanned: 0,
           closuresFound: 0,
           disputesSubmitted: 0,
+          skippedAlreadyDisputed: 0,
+          fetchErrors: 0,
+          disputeErrors: 0,
         };
       }
 
       let closuresFound = 0;
       let disputesSubmitted = 0;
       let skippedAlreadyDisputed = 0;
+      let fetchErrors = 0;
+      let disputeErrors = 0;
       let pipesScanned = 0;
       for (const trackedPipe of trackedPipes) {
         pipesScanned += 1;
-        const pipeState = await this.getPipeState({
-          contractId: trackedPipe.contractId,
-          token: trackedPipe.token ?? null,
-          pipeKey: trackedPipe.pipeKey,
-          forPrincipal: trackedPipe.localPrincipal,
-          withPrincipal: trackedPipe.counterpartyPrincipal,
-          pipeId: trackedPipe.pipeId,
-        });
+        let pipeState;
+        try {
+          pipeState = await this.getPipeState({
+            contractId: trackedPipe.contractId,
+            token: trackedPipe.token ?? null,
+            pipeKey: trackedPipe.pipeKey,
+            forPrincipal: trackedPipe.localPrincipal,
+            withPrincipal: trackedPipe.counterpartyPrincipal,
+            pipeId: trackedPipe.pipeId,
+          });
+        } catch (error) {
+          fetchErrors += 1;
+          this.reportError(
+            error,
+            `getPipeState:${trackedPipe.contractId}:${trackedPipe.pipeId}`,
+          );
+          continue;
+        }
         const rawClosure = toClosureFromPipeState({
           trackedPipe,
           pipeState,
@@ -239,10 +272,17 @@ export class HourlyClosureWatcher {
           continue;
         }
 
-        const disputeResult = await this.agentService.disputeClosure({
-          closureEvent: closure,
-          walletPassword: this.walletPassword,
-        });
+        let disputeResult;
+        try {
+          disputeResult = await this.agentService.disputeClosure({
+            closureEvent: closure,
+            walletPassword: this.walletPassword,
+          });
+        } catch (error) {
+          disputeErrors += 1;
+          this.reportError(error, `disputeClosure:${closure.txid}`);
+          continue;
+        }
         if (disputeResult.submitted) {
           disputesSubmitted += 1;
         }
@@ -255,6 +295,8 @@ export class HourlyClosureWatcher {
         closuresFound,
         disputesSubmitted,
         skippedAlreadyDisputed,
+        fetchErrors,
+        disputeErrors,
       };
     } finally {
       this.running = false;
@@ -281,6 +323,8 @@ export class HourlyClosureWatcher {
           ok: true,
           scanned: 0,
           disputesSubmitted: 0,
+          skippedAlreadyDisputed: 0,
+          disputeErrors: 0,
           fromBlockHeight,
           toBlockHeight: fromBlockHeight,
         };
@@ -289,6 +333,8 @@ export class HourlyClosureWatcher {
       let highestBlock = parseUnsignedBigInt(fromBlockHeight, "fromBlockHeight");
       let disputesSubmitted = 0;
       let skippedAlreadyDisputed = 0;
+      let disputeErrors = 0;
+      let hasDisputeErrors = false;
       let scanned = 0;
 
       for (const rawEvent of events) {
@@ -304,11 +350,18 @@ export class HourlyClosureWatcher {
         if (existingClosure?.disputed) {
           skippedAlreadyDisputed += 1;
         } else {
-          const disputeResult = await this.agentService.disputeClosure({
-            closureEvent: closure,
-            walletPassword: this.walletPassword,
-          });
-          if (disputeResult.submitted) {
+          let disputeResult;
+          try {
+            disputeResult = await this.agentService.disputeClosure({
+              closureEvent: closure,
+              walletPassword: this.walletPassword,
+            });
+          } catch (error) {
+            disputeErrors += 1;
+            hasDisputeErrors = true;
+            this.reportError(error, `disputeClosure:${closure.txid}`);
+          }
+          if (disputeResult?.submitted) {
             disputesSubmitted += 1;
           }
         }
@@ -319,14 +372,21 @@ export class HourlyClosureWatcher {
         }
       }
 
-      this.agentService.stateStore.setWatcherCursor(highestBlock.toString(10));
+      const toBlockHeight = hasDisputeErrors
+        ? fromBlockHeight
+        : highestBlock.toString(10);
+      if (!hasDisputeErrors) {
+        this.agentService.stateStore.setWatcherCursor(toBlockHeight);
+      }
+
       return {
         ok: true,
         scanned,
         disputesSubmitted,
         skippedAlreadyDisputed,
+        disputeErrors,
         fromBlockHeight,
-        toBlockHeight: highestBlock.toString(10),
+        toBlockHeight,
       };
     } finally {
       this.running = false;

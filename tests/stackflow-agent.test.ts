@@ -289,6 +289,227 @@ describe("stackflow agent", () => {
     store.close();
   });
 
+  it("continues readonly polling when one pipe state fetch fails", async () => {
+    const dbFile = tempDbFile("agent-readonly-fetch-error");
+    const store = new AgentStateStore({ dbFile });
+
+    const contractId = "ST1TESTABC.contract";
+    const pipeKeyA = {
+      "principal-1": "ST1LOCAL",
+      "principal-2": "ST1OTHERA",
+      token: null,
+    };
+    const pipeKeyB = {
+      "principal-1": "ST1LOCAL",
+      "principal-2": "ST1OTHERB",
+      token: null,
+    };
+
+    const pipeIdA = buildPipeId({ contractId, pipeKey: pipeKeyA });
+    const pipeIdB = buildPipeId({ contractId, pipeKey: pipeKeyB });
+
+    store.upsertTrackedPipe({
+      pipeId: pipeIdA,
+      contractId,
+      pipeKey: pipeKeyA,
+      localPrincipal: "ST1LOCAL",
+      counterpartyPrincipal: "ST1OTHERA",
+      token: null,
+    });
+    store.upsertTrackedPipe({
+      pipeId: pipeIdB,
+      contractId,
+      pipeKey: pipeKeyB,
+      localPrincipal: "ST1LOCAL",
+      counterpartyPrincipal: "ST1OTHERB",
+      token: null,
+    });
+
+    store.upsertSignatureState({
+      contractId,
+      pipeKey: pipeKeyB,
+      forPrincipal: "ST1LOCAL",
+      withPrincipal: "ST1OTHERB",
+      token: null,
+      myBalance: "90",
+      theirBalance: "10",
+      nonce: "8",
+      action: "1",
+      actor: "ST1LOCAL",
+      mySignature: "0x" + "11".repeat(65),
+      theirSignature: "0x" + "22".repeat(65),
+      secret: null,
+      validAfter: null,
+      beneficialOnly: false,
+    });
+
+    let disputeCalls = 0;
+    const errors: Error[] = [];
+
+    const agent = new StackflowAgentService({
+      stateStore: store,
+      signer: {
+        async submitDispute() {
+          disputeCalls += 1;
+          return { txid: "0xdispute-fetch-error" };
+        },
+        async sip018Sign() {
+          return "0x" + "44".repeat(65);
+        },
+        async callContract() {
+          return { ok: true };
+        },
+      },
+      network: "devnet",
+      disputeOnlyBeneficial: true,
+    });
+
+    let fetchCalls = 0;
+    const watcher = new HourlyClosureWatcher({
+      agentService: agent,
+      getPipeState: async () => {
+        fetchCalls += 1;
+        if (fetchCalls === 1) {
+          throw new Error("rpc unavailable");
+        }
+        return {
+          "balance-1": "20",
+          "balance-2": "80",
+          "expires-at": "200",
+          nonce: "5",
+          closer: "ST1OTHERB",
+        };
+      },
+      onError: (error) => {
+        errors.push(error as Error);
+      },
+    });
+
+    const result = await watcher.runOnce();
+    expect(result.ok).toBe(true);
+    expect(result.mode).toBe("readonly-pipe");
+    expect(result.pipesScanned).toBe(2);
+    expect(result.fetchErrors).toBe(1);
+    expect(result.disputeErrors).toBe(0);
+    expect(result.disputesSubmitted).toBe(1);
+    expect(disputeCalls).toBe(1);
+    expect(errors).toHaveLength(1);
+
+    watcher.stop();
+    store.close();
+  });
+
+  it("holds event cursor when dispute submission errors", async () => {
+    const dbFile = tempDbFile("agent-event-dispute-error");
+    const store = new AgentStateStore({ dbFile });
+
+    const contractId = "ST1TESTABC.contract";
+    const pipeKey = {
+      "principal-1": "ST1LOCAL",
+      "principal-2": "ST1OTHER",
+      token: null,
+    };
+    const pipeId = buildPipeId({ contractId, pipeKey });
+
+    store.upsertTrackedPipe({
+      pipeId,
+      contractId,
+      pipeKey,
+      localPrincipal: "ST1LOCAL",
+      counterpartyPrincipal: "ST1OTHER",
+      token: null,
+    });
+    store.upsertSignatureState({
+      contractId,
+      pipeKey,
+      forPrincipal: "ST1LOCAL",
+      withPrincipal: "ST1OTHER",
+      token: null,
+      myBalance: "90",
+      theirBalance: "10",
+      nonce: "8",
+      action: "1",
+      actor: "ST1LOCAL",
+      mySignature: "0x" + "11".repeat(65),
+      theirSignature: "0x" + "22".repeat(65),
+      secret: null,
+      validAfter: null,
+      beneficialOnly: false,
+    });
+
+    let submitCalls = 0;
+    const errors: Error[] = [];
+    const agent = new StackflowAgentService({
+      stateStore: store,
+      signer: {
+        async submitDispute() {
+          submitCalls += 1;
+          if (submitCalls === 1) {
+            throw new Error("signer timeout");
+          }
+          return { txid: "0xdispute-ok" };
+        },
+        async sip018Sign() {
+          return "0x" + "33".repeat(65);
+        },
+        async callContract() {
+          return { ok: true };
+        },
+      },
+      network: "devnet",
+      disputeOnlyBeneficial: true,
+    });
+
+    const watcher = new HourlyClosureWatcher({
+      agentService: agent,
+      listClosureEvents: async () => [
+        {
+          contractId,
+          pipeKey,
+          eventName: "force-close",
+          nonce: "5",
+          closer: "ST1OTHER",
+          txid: "0xtx-err",
+          blockHeight: "123",
+          expiresAt: "200",
+          closureMyBalance: "20",
+        },
+        {
+          contractId,
+          pipeKey,
+          eventName: "force-close",
+          nonce: "6",
+          closer: "ST1OTHER",
+          txid: "0xtx-ok",
+          blockHeight: "124",
+          expiresAt: "201",
+          closureMyBalance: "30",
+        },
+      ],
+      onError: (error) => {
+        errors.push(error as Error);
+      },
+    });
+
+    const first = await watcher.runOnce();
+    expect(first.ok).toBe(true);
+    expect(first.scanned).toBe(2);
+    expect(first.disputeErrors).toBe(1);
+    expect(first.disputesSubmitted).toBe(1);
+    expect(first.toBlockHeight).toBe("0");
+    expect(store.getWatcherCursor()).toBe("0");
+    expect(errors).toHaveLength(1);
+
+    const second = await watcher.runOnce();
+    expect(second.disputeErrors).toBe(0);
+    expect(second.disputesSubmitted).toBe(1);
+    expect(second.toBlockHeight).toBe("124");
+    expect(store.getWatcherCursor()).toBe("124");
+
+    watcher.stop();
+    store.close();
+  });
+
   it("validates and signs incoming transfer requests", async () => {
     const dbFile = tempDbFile("agent-sign");
     const store = new AgentStateStore({ dbFile });

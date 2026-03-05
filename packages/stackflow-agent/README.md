@@ -133,4 +133,6 @@ const result = await agent.acceptIncomingTransfer({
    - `getPipeState` (recommended): per-pipe read-only polling (`get-pipe`)
    - `listClosureEvents`: event scan mode
 4. Watcher retries are idempotent for already-disputed closures (same closure txid is skipped on later polls).
-5. For production hardening, add alerting, signer balance checks, and idempotency audit logs.
+5. Read-only polling isolates per-pipe failures (`getPipeState` errors on one pipe do not stop others).
+6. Event scan mode intentionally holds the cursor when any dispute submission errors occur, so failed disputes are retried on next run.
+7. For production hardening, add alerting, signer balance checks, and idempotency audit logs.
