@@ -25,6 +25,7 @@ body {
   margin: 0 auto;
   padding: 2rem 1rem 3rem;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 1rem;
 }
 
@@ -59,6 +60,7 @@ body {
   border: 1px solid var(--line);
   border-radius: 1rem;
   padding: 1rem;
+  min-width: 0;
 }
 
 .card h2 {
@@ -131,7 +133,12 @@ button:hover {
   color: #d6f9d1;
   padding: 0.8rem;
   border-radius: 0.6rem;
+  max-width: 100%;
+  min-width: 0;
   overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   min-height: 6rem;
   font-family: "IBM Plex Mono", "Consolas", monospace;
   font-size: 0.88rem;

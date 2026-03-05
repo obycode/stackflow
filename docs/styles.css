@@ -29,6 +29,7 @@ body {
   margin: 0 auto;
   padding: 1.25rem 1rem 2.5rem;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.95rem;
 }
 
@@ -63,6 +64,7 @@ body {
   border: 1px solid var(--line);
   border-radius: 1rem;
   padding: 1rem;
+  min-width: 0;
 }
 
 .card h2 {
