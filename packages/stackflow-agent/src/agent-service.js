@@ -88,7 +88,7 @@ export class StackflowAgentService {
   buildOutgoingTransfer({
     pipeId,
     amount,
-    actor,
+    actor = null,
     action = "1",
     secret = null,
     validAfter = null,
@@ -134,6 +134,14 @@ export class StackflowAgentService {
     const nextTheir = currentTheir + transferAmount;
     const nextNonce = currentNonce + 1n;
 
+    const normalizedActor =
+      actor == null || String(actor).trim() === ""
+        ? tracked.localPrincipal
+        : assertNonEmptyString(actor, "actor");
+    if (normalizedActor !== tracked.localPrincipal) {
+      throw new Error("actor must match tracked local principal");
+    }
+
     return {
       contractId: tracked.contractId,
       pipeKey: tracked.pipeKey,
@@ -144,7 +152,7 @@ export class StackflowAgentService {
       theirBalance: nextTheir.toString(10),
       nonce: nextNonce.toString(10),
       action: toUnsignedString(action, "action"),
-      actor: assertNonEmptyString(actor, "actor"),
+      actor: normalizedActor,
       secret,
       validAfter,
       beneficialOnly: beneficialOnly === true,

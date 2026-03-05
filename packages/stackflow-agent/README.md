@@ -106,7 +106,7 @@ await agent.openPipe({
 const outgoing = agent.buildOutgoingTransfer({
   pipeId: tracked.pipeId,
   amount: "25",
-  actor: tracked.localPrincipal,
+  // actor defaults to tracked.localPrincipal
 });
 ```
 
@@ -135,5 +135,6 @@ const result = await agent.acceptIncomingTransfer({
 4. Watcher retries are idempotent for already-disputed closures (same closure txid is skipped on later polls).
 5. Read-only polling isolates per-pipe failures (`getPipeState` errors on one pipe do not stop others).
 6. Event scan mode intentionally holds the cursor when any dispute submission errors occur, so failed disputes are retried on next run.
-7. Incoming transfer validation enforces tracked contract/pipe/principals/token consistency; mismatched `pipeId`, `pipeKey`, `actor`, or token payloads are rejected.
-8. For production hardening, add alerting, signer balance checks, and idempotency audit logs.
+7. `buildOutgoingTransfer(...)` defaults `actor` to the tracked local principal and rejects mismatched actor values.
+8. Incoming transfer validation enforces tracked contract/pipe/principals/token consistency; mismatched `pipeId`, `pipeKey`, `actor`, or token payloads are rejected.
+9. For production hardening, add alerting, signer balance checks, and idempotency audit logs.
