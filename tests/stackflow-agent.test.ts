@@ -691,6 +691,126 @@ describe("stackflow agent", () => {
     store.close();
   });
 
+  it("rejects incoming transfer requests with pipe id mismatch", () => {
+    const dbFile = tempDbFile("agent-sign-pipeid-mismatch");
+    const store = new AgentStateStore({ dbFile });
+    const contractId = "ST1TESTABC.contract";
+    const pipeKey = {
+      "principal-1": "ST1LOCAL",
+      "principal-2": "ST1OTHER",
+      token: null,
+    };
+    const pipeId = buildPipeId({ contractId, pipeKey });
+
+    store.upsertTrackedPipe({
+      pipeId,
+      contractId,
+      pipeKey,
+      localPrincipal: "ST1LOCAL",
+      counterpartyPrincipal: "ST1OTHER",
+      token: null,
+    });
+
+    const agent = new StackflowAgentService({
+      stateStore: store,
+      signer: {
+        async sip018Sign() {
+          return "0x" + "44".repeat(65);
+        },
+        async submitDispute() {
+          return { txid: "0x1" };
+        },
+        async callContract() {
+          return { ok: true };
+        },
+      },
+      network: "devnet",
+    });
+
+    const validation = agent.validateIncomingTransfer({
+      pipeId,
+      payload: {
+        contractId,
+        pipeId: "wrong-pipe-id",
+        forPrincipal: "ST1LOCAL",
+        withPrincipal: "ST1OTHER",
+        token: null,
+        myBalance: "90",
+        theirBalance: "10",
+        nonce: "1",
+        action: "1",
+        actor: "ST1OTHER",
+        theirSignature: "0x" + "22".repeat(65),
+      },
+    });
+
+    expect(validation.valid).toBe(false);
+    expect(validation.reason).toBe("pipe-id-mismatch");
+    store.close();
+  });
+
+  it("rejects incoming transfer requests with pipe key mismatch", () => {
+    const dbFile = tempDbFile("agent-sign-pipekey-mismatch");
+    const store = new AgentStateStore({ dbFile });
+    const contractId = "ST1TESTABC.contract";
+    const trackedPipeKey = {
+      "principal-1": "ST1LOCAL",
+      "principal-2": "ST1OTHER",
+      token: null,
+    };
+    const pipeId = buildPipeId({ contractId, pipeKey: trackedPipeKey });
+
+    store.upsertTrackedPipe({
+      pipeId,
+      contractId,
+      pipeKey: trackedPipeKey,
+      localPrincipal: "ST1LOCAL",
+      counterpartyPrincipal: "ST1OTHER",
+      token: null,
+    });
+
+    const agent = new StackflowAgentService({
+      stateStore: store,
+      signer: {
+        async sip018Sign() {
+          return "0x" + "44".repeat(65);
+        },
+        async submitDispute() {
+          return { txid: "0x1" };
+        },
+        async callContract() {
+          return { ok: true };
+        },
+      },
+      network: "devnet",
+    });
+
+    const validation = agent.validateIncomingTransfer({
+      pipeId,
+      payload: {
+        contractId,
+        pipeKey: {
+          "principal-1": "ST1LOCAL",
+          "principal-2": "ST1THIRD",
+          token: null,
+        },
+        forPrincipal: "ST1LOCAL",
+        withPrincipal: "ST1OTHER",
+        token: null,
+        myBalance: "90",
+        theirBalance: "10",
+        nonce: "1",
+        action: "1",
+        actor: "ST1OTHER",
+        theirSignature: "0x" + "22".repeat(65),
+      },
+    });
+
+    expect(validation.valid).toBe(false);
+    expect(validation.reason).toBe("pipe-key-mismatch");
+    store.close();
+  });
+
   it("opens a pipe via signer adapter with expected contract call", async () => {
     const dbFile = tempDbFile("agent-open");
     const store = new AgentStateStore({ dbFile });
