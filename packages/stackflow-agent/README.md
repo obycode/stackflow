@@ -137,4 +137,5 @@ const result = await agent.acceptIncomingTransfer({
 6. Event scan mode intentionally holds the cursor when any dispute submission errors occur, so failed disputes are retried on next run.
 7. `buildOutgoingTransfer(...)` defaults `actor` to the tracked local principal and rejects mismatched actor values.
 8. Incoming transfer validation enforces tracked contract/pipe/principals/token consistency; mismatched `pipeId`, `pipeKey`, `actor`, or token payloads are rejected.
-9. For production hardening, add alerting, signer balance checks, and idempotency audit logs.
+9. Incoming transfer validation also enforces sequential nonces and balance invariants against the latest stored local state (same total balance, and counterparty-actor updates must not reduce local balance).
+10. For production hardening, add alerting, signer balance checks, and idempotency audit logs.

@@ -296,6 +296,47 @@ export class StackflowAgentService {
           existingNonce: latest.nonce,
         };
       }
+      if (incomingNonce !== existingNonce + 1n) {
+        return {
+          valid: false,
+          reason: "nonce-not-sequential",
+          existingNonce: latest.nonce,
+        };
+      }
+
+      const existingMyBalance = parseUnsignedBigInt(
+        latest.myBalance,
+        "existing myBalance",
+      );
+      const existingTheirBalance = parseUnsignedBigInt(
+        latest.theirBalance,
+        "existing theirBalance",
+      );
+      const incomingMyBalance = parseUnsignedBigInt(myBalance, "incoming myBalance");
+      const incomingTheirBalance = parseUnsignedBigInt(
+        theirBalance,
+        "incoming theirBalance",
+      );
+
+      if (
+        incomingMyBalance + incomingTheirBalance !==
+        existingMyBalance + existingTheirBalance
+      ) {
+        return {
+          valid: false,
+          reason: "balance-sum-mismatch",
+        };
+      }
+
+      if (
+        incomingMyBalance < existingMyBalance ||
+        incomingTheirBalance > existingTheirBalance
+      ) {
+        return {
+          valid: false,
+          reason: "balance-direction-invalid",
+        };
+      }
     }
 
     let secret = null;
