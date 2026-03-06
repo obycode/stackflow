@@ -241,7 +241,7 @@ function collectContractEventCandidates(
 
 function normalizeWatchedContracts(watchedContracts: string[]): string[] {
   return watchedContracts
-    .map((contract) => contract.trim().toLowerCase())
+    .map((contract) => contract.trim())
     .filter((contract) => contract.length > 0);
 }
 
@@ -254,8 +254,7 @@ function contractMatches(
   }
 
   if (watchedContracts.length > 0) {
-    const normalizedContractId = contractId.toLowerCase();
-    return watchedContracts.some((candidate) => candidate === normalizedContractId);
+    return watchedContracts.some((candidate) => candidate === contractId);
   }
 
   return DEFAULT_STACKFLOW_CONTRACT_PATTERN.test(contractId);
