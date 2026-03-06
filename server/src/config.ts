@@ -35,6 +35,18 @@ function parseInteger(value: unknown, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function parsePort(value: unknown): number {
+  const parsed = parseInteger(value, DEFAULT_PORT);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65_535) {
+    throw new Error('STACKFLOW_NODE_PORT must be an integer between 1 and 65535');
+  }
+  return parsed;
+}
+
+function parseMaxRecentEvents(value: unknown): number {
+  return Math.max(1, parseInteger(value, DEFAULT_MAX_RECENT_EVENTS));
+}
+
 function parseCsv(value: unknown): string[] {
   if (!value) {
     return [];
@@ -157,12 +169,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): StackflowNodeC
 
   return {
     host: env.STACKFLOW_NODE_HOST?.trim() || DEFAULT_HOST,
-    port: parseInteger(env.STACKFLOW_NODE_PORT, DEFAULT_PORT),
+    port: parsePort(env.STACKFLOW_NODE_PORT),
     dbFile,
-    maxRecentEvents: parseInteger(
-      env.STACKFLOW_NODE_MAX_RECENT_EVENTS,
-      DEFAULT_MAX_RECENT_EVENTS,
-    ),
+    maxRecentEvents: parseMaxRecentEvents(env.STACKFLOW_NODE_MAX_RECENT_EVENTS),
     logRawEvents: parseBoolean(env.STACKFLOW_NODE_LOG_RAW_EVENTS, false),
     watchedContracts: parseCsv(env.STACKFLOW_CONTRACTS),
     watchedPrincipals: parsePrincipalCsv(env.STACKFLOW_NODE_PRINCIPALS),
