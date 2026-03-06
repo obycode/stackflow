@@ -163,15 +163,17 @@ function deriveSip018Domain(contract) {
     return { name: "stackflow", version: "1.0.0" };
   }
 
-  const [, rawName = contractText] = contractText.split(".");
-  const name = rawName || "stackflow";
-
-  const versionMatch = name.match(/(\d+)-(\d+)-(\d+)$/);
+  // The Clarity contract defines its domain as:
+  //   { name: (to-ascii? current-contract), version: "0.6.0", chain-id: chain-id }
+  // `current-contract` serializes as the full principal: "SP....contract-name".
+  // Use the full contractId as the domain name to match on-chain verification.
+  const [, contractName = contractText] = contractText.split(".");
+  const versionMatch = contractName.match(/(\d+)-(\d+)-(\d+)$/);
   const version = versionMatch
     ? `${versionMatch[1]}.${versionMatch[2]}.${versionMatch[3]}`
     : "1.0.0";
 
-  return { name, version };
+  return { name: contractText, version };
 }
 
 export class AibtcWalletAdapter {
