@@ -239,6 +239,12 @@ function collectContractEventCandidates(
   return candidates;
 }
 
+function normalizeWatchedContracts(watchedContracts: string[]): string[] {
+  return watchedContracts
+    .map((contract) => contract.trim().toLowerCase())
+    .filter((contract) => contract.length > 0);
+}
+
 function contractMatches(
   contractId: string | null,
   watchedContracts: string[],
@@ -248,7 +254,8 @@ function contractMatches(
   }
 
   if (watchedContracts.length > 0) {
-    return watchedContracts.includes(contractId);
+    const normalizedContractId = contractId.toLowerCase();
+    return watchedContracts.some((candidate) => candidate === normalizedContractId);
   }
 
   return DEFAULT_STACKFLOW_CONTRACT_PATTERN.test(contractId);
@@ -386,7 +393,7 @@ export function extractStackflowPrintEvents(
   payload: unknown,
   options: ExtractOptions = {},
 ): StackflowPrintEvent[] {
-  const watchedContracts = options.watchedContracts || [];
+  const watchedContracts = normalizeWatchedContracts(options.watchedContracts || []);
   const candidates = collectContractEventCandidates(payload);
 
   const normalized = candidates
