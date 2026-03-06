@@ -26,17 +26,26 @@ const DEFAULT_DB_FILE = path.resolve(
   'server/data/stackflow-node-state.db',
 );
 
-function parseInteger(value: unknown, fallback: number): number {
+function parseInteger(value: unknown, fallback: number, key: string): number {
   if (value === undefined || value === null || value === '') {
     return fallback;
   }
 
-  const parsed = Number.parseInt(String(value), 10);
-  return Number.isFinite(parsed) ? parsed : fallback;
+  const normalized = String(value).trim();
+  if (!/^-?\d+$/.test(normalized)) {
+    throw new Error(`${key} must be an integer`);
+  }
+
+  const parsed = Number.parseInt(normalized, 10);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${key} must be a safe integer`);
+  }
+
+  return parsed;
 }
 
 function parsePort(value: unknown): number {
-  const parsed = parseInteger(value, DEFAULT_PORT);
+  const parsed = parseInteger(value, DEFAULT_PORT, 'STACKFLOW_NODE_PORT');
   if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65_535) {
     throw new Error('STACKFLOW_NODE_PORT must be an integer between 1 and 65535');
   }
@@ -44,7 +53,10 @@ function parsePort(value: unknown): number {
 }
 
 function parseMaxRecentEvents(value: unknown): number {
-  return Math.max(1, parseInteger(value, DEFAULT_MAX_RECENT_EVENTS));
+  return Math.max(
+    1,
+    parseInteger(value, DEFAULT_MAX_RECENT_EVENTS, 'STACKFLOW_NODE_MAX_RECENT_EVENTS'),
+  );
 }
 
 function parseCsv(value: unknown): string[] {
@@ -218,6 +230,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): StackflowNodeC
       parseInteger(
         env.STACKFLOW_NODE_PEER_WRITE_RATE_LIMIT_PER_MINUTE,
         DEFAULT_PEER_WRITE_RATE_LIMIT_PER_MINUTE,
+        'STACKFLOW_NODE_PEER_WRITE_RATE_LIMIT_PER_MINUTE',
       ),
     ),
     trustProxy: parseBoolean(
@@ -249,13 +262,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): StackflowNodeC
     ),
     forwardingMinFee: Math.max(
       0,
-      parseInteger(env.STACKFLOW_NODE_FORWARDING_MIN_FEE, 0),
+      parseInteger(
+        env.STACKFLOW_NODE_FORWARDING_MIN_FEE,
+        0,
+        'STACKFLOW_NODE_FORWARDING_MIN_FEE',
+      ),
     ).toString(10),
     forwardingTimeoutMs: Math.max(
       1_000,
       parseInteger(
         env.STACKFLOW_NODE_FORWARDING_TIMEOUT_MS,
         DEFAULT_FORWARDING_TIMEOUT_MS,
+        'STACKFLOW_NODE_FORWARDING_TIMEOUT_MS',
       ),
     ),
     forwardingAllowPrivateDestinations: parseBoolean(
@@ -271,6 +289,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): StackflowNodeC
       parseInteger(
         env.STACKFLOW_NODE_FORWARDING_REVEAL_RETRY_INTERVAL_MS,
         DEFAULT_FORWARDING_REVEAL_RETRY_INTERVAL_MS,
+        'STACKFLOW_NODE_FORWARDING_REVEAL_RETRY_INTERVAL_MS',
       ),
     ),
     forwardingRevealRetryMaxAttempts: Math.max(
@@ -278,6 +297,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): StackflowNodeC
       parseInteger(
         env.STACKFLOW_NODE_FORWARDING_REVEAL_RETRY_MAX_ATTEMPTS,
         DEFAULT_FORWARDING_REVEAL_RETRY_MAX_ATTEMPTS,
+        'STACKFLOW_NODE_FORWARDING_REVEAL_RETRY_MAX_ATTEMPTS',
       ),
     ),
   };

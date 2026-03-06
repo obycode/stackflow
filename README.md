@@ -284,6 +284,9 @@ cannot be disabled accidentally via negative values.
 Boolean env vars accept `true/false`, `1/0`, `yes/no`, and `on/off`
 (case-insensitive); invalid boolean text now fails fast to prevent silent
 misconfiguration.
+Integer env vars must be plain integer text (for example `10000`, not `10s`
+or `12.5`); malformed numeric values fail fast instead of being silently
+coerced.
 Observer ingress controls:
 
 - `STACKFLOW_NODE_OBSERVER_LOCALHOST_ONLY` defaults to `true` and restricts
