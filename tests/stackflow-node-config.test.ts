@@ -97,6 +97,14 @@ describe('stackflow-node config parsing', () => {
     ).toThrow(/STACKFLOW_NODE_PEER_WRITE_RATE_LIMIT_PER_MINUTE must be an integer/);
   });
 
+  it('fails fast when integer env vars exceed safe integer bounds', () => {
+    expect(() =>
+      loadConfig({
+        STACKFLOW_NODE_MAX_RECENT_EVENTS: '9007199254740992',
+      }),
+    ).toThrow(/STACKFLOW_NODE_MAX_RECENT_EVENTS must be a safe integer/);
+  });
+
   it('rejects stackflow-node ports outside the TCP range', () => {
     expect(() =>
       loadConfig({
@@ -150,6 +158,12 @@ describe('stackflow-node config parsing', () => {
         STACKFLOW_NODE_COUNTERPARTY_SIGNER_MODE: 'bad-mode',
       }),
     ).toThrow(/COUNTERPARTY_SIGNER_MODE/);
+
+    expect(() =>
+      loadConfig({
+        STACKS_NETWORK: 'dev',
+      }),
+    ).toThrow(/STACKS_NETWORK must be one of/);
 
     expect(() =>
       loadConfig({
