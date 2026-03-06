@@ -67,6 +67,22 @@ describe('stackflow-node config parsing', () => {
     expect(config.forwardingRevealRetryMaxAttempts).toBe(1);
   });
 
+  it('parses boolean aliases and rejects invalid boolean text', () => {
+    const config = loadConfig({
+      STACKFLOW_NODE_FORWARDING_ENABLED: 'YeS',
+      STACKFLOW_NODE_TRUST_PROXY: '0',
+    });
+
+    expect(config.forwardingEnabled).toBe(true);
+    expect(config.trustProxy).toBe(false);
+
+    expect(() =>
+      loadConfig({
+        STACKFLOW_NODE_FORWARDING_ENABLED: 'maybe',
+      }),
+    ).toThrow(/STACKFLOW_NODE_FORWARDING_ENABLED must be a boolean/);
+  });
+
   it('rejects stackflow-node ports outside the TCP range', () => {
     expect(() =>
       loadConfig({
