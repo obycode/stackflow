@@ -407,18 +407,40 @@ export class StackflowAgentService {
     }
 
     const state = validation.state;
+
+    // Build the flat Clarity-typed message matching the on-chain SIP-018 domain.
+    // balance-1 always corresponds to principal-1 in the pipe key (canonical ordering),
+    // regardless of which side the local agent is on.
+    const pipeKey = state.pipeKey;
+    const localIsPrincipal1 = pipeKey["principal-1"] === state.forPrincipal;
+    const balance1 = localIsPrincipal1 ? state.myBalance : state.theirBalance;
+    const balance2 = localIsPrincipal1 ? state.theirBalance : state.myBalance;
+
+    const message = {
+      "principal-1": { type: "principal", value: pipeKey["principal-1"] },
+      "principal-2": { type: "principal", value: pipeKey["principal-2"] },
+      token:
+        pipeKey.token == null
+          ? { type: "none" }
+          : { type: "some", value: { type: "principal", value: String(pipeKey.token) } },
+      "balance-1": { type: "uint", value: Number(balance1) },
+      "balance-2": { type: "uint", value: Number(balance2) },
+      nonce: { type: "uint", value: Number(state.nonce) },
+      action: { type: "uint", value: Number(state.action) },
+      actor: { type: "principal", value: state.actor },
+      "hashed-secret":
+        state.secret == null
+          ? { type: "none" }
+          : { type: "some", value: { type: "buff", value: state.secret } },
+      "valid-after":
+        state.validAfter == null
+          ? { type: "none" }
+          : { type: "some", value: { type: "uint", value: Number(state.validAfter) } },
+    };
+
     const mySignature = await this.signTransferMessage({
       contractId: state.contractId,
-      message: {
-        "pipe-key": state.pipeKey,
-        "balance-1": state.myBalance,
-        "balance-2": state.theirBalance,
-        nonce: state.nonce,
-        action: state.action,
-        actor: state.actor,
-        "hashed-secret": state.secret,
-        "valid-after": state.validAfter,
-      },
+      message,
       walletPassword,
     });
 
