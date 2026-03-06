@@ -287,6 +287,8 @@ misconfiguration.
 Integer env vars must be plain integer text (for example `10000`, not `10s`
 or `12.5`); malformed numeric values fail fast instead of being silently
 coerced.
+`STACKS_NETWORK` accepts only `mainnet`, `testnet`, `devnet`, or `mocknet`
+(case-insensitive); invalid values fail fast instead of silently defaulting.
 Observer ingress controls:
 
 - `STACKFLOW_NODE_OBSERVER_LOCALHOST_ONLY` defaults to `true` and restricts

@@ -121,10 +121,16 @@ function normalizeBaseUrl(input: string): string {
 
 function parseNetwork(value: unknown): 'mainnet' | 'testnet' | 'devnet' | 'mocknet' {
   const normalized = String(value || 'devnet').trim().toLowerCase();
-  if (normalized === 'mainnet' || normalized === 'testnet' || normalized === 'mocknet') {
+  if (
+    normalized === 'mainnet' ||
+    normalized === 'testnet' ||
+    normalized === 'devnet' ||
+    normalized === 'mocknet'
+  ) {
     return normalized;
   }
-  return 'devnet';
+
+  throw new Error('STACKS_NETWORK must be one of: mainnet, testnet, devnet, mocknet');
 }
 
 function parseSignatureVerifierMode(value: unknown): SignatureVerifierMode {
