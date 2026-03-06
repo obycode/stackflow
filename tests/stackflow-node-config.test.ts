@@ -51,6 +51,7 @@ describe('stackflow-node config parsing', () => {
 
   it('clamps and coerces numeric safety bounds', () => {
     const config = loadConfig({
+      STACKFLOW_NODE_MAX_RECENT_EVENTS: '-10',
       STACKFLOW_NODE_PEER_WRITE_RATE_LIMIT_PER_MINUTE: '-1',
       STACKFLOW_NODE_FORWARDING_MIN_FEE: '-99',
       STACKFLOW_NODE_FORWARDING_TIMEOUT_MS: '25',
@@ -58,11 +59,26 @@ describe('stackflow-node config parsing', () => {
       STACKFLOW_NODE_FORWARDING_REVEAL_RETRY_MAX_ATTEMPTS: '0',
     });
 
+    expect(config.maxRecentEvents).toBe(1);
     expect(config.peerWriteRateLimitPerMinute).toBe(0);
     expect(config.forwardingMinFee).toBe('0');
     expect(config.forwardingTimeoutMs).toBe(1_000);
     expect(config.forwardingRevealRetryIntervalMs).toBe(1_000);
     expect(config.forwardingRevealRetryMaxAttempts).toBe(1);
+  });
+
+  it('rejects stackflow-node ports outside the TCP range', () => {
+    expect(() =>
+      loadConfig({
+        STACKFLOW_NODE_PORT: '0',
+      }),
+    ).toThrow(/PORT must be an integer between 1 and 65535/);
+
+    expect(() =>
+      loadConfig({
+        STACKFLOW_NODE_PORT: '70000',
+      }),
+    ).toThrow(/PORT must be an integer between 1 and 65535/);
   });
 
   it('normalizes forwarding base-url allowlists', () => {

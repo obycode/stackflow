@@ -277,6 +277,10 @@ objects received via `/new_block` for payload inspection/debugging.
 `x-forwarded-for` for client IP extraction (rate limiting and localhost checks).
 `STACKFLOW_NODE_HOST` defaults to `127.0.0.1` to reduce accidental network
 exposure. Use a public bind only with hardened ingress controls.
+`STACKFLOW_NODE_PORT` must be a valid TCP port (`1-65535`) and fails fast on
+invalid values.
+`STACKFLOW_NODE_MAX_RECENT_EVENTS` is clamped to at least `1` so event pruning
+cannot be disabled accidentally via negative values.
 Observer ingress controls:
 
 - `STACKFLOW_NODE_OBSERVER_LOCALHOST_ONLY` defaults to `true` and restricts
