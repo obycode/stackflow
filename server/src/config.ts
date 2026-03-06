@@ -72,7 +72,7 @@ function parsePrincipalCsv(value: unknown): string[] {
   return [...new Set(principals)];
 }
 
-function parseBoolean(value: unknown, fallback: boolean): boolean {
+function parseBoolean(value: unknown, fallback: boolean, key: string): boolean {
   if (value === undefined || value === null || value === '') {
     return fallback;
   }
@@ -85,7 +85,7 @@ function parseBoolean(value: unknown, fallback: boolean): boolean {
     return false;
   }
 
-  return fallback;
+  throw new Error(`${key} must be a boolean (true/false, 1/0, yes/no, on/off)`);
 }
 
 function normalizeBaseUrl(input: string): string {
@@ -172,7 +172,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): StackflowNodeC
     port: parsePort(env.STACKFLOW_NODE_PORT),
     dbFile,
     maxRecentEvents: parseMaxRecentEvents(env.STACKFLOW_NODE_MAX_RECENT_EVENTS),
-    logRawEvents: parseBoolean(env.STACKFLOW_NODE_LOG_RAW_EVENTS, false),
+    logRawEvents: parseBoolean(
+      env.STACKFLOW_NODE_LOG_RAW_EVENTS,
+      false,
+      'STACKFLOW_NODE_LOG_RAW_EVENTS',
+    ),
     watchedContracts: parseCsv(env.STACKFLOW_CONTRACTS),
     watchedPrincipals: parsePrincipalCsv(env.STACKFLOW_NODE_PRINCIPALS),
     stacksNetwork: parseNetwork(env.STACKS_NETWORK),
@@ -207,6 +211,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): StackflowNodeC
     disputeOnlyBeneficial: parseBoolean(
       env.STACKFLOW_NODE_DISPUTE_ONLY_BENEFICIAL,
       false,
+      'STACKFLOW_NODE_DISPUTE_ONLY_BENEFICIAL',
     ),
     peerWriteRateLimitPerMinute: Math.max(
       0,
@@ -218,22 +223,30 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): StackflowNodeC
     trustProxy: parseBoolean(
       env.STACKFLOW_NODE_TRUST_PROXY,
       DEFAULT_TRUST_PROXY,
+      'STACKFLOW_NODE_TRUST_PROXY',
     ),
     observerLocalhostOnly: parseBoolean(
       env.STACKFLOW_NODE_OBSERVER_LOCALHOST_ONLY,
       DEFAULT_OBSERVER_LOCALHOST_ONLY,
+      'STACKFLOW_NODE_OBSERVER_LOCALHOST_ONLY',
     ),
     observerAllowedIps: parseCsv(env.STACKFLOW_NODE_OBSERVER_ALLOWED_IPS),
     adminReadToken: env.STACKFLOW_NODE_ADMIN_READ_TOKEN?.trim() || null,
     adminReadLocalhostOnly: parseBoolean(
       env.STACKFLOW_NODE_ADMIN_READ_LOCALHOST_ONLY,
       DEFAULT_ADMIN_READ_LOCALHOST_ONLY,
+      'STACKFLOW_NODE_ADMIN_READ_LOCALHOST_ONLY',
     ),
     redactSensitiveReadData: parseBoolean(
       env.STACKFLOW_NODE_REDACT_SENSITIVE_READ_DATA,
       DEFAULT_REDACT_SENSITIVE_READ_DATA,
+      'STACKFLOW_NODE_REDACT_SENSITIVE_READ_DATA',
     ),
-    forwardingEnabled: parseBoolean(env.STACKFLOW_NODE_FORWARDING_ENABLED, false),
+    forwardingEnabled: parseBoolean(
+      env.STACKFLOW_NODE_FORWARDING_ENABLED,
+      false,
+      'STACKFLOW_NODE_FORWARDING_ENABLED',
+    ),
     forwardingMinFee: Math.max(
       0,
       parseInteger(env.STACKFLOW_NODE_FORWARDING_MIN_FEE, 0),
@@ -248,6 +261,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): StackflowNodeC
     forwardingAllowPrivateDestinations: parseBoolean(
       env.STACKFLOW_NODE_FORWARDING_ALLOW_PRIVATE_DESTINATIONS,
       false,
+      'STACKFLOW_NODE_FORWARDING_ALLOW_PRIVATE_DESTINATIONS',
     ),
     forwardingAllowedBaseUrls: parseCsv(
       env.STACKFLOW_NODE_FORWARDING_ALLOWED_BASE_URLS,
