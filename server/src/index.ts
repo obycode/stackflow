@@ -666,9 +666,16 @@ function stringifyForLog(value: unknown): string {
   }
 }
 
+function normalizeWatchedContracts(watchedContracts: string[]): string[] {
+  return watchedContracts
+    .map((contract) => contract.trim().toLowerCase())
+    .filter((contract) => contract.length > 0);
+}
+
 function contractMatches(contractId: string, watchedContracts: string[]): boolean {
   if (watchedContracts.length > 0) {
-    return watchedContracts.includes(contractId);
+    const normalizedContractId = contractId.toLowerCase();
+    return watchedContracts.some((candidate) => candidate === normalizedContractId);
   }
   return DEFAULT_STACKFLOW_CONTRACT_PATTERN.test(contractId);
 }
@@ -677,6 +684,7 @@ function extractRawStackflowPrintEventSamples(
   payload: unknown,
   watchedContracts: string[],
 ): Record<string, unknown>[] {
+  const normalizedWatchedContracts = normalizeWatchedContracts(watchedContracts);
   const queue: unknown[] = [payload];
   const visited = new Set<object>();
   const samples: Record<string, unknown>[] = [];
@@ -738,7 +746,7 @@ function extractRawStackflowPrintEventSamples(
       if (
         typeof contractId === 'string' &&
         topic === 'print' &&
-        contractMatches(contractId, watchedContracts)
+        contractMatches(contractId, normalizedWatchedContracts)
       ) {
         samples.push(candidate.envelope);
       }
