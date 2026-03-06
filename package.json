@@ -10,7 +10,7 @@
     "build:ui": "node scripts/build-ui.js",
     "test": "npm run test:clarity && npm run test:node",
     "test:clarity": "vitest run tests/stackflow.test.ts tests/reservoir.test.ts",
-    "test:node": "vitest run -c vitest.node.config.js tests/stackflow-agent.test.ts tests/x402-client.test.ts tests/counterparty-service.test.ts tests/stackflow-node-dispute.test.ts tests/stackflow-node-state.test.ts tests/stackflow-node-observer.test.ts tests/stackflow-node-http.integration.test.ts",
+    "test:node": "vitest run -c vitest.node.config.js tests/stackflow-agent.test.ts tests/x402-client.test.ts tests/counterparty-service.test.ts tests/stackflow-node-config.test.ts tests/stackflow-node-dispute.test.ts tests/stackflow-node-state.test.ts tests/stackflow-node-observer.test.ts tests/stackflow-node-http.integration.test.ts",
     "test:node-utils": "vitest run -c vitest.node.config.js tests/x402-client.test.ts tests/stackflow-agent.test.ts tests/stackflow-aibtc-adapter.test.ts",
     "test:stackflow-node:http": "STACKFLOW_NODE_HTTP_INTEGRATION=1 vitest run tests/stackflow-node-http.integration.test.ts",
     "test:report": "vitest run -- --coverage --costs",
