@@ -258,7 +258,7 @@ STACKFLOW_NODE_FORWARDING_REVEAL_RETRY_MAX_ATTEMPTS=20
 
 If `STACKFLOW_CONTRACTS` is omitted, the stackflow-node automatically monitors any
 contract identifier matching `*.stackflow*`.
-When set, `STACKFLOW_CONTRACTS` entries are trimmed and matched case-insensitively.
+When set, `STACKFLOW_CONTRACTS` entries are trimmed of whitespace and matched case-sensitively (Stacks contract identifiers are case-sensitive).
 The current implementation uses Node's `node:sqlite` module for persistence.
 `STACKFLOW_NODE_SIGNATURE_VERIFIER_MODE` supports `readonly` (default),
 `accept-all`, and `reject-all`. Non-`readonly` modes are intended for testing.

@@ -228,7 +228,7 @@ describe('watchtower event parser', () => {
     };
 
     const events = extractStackflowPrintEvents(payload, {
-      watchedContracts: ['  st1pqhqkv0rjxzfy1dgx8mnsnyve3vgzjsrtpgzgm.custom-flow  '],
+      watchedContracts: [`  ${CLOSER}.custom-flow  `],
     });
 
     expect(events).toHaveLength(1);
