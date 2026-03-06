@@ -10,7 +10,9 @@ import {
   Pc,
   cvToJSON,
   fetchCallReadOnlyFunction,
+  getAddressFromPublicKey,
   principalCV,
+  publicKeyFromSignatureRsv,
   serializeCV,
 } from "https://esm.sh/@stacks/transactions@7.2.0?bundle&target=es2020";
 
@@ -83,13 +85,33 @@ const elements = {
   forPrincipal: document.getElementById("for-principal"),
   openAmount: document.getElementById("open-amount"),
   openNonce: document.getElementById("open-nonce"),
-  myBalance: document.getElementById("my-balance"),
-  theirBalance: document.getElementById("their-balance"),
-  transferNonce: document.getElementById("transfer-nonce"),
-  transferAction: document.getElementById("transfer-action"),
+  // Pipe State
+  pipeNonce: document.getElementById("pipe-nonce"),
+  pipeMyBalance: document.getElementById("pipe-my-balance"),
+  pipeTheirBalance: document.getElementById("pipe-their-balance"),
+  // Proposed Action
+  actionType: document.getElementById("action-type"),
+  actionAmount: document.getElementById("action-amount"),
+  actionAmountRow: document.getElementById("action-amount-row"),
+  resultNonce: document.getElementById("result-nonce"),
+  resultActionCode: document.getElementById("result-action-code"),
+  resultMyBalance: document.getElementById("result-my-balance"),
+  resultTheirBalance: document.getElementById("result-their-balance"),
+  // Shared transfer fields
   transferActor: document.getElementById("transfer-actor"),
+  actorCustomRow: document.getElementById("actor-custom-row"),
+  transferActorCustom: document.getElementById("transfer-actor-custom"),
   transferSecret: document.getElementById("transfer-secret"),
   transferValidAfter: document.getElementById("transfer-valid-after"),
+  // Sign & Validate
+  mySignature: document.getElementById("my-signature"),
+  validateSignature: document.getElementById("validate-signature"),
+  validateSigBtn: document.getElementById("validate-sig-btn"),
+  useMySignatureBtn: document.getElementById("use-my-sig-btn"),
+  validationResult: document.getElementById("validation-result"),
+  validationIcon: document.getElementById("validation-icon"),
+  validationText: document.getElementById("validation-text"),
+  // Common
   walletStatus: document.getElementById("wallet-status"),
   connectWallet: document.getElementById("connect-wallet"),
   disconnectWallet: document.getElementById("disconnect-wallet"),
@@ -512,8 +534,8 @@ async function ensureWallet({ interactive }) {
     }
     state.connectedAddress = address;
     elements.forPrincipal.value = elements.forPrincipal.value || address;
-    elements.transferActor.value = elements.transferActor.value || address;
     setWalletStatus(`Connected: ${address}`);
+    updateActorOptions();
     return address;
   }
 
@@ -694,7 +716,19 @@ async function handleGetPipe() {
       resultHex,
       decoded,
     });
-    appendLog("Fetched pipe state via read-only get-pipe.");
+
+    // Populate Pipe State fields when we get valid data
+    if (decoded && decoded.nonce !== undefined) {
+      elements.pipeNonce.value = decoded.nonce;
+      const pair = canonicalPrincipals(forPrincipal, withPrincipal);
+      const iAmP1 = pair.principal1 === forPrincipal;
+      elements.pipeMyBalance.value = iAmP1 ? (decoded["balance-1"] ?? "0") : (decoded["balance-2"] ?? "0");
+      elements.pipeTheirBalance.value = iAmP1 ? (decoded["balance-2"] ?? "0") : (decoded["balance-1"] ?? "0");
+      updatePreview();
+      appendLog("Fetched pipe state and populated fields.");
+    } else {
+      appendLog("Fetched pipe state via read-only get-pipe.");
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     setOutput(`Error: ${message}`);
@@ -794,6 +828,102 @@ async function handleForceCancel() {
   }
 }
 
+function computeAutoResult() {
+  const actionType = normalizedText(elements.actionType.value);
+  const pipeNonce = parseUintInput("Nonce", elements.pipeNonce.value);
+  const pipeMyBalance = parseUintInput("My Balance", elements.pipeMyBalance.value);
+  const pipeTheirBalance = parseUintInput("Their Balance", elements.pipeTheirBalance.value);
+  const amount = parseUintInput("Amount", elements.actionAmount.value);
+
+  if (actionType === "transfer-to") {
+    if (amount > pipeMyBalance) throw new Error("Amount exceeds my balance");
+    return { nonce: pipeNonce + 1n, myBalance: pipeMyBalance - amount, theirBalance: pipeTheirBalance + amount, actionCode: 1n };
+  }
+  if (actionType === "transfer-from") {
+    if (amount > pipeTheirBalance) throw new Error("Amount exceeds their balance");
+    return { nonce: pipeNonce + 1n, myBalance: pipeMyBalance + amount, theirBalance: pipeTheirBalance - amount, actionCode: 1n };
+  }
+  if (actionType === "close") {
+    return { nonce: pipeNonce + 1n, myBalance: pipeMyBalance, theirBalance: pipeTheirBalance, actionCode: 0n };
+  }
+  throw new Error(`Unknown action type: ${actionType}`);
+}
+
+function updatePreview() {
+  try {
+    const result = computeAutoResult();
+    elements.resultNonce.value = result.nonce.toString();
+    elements.resultMyBalance.value = result.myBalance.toString();
+    elements.resultTheirBalance.value = result.theirBalance.toString();
+    elements.resultActionCode.value = result.actionCode.toString();
+  } catch {
+    // leave fields as-is on error
+  }
+}
+
+function truncateAddr(addr) {
+  const t = normalizedText(addr);
+  if (!t) return "";
+  return t.length > 14 ? `${t.slice(0, 8)}…${t.slice(-4)}` : t;
+}
+
+function updateActorOptions() {
+  const myRaw = normalizedText(elements.forPrincipal.value) || state.connectedAddress || "";
+  const themRaw = normalizedText(elements.counterparty.value) || "";
+  const opts = elements.transferActor.options;
+  opts[0].text = myRaw ? `Me — ${truncateAddr(myRaw)}` : "Me";
+  opts[1].text = themRaw ? `Them — ${truncateAddr(themRaw)}` : "Them";
+}
+
+function handleActorChange() {
+  const isCustom = normalizedText(elements.transferActor.value) === "custom";
+  elements.actorCustomRow.classList.toggle("hidden", !isCustom);
+}
+
+function handleActionTypeChange() {
+  const actionType = normalizedText(elements.actionType.value);
+  const hasAmount = actionType === "transfer-to" || actionType === "transfer-from";
+  elements.actionAmountRow.classList.toggle("hidden", !hasAmount);
+  // Auto-select actor based on action
+  if (actionType === "transfer-to") {
+    elements.transferActor.value = "me";
+  } else if (actionType === "transfer-from") {
+    elements.transferActor.value = "them";
+  } else if (actionType === "close") {
+    elements.transferActor.value = "me";
+  }
+  handleActorChange();
+  updatePreview();
+}
+
+function cvToBytes(cv) {
+  const result = serializeCV(cv);
+  // serializeCV returns a hex string in stacks.js v7
+  if (typeof result === "string") {
+    const hex = result.startsWith("0x") ? result.slice(2) : result;
+    const bytes = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < hex.length; i += 2) {
+      bytes[i / 2] = Number.parseInt(hex.slice(i, i + 2), 16);
+    }
+    return bytes;
+  }
+  return result;
+}
+
+async function computeStructuredDataHash(domain, message) {
+  // SIP-018: sha256("SIP018" || sha256(domain_bytes) || sha256(message_bytes))
+  const prefix = new Uint8Array([0x53, 0x49, 0x50, 0x30, 0x31, 0x38]);
+  const [domainHashBuf, messageHashBuf] = await Promise.all([
+    crypto.subtle.digest("SHA-256", cvToBytes(domain)),
+    crypto.subtle.digest("SHA-256", cvToBytes(message)),
+  ]);
+  const payload = new Uint8Array(prefix.length + 32 + 32);
+  payload.set(prefix, 0);
+  payload.set(new Uint8Array(domainHashBuf), prefix.length);
+  payload.set(new Uint8Array(messageHashBuf), prefix.length + 32);
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", payload));
+}
+
 async function buildTransferContext() {
   const network = readNetwork();
   const { contractId } = parseContractId();
@@ -805,14 +935,15 @@ async function buildTransferContext() {
     "Counterparty",
     elements.counterparty.value,
   );
-  const actor = await resolvePrincipalInput(
-    "Actor Principal",
-    elements.transferActor.value || forPrincipal,
-  );
-  const myBalance = parseUintInput("My Balance", elements.myBalance.value);
-  const theirBalance = parseUintInput("Their Balance", elements.theirBalance.value);
-  const nonce = parseUintInput("Nonce", elements.transferNonce.value);
-  const action = parseUintInput("Action", elements.transferAction.value);
+  const actorMode = normalizedText(elements.transferActor.value);
+  const actor =
+    actorMode === "me" ? forPrincipal
+    : actorMode === "them" ? withPrincipal
+    : await resolvePrincipalInput("Custom Actor", elements.transferActorCustom.value);
+  const myBalance = parseUintInput("My Resulting Balance", elements.resultMyBalance.value);
+  const theirBalance = parseUintInput("Their Resulting Balance", elements.resultTheirBalance.value);
+  const nonce = parseUintInput("Resulting Nonce", elements.resultNonce.value);
+  const action = parseUintInput("Action Code", elements.resultActionCode.value);
   const { cv: tokenCV, tokenText } = parseOptionalTokenCV();
   const { cv: hashedSecretCV, text: hashedSecretText } = parseHashedSecretCV();
   const { cv: validAfterCV, text: validAfterText } = parseValidAfterCV();
@@ -872,6 +1003,7 @@ async function handleSignTransfer() {
       throw new Error("Wallet did not return a signature");
     }
     state.lastSignature = signature;
+    elements.mySignature.value = signature;
 
     const payload = {
       contractId: context.contractId,
@@ -924,6 +1056,82 @@ async function handleBuildPayload() {
   }
 }
 
+function showValidationResult(success, text) {
+  elements.validationResult.classList.remove("hidden");
+  elements.validationIcon.textContent = success ? "✓" : "✗";
+  elements.validationIcon.className = `validation-icon ${success ? "ok" : "fail"}`;
+  elements.validationText.textContent = text;
+}
+
+async function handleValidateSignature() {
+  try {
+    const sigInput = normalizedText(elements.validateSignature.value);
+    if (!sigInput) throw new Error("No signature to validate");
+
+    const sig = sigInput.startsWith("0x") ? sigInput.slice(2) : sigInput;
+    if (!/^[0-9a-fA-F]{130}$/.test(sig)) {
+      throw new Error("Signature must be 65 bytes (130 hex chars)");
+    }
+
+    const context = await buildTransferContext();
+    const hashBytes = await computeStructuredDataHash(context.domain, context.message);
+    const hashHex = toHex(hashBytes);
+
+    const network = readNetwork();
+    const forAddr = context.forPrincipal.split(".")[0];
+    const withAddr = context.withPrincipal.split(".")[0];
+
+    // Try as-is (RSV), then with recovery byte moved from front to back (VRS→RSV)
+    const candidates = [sig, sig.slice(2) + sig.slice(0, 2)];
+    let recoveredAddress = null;
+    let isParticipant = false;
+    let label = "";
+
+    for (const candidate of candidates) {
+      try {
+        const pubKey = publicKeyFromSignatureRsv(hashHex, candidate);
+        const addr = getAddressFromPublicKey(pubKey, network);
+        if (recoveredAddress === null) recoveredAddress = addr;
+        if (addr === forAddr) {
+          recoveredAddress = addr;
+          label = `Signed by ME — ${addr}`;
+          isParticipant = true;
+          break;
+        }
+        if (addr === withAddr) {
+          recoveredAddress = addr;
+          label = `Signed by COUNTERPARTY — ${addr}`;
+          isParticipant = true;
+          break;
+        }
+      } catch {
+        // try next format
+      }
+    }
+
+    if (!recoveredAddress) throw new Error("Could not recover signer from signature");
+    if (!isParticipant) label = `Unknown signer — ${recoveredAddress}`;
+
+    showValidationResult(isParticipant, label);
+    setOutput({ recoveredAddress, isParticipant, label });
+    appendLog(`Signature validation: ${label}`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    showValidationResult(false, message);
+    setOutput(`Error: ${message}`);
+    appendLog(`Validate signature failed: ${message}`, { error: true });
+  }
+}
+
+function handleUseMySignature() {
+  const sig = normalizedText(elements.mySignature.value) || state.lastSignature;
+  if (!sig) {
+    appendLog("No signature generated yet — sign with wallet first.", { error: true });
+    return;
+  }
+  elements.validateSignature.value = sig;
+}
+
 async function handleCopyOutput() {
   try {
     await navigator.clipboard.writeText(elements.output.textContent || "");
@@ -942,7 +1150,18 @@ function wireEvents() {
   elements.forceCancel.addEventListener("click", handleForceCancel);
   elements.signTransfer.addEventListener("click", handleSignTransfer);
   elements.buildPayload.addEventListener("click", handleBuildPayload);
+  elements.validateSigBtn.addEventListener("click", handleValidateSignature);
+  elements.useMySignatureBtn.addEventListener("click", handleUseMySignature);
   elements.copyOutput.addEventListener("click", handleCopyOutput);
+  // Pipe State / Action preview live updates
+  elements.actionType.addEventListener("change", handleActionTypeChange);
+  elements.transferActor.addEventListener("change", handleActorChange);
+  for (const id of ["pipe-nonce", "pipe-my-balance", "pipe-their-balance", "action-amount"]) {
+    document.getElementById(id).addEventListener("input", updatePreview);
+  }
+  // Refresh actor option labels when principals change
+  elements.forPrincipal.addEventListener("input", updateActorOptions);
+  elements.counterparty.addEventListener("input", updateActorOptions);
   elements.network.addEventListener("change", () => {
     const previousPresetKey = elements.contractPreset.value;
     elements.stacksApiUrl.value = DEFAULT_API_BY_NETWORK[readNetwork()];
@@ -983,6 +1202,8 @@ function wireEvents() {
 
 async function bootstrap() {
   wireEvents();
+  handleActionTypeChange();
+  updateActorOptions();
   updateNetworkDefaults();
   renderPresetOptions();
   if (!normalizedText(elements.contractId.value) && !normalizedText(elements.tokenContract.value)) {

@@ -90,40 +90,109 @@
       </section>
 
       <section class="card">
-        <h2>Transfer Signer</h2>
+        <h2>Pipe State</h2>
+        <p class="card-hint">Current on-chain state of the pipe. "Get Pipe" above will also populate these fields automatically.</p>
         <div class="grid three">
           <label>
+            Nonce
+            <input id="pipe-nonce" type="number" min="0" step="1" value="0" />
+          </label>
+          <label>
             My Balance
-            <input id="my-balance" type="number" min="0" step="1" value="90" />
+            <input id="pipe-my-balance" type="number" min="0" step="1" value="100" />
           </label>
           <label>
             Their Balance
-            <input id="their-balance" type="number" min="0" step="1" value="10" />
+            <input id="pipe-their-balance" type="number" min="0" step="1" value="0" />
           </label>
-          <label>
-            Nonce
-            <input id="transfer-nonce" type="number" min="0" step="1" value="1" />
-          </label>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Proposed Action</h2>
+        <div class="grid two">
           <label>
             Action
-            <input id="transfer-action" type="number" min="0" step="1" value="1" />
+            <select id="action-type">
+              <option value="transfer-to">Transfer to Counterparty</option>
+              <option value="transfer-from">Receive from Counterparty</option>
+              <option value="close">Cooperative Close</option>
+            </select>
+          </label>
+          <label id="action-amount-row">
+            Amount
+            <input id="action-amount" type="number" min="1" step="1" value="100" />
           </label>
           <label>
-            Actor Principal
-            <input id="transfer-actor" type="text" placeholder="SP... or brice.btc" />
+            Actor
+            <select id="transfer-actor">
+              <option value="me">Me</option>
+              <option value="them">Them</option>
+              <option value="custom">Custom…</option>
+            </select>
+          </label>
+          <label id="actor-custom-row" class="hidden">
+            Custom Actor Principal
+            <input id="transfer-actor-custom" type="text" placeholder="SP... or brice.btc" />
           </label>
           <label>
-            Hashed Secret (optional 0x32-byte hex)
+            Hashed Secret (optional 32-byte hex)
             <input id="transfer-secret" type="text" placeholder="0x..." />
           </label>
           <label>
-            Valid After (optional uint)
+            Valid After (optional block height)
             <input id="transfer-valid-after" type="number" min="0" step="1" placeholder="burn height" />
           </label>
         </div>
+        <div class="grid two result-fields">
+          <label>
+            Resulting Nonce
+            <input id="result-nonce" type="number" min="0" step="1" />
+          </label>
+          <label>
+            Action Code
+            <input id="result-action-code" type="number" min="0" step="1" />
+          </label>
+          <label>
+            My Resulting Balance
+            <input id="result-my-balance" type="number" min="0" step="1" />
+          </label>
+          <label>
+            Their Resulting Balance
+            <input id="result-their-balance" type="number" min="0" step="1" />
+          </label>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Sign &amp; Validate</h2>
+        <div class="sig-subsection">
+          <h3 class="sub-heading">Generate Signature</h3>
+          <div class="actions">
+            <button id="sign-transfer" type="button">Sign with Wallet</button>
+            <button id="build-payload" type="button">Build Payload</button>
+          </div>
+          <label>
+            Your Signature
+            <textarea id="my-signature" class="terminal sig-field" readonly placeholder="Signature appears here after signing…"></textarea>
+          </label>
+        </div>
+        <div class="sig-subsection">
+          <h3 class="sub-heading">Validate Signature</h3>
+          <label>
+            Paste Signature
+            <textarea id="validate-signature" class="terminal sig-field" placeholder="Paste any signature to validate (0x…)"></textarea>
+          </label>
+          <div class="actions">
+            <button id="validate-sig-btn" type="button">Validate</button>
+            <button id="use-my-sig-btn" type="button" class="btn-secondary">Use My Signature ↑</button>
+          </div>
+          <div id="validation-result" class="validation-result hidden">
+            <span class="validation-icon" id="validation-icon"></span>
+            <span class="validation-text" id="validation-text"></span>
+          </div>
+        </div>
         <div class="actions">
-          <button id="sign-transfer" type="button">Sign Structured Message</button>
-          <button id="build-payload" type="button">Build Transfer Payload JSON</button>
           <button id="copy-output" type="button">Copy Output</button>
         </div>
       </section>
