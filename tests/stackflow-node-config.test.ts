@@ -83,6 +83,20 @@ describe('stackflow-node config parsing', () => {
     ).toThrow(/STACKFLOW_NODE_FORWARDING_ENABLED must be a boolean/);
   });
 
+  it('fails fast when integer env vars contain non-integer text', () => {
+    expect(() =>
+      loadConfig({
+        STACKFLOW_NODE_FORWARDING_TIMEOUT_MS: '30s',
+      }),
+    ).toThrow(/STACKFLOW_NODE_FORWARDING_TIMEOUT_MS must be an integer/);
+
+    expect(() =>
+      loadConfig({
+        STACKFLOW_NODE_PEER_WRITE_RATE_LIMIT_PER_MINUTE: '12.5',
+      }),
+    ).toThrow(/STACKFLOW_NODE_PEER_WRITE_RATE_LIMIT_PER_MINUTE must be an integer/);
+  });
+
   it('rejects stackflow-node ports outside the TCP range', () => {
     expect(() =>
       loadConfig({
