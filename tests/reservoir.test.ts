@@ -1217,6 +1217,133 @@ describe("reservoir", () => {
     });
   });
 
+  describe("create-tap-with-borrowed-liquidity", () => {
+    beforeEach(() => {
+      // Set rate to 10% and add liquidity
+      simnet.callPublicFn(
+        "reservoir",
+        "set-borrow-rate",
+        [Cl.uint(1000)],
+        deployer
+      );
+      simnet.callPublicFn(
+        "reservoir",
+        "add-liquidity",
+        [Cl.none(), Cl.uint(5000000000)],
+        deployer
+      );
+    });
+
+    it("creates a tap and borrows liquidity in one call", () => {
+      const tapAmount = 1000000;
+      const tapNonce = 0;
+      const borrowAmount = 50000;
+      const borrowFee = 5000; // 10%
+      const borrowNonce = 1;
+
+      const mySignature = generateDepositSignature(
+        address1PK,
+        null,
+        address1,
+        reservoirContract,
+        tapAmount,
+        borrowAmount,
+        borrowNonce,
+        reservoirContract
+      );
+
+      const reservoirSignature = generateDepositSignature(
+        deployerPK,
+        null,
+        reservoirContract,
+        address1,
+        borrowAmount,
+        tapAmount,
+        borrowNonce,
+        reservoirContract
+      );
+
+      const { result } = simnet.callPublicFn(
+        "reservoir",
+        "create-tap-with-borrowed-liquidity",
+        [
+          Cl.principal(stackflowContract),
+          Cl.none(),
+          Cl.uint(tapAmount),
+          Cl.uint(tapNonce),
+          Cl.uint(borrowAmount),
+          Cl.uint(borrowFee),
+          Cl.uint(tapAmount),
+          Cl.uint(borrowAmount),
+          Cl.buffer(mySignature),
+          Cl.buffer(reservoirSignature),
+          Cl.uint(borrowNonce),
+        ],
+        address1
+      );
+      expect(result).toBeOk(
+        Cl.uint(simnet.burnBlockHeight + BORROW_TERM_BLOCKS)
+      );
+
+      // Verify balances: reservoir funded tap + borrow, minus borrow amount + fee
+      const stxBalances = simnet.getAssetsMap().get("STX")!;
+      // reservoir: 5000000000 - borrowAmount + borrowFee
+      expect(stxBalances.get(reservoirContract)).toBe(4999955000n);
+      // stackflow: tapAmount + borrowAmount
+      expect(stxBalances.get(stackflowContract)).toBe(1050000n);
+    });
+
+    it("fails if borrow signature is wrong", () => {
+      const tapAmount = 1000000;
+      const borrowAmount = 50000;
+      const borrowFee = 5000;
+      const borrowNonce = 1;
+
+      // Use a wrong signature (signed with address2's key instead of address1's)
+      const wrongMySignature = generateDepositSignature(
+        address2PK,
+        null,
+        address1,
+        reservoirContract,
+        tapAmount,
+        borrowAmount,
+        borrowNonce,
+        reservoirContract
+      );
+
+      const reservoirSignature = generateDepositSignature(
+        deployerPK,
+        null,
+        reservoirContract,
+        address1,
+        borrowAmount,
+        tapAmount,
+        borrowNonce,
+        reservoirContract
+      );
+
+      const { result } = simnet.callPublicFn(
+        "reservoir",
+        "create-tap-with-borrowed-liquidity",
+        [
+          Cl.principal(stackflowContract),
+          Cl.none(),
+          Cl.uint(tapAmount),
+          Cl.uint(0),
+          Cl.uint(borrowAmount),
+          Cl.uint(borrowFee),
+          Cl.uint(tapAmount),
+          Cl.uint(borrowAmount),
+          Cl.buffer(wrongMySignature),
+          Cl.buffer(reservoirSignature),
+          Cl.uint(borrowNonce),
+        ],
+        address1
+      );
+      expect(result).toBeErr(Cl.uint(StackflowError.InvalidSignature));
+    });
+  });
+
   describe("force-closures", () => {
     beforeEach(() => {
       // Add liquidity to reservoir
