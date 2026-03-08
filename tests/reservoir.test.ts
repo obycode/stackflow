@@ -1340,7 +1340,7 @@ describe("reservoir", () => {
         ],
         address1
       );
-      expect(result).toBeErr(Cl.uint(StackflowError.InvalidSignature));
+      expect(result).toBeErr(Cl.uint(StackflowError.InvalidOtherSignature));
     });
   });
 

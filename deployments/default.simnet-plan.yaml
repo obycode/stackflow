@@ -65,7 +65,7 @@ plan:
     - transaction-type: emulated-contract-publish
       contract-name: sip-010-trait-ft-standard
       emulated-sender: SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE
-      path: .cache/requirements/SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE.sip-010-trait-ft-standard.clar
+      path: ./.cache/requirements/SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE.sip-010-trait-ft-standard.clar
       clarity-version: 1
     epoch: '2.0'
   - id: 1
@@ -73,17 +73,17 @@ plan:
     - transaction-type: emulated-contract-publish
       contract-name: sbtc-registry
       emulated-sender: SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4
-      path: .cache/requirements/SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-registry.clar
+      path: ./.cache/requirements/SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-registry.clar
       clarity-version: 3
     - transaction-type: emulated-contract-publish
       contract-name: sbtc-token
       emulated-sender: SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4
-      path: .cache/requirements/SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-token.clar
+      path: ./.cache/requirements/SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-token.clar
       clarity-version: 3
     - transaction-type: emulated-contract-publish
       contract-name: sbtc-deposit
       emulated-sender: SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4
-      path: .cache/requirements/SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-deposit.clar
+      path: ./.cache/requirements/SM3VDXK3WZZSA84XXFKAFAF15NNZX32CTSG82JFQ4.sbtc-deposit.clar
       clarity-version: 3
     epoch: '3.0'
   - id: 2
@@ -91,7 +91,7 @@ plan:
     - transaction-type: emulated-contract-publish
       contract-name: stackflow-token-0-6-0
       emulated-sender: SP126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT6AD08RV
-      path: .cache/requirements/SP126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT6AD08RV.stackflow-token-0-6-0.clar
+      path: ./.cache/requirements/SP126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT6AD08RV.stackflow-token-0-6-0.clar
       clarity-version: 4
     - transaction-type: emulated-contract-publish
       contract-name: stackflow-token
