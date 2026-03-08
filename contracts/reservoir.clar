@@ -439,6 +439,55 @@
   )
 )
 
+;;; Create a new tap and immediately borrow liquidity from the reservoir in a
+;;; single transaction. This is a convenience function combining `create-tap`
+;;; and `borrow-liquidity` for the common setup case where a new participant
+;;; wants both outgoing capacity (their own deposit) and incoming capacity
+;;; (borrowed liquidity) at once.
+;;;
+;;; The caller must first obtain `reservoir-signature` from the reservoir
+;;; operator off-chain, confirming the post-borrow balances.
+;;;
+;;; Parameters:
+;;; - `stackflow`: the StackFlow token contract
+;;; - `token`: optional SIP-010 token (none for STX)
+;;; - `tap-amount`: amount the caller deposits to fund their sending side
+;;; - `tap-nonce`: nonce for the initial tap creation (typically u0)
+;;; - `borrow-amount`: amount of liquidity to borrow from the reservoir
+;;; - `borrow-fee`: fee paid to the reservoir for the borrow
+;;;   (must be >= get-borrow-fee(borrow-amount))
+;;; - `my-balance`: caller's balance after the borrow deposit
+;;;   (should equal tap-amount since no transfers have occurred yet)
+;;; - `reservoir-balance`: reservoir's balance after the borrow deposit
+;;;   (should equal borrow-amount)
+;;; - `my-signature`: caller's SIP-018 signature over the post-borrow state
+;;; - `reservoir-signature`: reservoir's SIP-018 signature over the post-borrow state
+;;; - `borrow-nonce`: nonce for the borrow deposit (must be > tap-nonce)
+;;;
+;;; Returns:
+;;; - `(ok expire-block)` on success, where expire-block is the burn block
+;;;   height at which the borrowed liquidity expires
+;;; - Any error from `create-tap` or `borrow-liquidity`
+(define-public (create-tap-with-borrowed-liquidity
+    (stackflow <stackflow-token>)
+    (token (optional <sip-010>))
+    (tap-amount uint)
+    (tap-nonce uint)
+    (borrow-amount uint)
+    (borrow-fee uint)
+    (my-balance uint)
+    (reservoir-balance uint)
+    (my-signature (buff 65))
+    (reservoir-signature (buff 65))
+    (borrow-nonce uint)
+  )
+  (begin
+    (try! (create-tap stackflow token tap-amount tap-nonce))
+    (borrow-liquidity stackflow borrow-amount borrow-fee token my-balance
+      reservoir-balance my-signature reservoir-signature borrow-nonce)
+  )
+)
+
 ;; ----- Read-only functions -----
 
 ;;; Calculate the fee for borrowing a given amount.
