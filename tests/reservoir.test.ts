@@ -159,6 +159,14 @@ describe("reservoir", () => {
         address1
       );
 
+      // Add liquidity so amount check passes and we reach fee validation
+      simnet.callPublicFn(
+        "reservoir",
+        "add-liquidity",
+        [Cl.none(), Cl.uint(1000000)],
+        deployer
+      );
+
       const mySignature = generateDepositSignature(
         address1PK,
         null,
@@ -554,6 +562,89 @@ describe("reservoir", () => {
       );
     });
 
+    it("can borrow liquidity with zero fee when borrow rate is zero", () => {
+      // borrow-rate is u0 from init
+      const { result: feeResult } = simnet.callReadOnlyFn(
+        "reservoir",
+        "get-borrow-fee",
+        [Cl.uint(50000)],
+        deployer
+      );
+      expect(feeResult).toBeUint(0);
+
+      // Add liquidity to reservoir
+      simnet.callPublicFn(
+        "reservoir",
+        "add-liquidity",
+        [Cl.none(), Cl.uint(5000000000)],
+        deployer
+      );
+
+      // Fund initial tap
+      const { result } = simnet.callPublicFn(
+        "reservoir",
+        "create-tap",
+        [
+          Cl.principal(stackflowContract),
+          Cl.none(),
+          Cl.uint(1000000),
+          Cl.uint(0),
+        ],
+        address1
+      );
+      expect(result.type).toBe(ClarityType.ResponseOk);
+
+      const amount = 50000;
+      const fee = 0;
+
+      const mySignature = generateDepositSignature(
+        address1PK,
+        null,
+        address1,
+        reservoirContract,
+        1000000,
+        50000,
+        1,
+        reservoirContract
+      );
+
+      const reservoirSignature = generateDepositSignature(
+        deployerPK,
+        null,
+        reservoirContract,
+        address1,
+        50000,
+        1000000,
+        1,
+        reservoirContract
+      );
+
+      const borrow = simnet.callPublicFn(
+        "reservoir",
+        "borrow-liquidity",
+        [
+          Cl.principal(stackflowContract),
+          Cl.uint(amount),
+          Cl.uint(fee),
+          Cl.none(),
+          Cl.uint(1000000),
+          Cl.uint(50000),
+          Cl.buffer(mySignature),
+          Cl.buffer(reservoirSignature),
+          Cl.uint(1),
+        ],
+        address1
+      );
+      expect(borrow.result).toBeOk(
+        Cl.uint(simnet.burnBlockHeight + BORROW_TERM_BLOCKS)
+      );
+
+      // 5000000000 - 50000 (borrowed), with no fee transfer
+      const stxBalances = simnet.getAssetsMap().get("STX")!;
+      const reservoirBalance = stxBalances.get(reservoirContract);
+      expect(reservoirBalance).toBe(4999950000n);
+    });
+
     it("can borrow additional liquidity before previous term ends", () => {
       // Set rate to 10% and fund the reservoir
       simnet.callPublicFn(
@@ -764,7 +855,7 @@ describe("reservoir", () => {
         ],
         address1
       );
-      expect(result).toBeErr(Cl.uint(StackflowError.DepositFailed));
+      expect(result).toBeErr(Cl.uint(ReservoirError.AmountNotAvailable));
     });
   });
 

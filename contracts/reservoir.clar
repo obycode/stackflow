@@ -23,8 +23,7 @@
 ;; SOFTWARE.
 
 (use-trait sip-010 'SP3FBR2AGK5H9QBDH3EEN6DF8EK8JY7RX8QJ5SVTE.sip-010-trait-ft-standard.sip-010-trait)
-(use-trait stackflow-token .stackflow-token.stackflow-token)
-;; (use-trait stackflow-token 'SP126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT6AD08RV.stackflow-token-0-6-0.stackflow-token)
+(use-trait stackflow-token 'SP126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT6AD08RV.stackflow-token-0-6-0.stackflow-token)
 
 (define-constant OPERATOR tx-sender)
 (define-constant RESERVOIR current-contract)
@@ -395,6 +394,7 @@
 ;;; tap.
 ;;; Returns:
 ;;; -`(ok expire-block)` on success
+;;; - `ERR_AMOUNT_NOT_AVAILABLE` if reservoir liquidity is below `amount`
 ;;; - `ERR_BORROW_FEE_PAYMENT_FAILED` if the fee payment failed
 ;;; - Errors passed through from the StackFlow `deposit` function
 (define-public (borrow-liquidity
@@ -411,11 +411,16 @@
   (let (
       (borrower tx-sender)
       (expected-fee (get-borrow-fee amount))
+      (available-liquidity (unwrap-panic (get-available-liquidity token)))
       (until (+ burn-block-height BORROW_TERM_BLOCKS))
     )
     (try! (check-valid stackflow token))
+    (asserts! (<= amount available-liquidity) ERR_AMOUNT_NOT_AVAILABLE)
     (asserts! (>= fee expected-fee) ERR_INVALID_FEE)
-    (unwrap! (transfer-to-contract token fee) ERR_BORROW_FEE_PAYMENT_FAILED)
+    (if (is-eq fee u0)
+      true
+      (unwrap! (transfer-to-contract token fee) ERR_BORROW_FEE_PAYMENT_FAILED)
+    )
     (try! (match token
       t (as-contract? ((with-ft (contract-of t) "*" amount))
         (try! (contract-call? stackflow deposit amount token borrower reservoir-balance
