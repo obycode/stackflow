@@ -1,4 +1,4 @@
-import { connect, disconnect, isConnected, request } from "https://esm.sh/@stacks/connect?bundle&target=es2020";
+import { connect, disconnect, isConnected, request } from "https://esm.sh/@stacks/connect@8.2.5?bundle&target=es2020";
 import {
   Cl,
   Pc,
@@ -929,6 +929,126 @@ function extractTxid(response) {
   return null;
 }
 
+// ── Leather wallet compatibility ────────────────────────────────────────────
+
+function normalizeSip018SignatureForClarity(signature) {
+  const raw = (signature ?? "").replace(/^0x/, "").toLowerCase();
+  if (raw.length !== 130) return signature;
+  const firstByte = parseInt(raw.slice(0, 2), 16);
+  const lastByte = parseInt(raw.slice(128, 130), 16);
+  const isRecoveryId = (v) => v === 0 || v === 1 || v === 27 || v === 28;
+  if (isRecoveryId(firstByte) && !isRecoveryId(lastByte)) {
+    return `0x${raw.slice(2)}${raw.slice(0, 2)}`;
+  }
+  return signature;
+}
+
+function cvToWalletJson(cv) {
+  if (!cv || typeof cv !== "object") return cv;
+  switch (cv.type) {
+    case "int": return { type: "int", value: String(cv.value) };
+    case "uint": return { type: "uint", value: String(cv.value) };
+    case "address":
+    case "contract": return { type: "principal", value: cv.value };
+    case "ascii": return { type: "string-ascii", value: cv.value };
+    case "utf8": return { type: "string-utf8", value: cv.value };
+    case "none": return { type: "none" };
+    case "some": return { type: "some", value: cvToWalletJson(cv.value) };
+    case "ok": return { type: "ok", value: cvToWalletJson(cv.value) };
+    case "err": return { type: "err", value: cvToWalletJson(cv.value) };
+    case "buffer": return { type: "buffer", data: cv.value };
+    case "true": return { type: "bool", value: true };
+    case "false": return { type: "bool", value: false };
+    case "tuple": {
+      const data = {};
+      for (const [k, v] of Object.entries(cv.value || {})) {
+        data[k] = cvToWalletJson(v);
+      }
+      return { type: "tuple", data };
+    }
+    case "list": {
+      const list = (cv.value || []).map(cvToWalletJson);
+      return { type: "list", list };
+    }
+    default: return cv;
+  }
+}
+
+function getLeatherProvider() {
+  return window.LeatherProvider ?? null;
+}
+
+function isWalletCancellationError(error) {
+  const msg = (error instanceof Error ? error.message : String(error ?? "")).toLowerCase();
+  return msg.includes("cancelled") || msg.includes("canceled")
+    || msg.includes("user rejected") || msg.includes("user denied")
+    || msg.includes("denied by user") || msg.includes("request aborted")
+    || msg.includes("aborterror") || msg.includes("4001");
+}
+
+function normalizeWalletPromptError(error, action) {
+  if (isWalletCancellationError(error)) {
+    if (action === "connect") return new Error("Wallet connection cancelled");
+    if (action === "transaction") return new Error("Transaction cancelled");
+    return new Error("Signature cancelled");
+  }
+  return error instanceof Error ? error : new Error(String(error ?? "Unknown wallet error"));
+}
+
+async function signStructuredMessageWithFallback(domain, message) {
+  let lastError = null;
+
+  try {
+    const response = await request("stx_signStructuredMessage", {
+      domain,
+      message,
+    });
+    const sig = extractSignature(response);
+    if (sig) return normalizeSip018SignatureForClarity(sig);
+  } catch (err) {
+    lastError = normalizeWalletPromptError(err, "signature");
+    if (isWalletCancellationError(err)) throw lastError;
+  }
+
+  const provider = getLeatherProvider();
+  if (provider) {
+    try {
+      const response = await provider.request("stx_signStructuredMessage", {
+        message,
+        domain,
+      });
+      const sig = extractSignature(response);
+      if (sig) return normalizeSip018SignatureForClarity(sig);
+    } catch (err) {
+      lastError = normalizeWalletPromptError(err, "signature");
+      if (isWalletCancellationError(err)) throw lastError;
+    }
+
+    try {
+      const response = await provider.request("stx_signStructuredMessage", {
+        message: cvToWalletJson(message),
+        domain: cvToWalletJson(domain),
+      });
+      const sig = extractSignature(response);
+      if (sig) return normalizeSip018SignatureForClarity(sig);
+    } catch (err) {
+      lastError = normalizeWalletPromptError(err, "signature");
+      if (isWalletCancellationError(err)) throw lastError;
+    }
+  }
+
+  if (lastError) {
+    const msg = lastError.message ?? "";
+    if (msg.includes("not supported") || msg.includes("structured")) {
+      throw new Error("Your wallet doesn't support structured data signing (SIP-018). Try Leather v6+.");
+    }
+    throw lastError;
+  }
+  throw new Error("Wallet did not return a signature");
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+
 function buildStackflowNodePayload() {
   const parsed = parseSignerInputs();
   const contractId = parseContractId();
@@ -1378,14 +1498,10 @@ async function signStructuredState() {
     }
 
     const state = await buildStructuredState();
-    const response = await request("stx_signStructuredMessage", {
-      domain: state.domain,
-      message: state.message,
-    });
-    const signature = extractSignature(response);
-    if (!signature) {
-      throw new Error("Wallet did not return a signature");
-    }
+    const signature = await signStructuredMessageWithFallback(
+      state.domain,
+      state.message,
+    );
 
     getInput(ids.sigMySignature).value = normalizeHex(
       signature,
