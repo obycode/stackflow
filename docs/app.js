@@ -3,7 +3,7 @@ import {
   disconnect,
   isConnected,
   request,
-} from "https://esm.sh/@stacks/connect?bundle&target=es2020";
+} from "https://esm.sh/@stacks/connect@8.2.5?bundle&target=es2020";
 import { createNetwork } from "https://esm.sh/@stacks/network@7.2.0?bundle&target=es2020";
 import {
   Cl,
@@ -511,6 +511,151 @@ function extractTxid(response) {
   return null;
 }
 
+// ── Leather wallet compatibility ────────────────────────────────────────────
+
+/**
+ * Normalize SIP-018 signatures from VRS (Leather default) to RSV (Clarity expected).
+ * Leather and some other wallets return the recovery byte first (VRS format),
+ * but Clarity contracts and StackFlow verification expect RSV format.
+ */
+function normalizeSip018SignatureForClarity(signature) {
+  const raw = (signature ?? "").replace(/^0x/, "").toLowerCase();
+  if (raw.length !== 130) return signature;
+  const firstByte = parseInt(raw.slice(0, 2), 16);
+  const lastByte = parseInt(raw.slice(128, 130), 16);
+  const isRecoveryId = (v) => v === 0 || v === 1 || v === 27 || v === 28;
+  if (isRecoveryId(firstByte) && !isRecoveryId(lastByte)) {
+    return `0x${raw.slice(2)}${raw.slice(0, 2)}`;
+  }
+  return signature;
+}
+
+/**
+ * Convert a ClarityValue to wallet-JSON format for older Leather versions
+ * that don't accept raw ClarityValue objects in stx_signStructuredMessage.
+ * Uses string-based type identifiers from @stacks/transactions v7.
+ */
+function cvToWalletJson(cv) {
+  if (!cv || typeof cv !== "object") return cv;
+  switch (cv.type) {
+    case "int": return { type: "int", value: String(cv.value) };
+    case "uint": return { type: "uint", value: String(cv.value) };
+    case "address":
+    case "contract": return { type: "principal", value: cv.value };
+    case "ascii": return { type: "string-ascii", value: cv.value };
+    case "utf8": return { type: "string-utf8", value: cv.value };
+    case "none": return { type: "none" };
+    case "some": return { type: "some", value: cvToWalletJson(cv.value) };
+    case "ok": return { type: "ok", value: cvToWalletJson(cv.value) };
+    case "err": return { type: "err", value: cvToWalletJson(cv.value) };
+    case "buffer": return { type: "buffer", data: cv.value };
+    case "true": return { type: "bool", value: true };
+    case "false": return { type: "bool", value: false };
+    case "tuple": {
+      const data = {};
+      for (const [k, v] of Object.entries(cv.value || {})) {
+        data[k] = cvToWalletJson(v);
+      }
+      return { type: "tuple", data };
+    }
+    case "list": {
+      const list = (cv.value || []).map(cvToWalletJson);
+      return { type: "list", list };
+    }
+    default: return cv;
+  }
+}
+
+function getLeatherProvider() {
+  return window.LeatherProvider ?? null;
+}
+
+function isWalletCancellationError(error) {
+  const msg = (error instanceof Error ? error.message : String(error ?? "")).toLowerCase();
+  return msg.includes("cancelled") || msg.includes("canceled")
+    || msg.includes("user rejected") || msg.includes("user denied")
+    || msg.includes("denied by user") || msg.includes("request aborted")
+    || msg.includes("aborterror") || msg.includes("4001");
+}
+
+function normalizeWalletPromptError(error, action) {
+  if (isWalletCancellationError(error)) {
+    if (action === "connect") return new Error("Wallet connection cancelled");
+    if (action === "transaction") return new Error("Transaction cancelled");
+    return new Error("Signature cancelled");
+  }
+  return error instanceof Error ? error : new Error(String(error ?? "Unknown wallet error"));
+}
+
+/**
+ * Sign a SIP-018 structured message with 3-tier fallback:
+ * 1. @stacks/connect request() — standard path, works with modern wallets
+ * 2. Direct provider.request() with ClarityValue objects
+ * 3. Direct provider.request() with wallet-JSON format (older Leather)
+ *
+ * Returns the normalized RSV signature.
+ */
+async function signStructuredMessageWithFallback(domain, message, network) {
+  let lastError = null;
+
+  // Path 1: @stacks/connect request()
+  try {
+    const response = await request("stx_signStructuredMessage", {
+      network,
+      domain,
+      message,
+    });
+    const sig = extractSignature(response);
+    if (sig) return normalizeSip018SignatureForClarity(sig);
+  } catch (err) {
+    lastError = normalizeWalletPromptError(err, "signature");
+    // If the user explicitly cancelled, don't try fallbacks
+    if (isWalletCancellationError(err)) throw lastError;
+  }
+
+  // Path 2: Direct provider with ClarityValue objects
+  const provider = getLeatherProvider();
+  if (provider) {
+    try {
+      const response = await provider.request("stx_signStructuredMessage", {
+        network,
+        message,
+        domain,
+      });
+      const sig = extractSignature(response);
+      if (sig) return normalizeSip018SignatureForClarity(sig);
+    } catch (err) {
+      lastError = normalizeWalletPromptError(err, "signature");
+      if (isWalletCancellationError(err)) throw lastError;
+    }
+
+    // Path 3: Wallet-JSON format for older providers
+    try {
+      const response = await provider.request("stx_signStructuredMessage", {
+        network,
+        message: cvToWalletJson(message),
+        domain: cvToWalletJson(domain),
+      });
+      const sig = extractSignature(response);
+      if (sig) return normalizeSip018SignatureForClarity(sig);
+    } catch (err) {
+      lastError = normalizeWalletPromptError(err, "signature");
+      if (isWalletCancellationError(err)) throw lastError;
+    }
+  }
+
+  if (lastError) {
+    const msg = lastError.message ?? "";
+    if (msg.includes("not supported") || msg.includes("structured")) {
+      throw new Error("Your wallet doesn't support structured data signing (SIP-018). Try Leather v6+.");
+    }
+    throw lastError;
+  }
+  throw new Error("Wallet did not return a signature");
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+
 async function ensureWallet({ interactive }) {
   if (state.connectedAddress) {
     return state.connectedAddress;
@@ -993,15 +1138,11 @@ async function handleSignTransfer() {
   try {
     await ensureWallet({ interactive: true });
     const context = await buildTransferContext();
-    const response = await request("stx_signStructuredMessage", {
-      network: readNetwork(),
-      domain: context.domain,
-      message: context.message,
-    });
-    const signature = extractSignature(response);
-    if (!signature) {
-      throw new Error("Wallet did not return a signature");
-    }
+    const signature = await signStructuredMessageWithFallback(
+      context.domain,
+      context.message,
+      readNetwork(),
+    );
     state.lastSignature = signature;
     elements.mySignature.value = signature;
 
