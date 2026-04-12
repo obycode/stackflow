@@ -3,7 +3,7 @@ import {
   disconnect,
   isConnected,
   request,
-} from "https://esm.sh/@stacks/connect?bundle&target=es2020";
+} from "https://esm.sh/@stacks/connect@8.2.5?bundle&target=es2020";
 import { createNetwork } from "https://esm.sh/@stacks/network@7.2.0?bundle&target=es2020";
 import {
   Cl,
@@ -511,6 +511,25 @@ function extractTxid(response) {
   return null;
 }
 
+// ── Wallet error handling ───────────────────────────────────────────────────
+
+function isWalletCancellationError(error) {
+  const msg = (error instanceof Error ? error.message : String(error ?? "")).toLowerCase();
+  return msg.includes("cancelled") || msg.includes("canceled")
+    || msg.includes("user rejected") || msg.includes("user denied")
+    || msg.includes("denied by user") || msg.includes("request aborted")
+    || msg.includes("aborterror") || msg.includes("4001");
+}
+
+function normalizeWalletPromptError(error, action) {
+  if (isWalletCancellationError(error)) {
+    if (action === "connect") return new Error("Wallet connection cancelled");
+    if (action === "transaction") return new Error("Transaction cancelled");
+    return new Error("Signature cancelled");
+  }
+  return error instanceof Error ? error : new Error(String(error ?? "Unknown wallet error"));
+}
+
 async function ensureWallet({ interactive }) {
   if (state.connectedAddress) {
     return state.connectedAddress;
@@ -993,11 +1012,16 @@ async function handleSignTransfer() {
   try {
     await ensureWallet({ interactive: true });
     const context = await buildTransferContext();
-    const response = await request("stx_signStructuredMessage", {
-      network: readNetwork(),
-      domain: context.domain,
-      message: context.message,
-    });
+    let response;
+    try {
+      response = await request("stx_signStructuredMessage", {
+        network: readNetwork(),
+        domain: context.domain,
+        message: context.message,
+      });
+    } catch (err) {
+      throw normalizeWalletPromptError(err, "signature");
+    }
     const signature = extractSignature(response);
     if (!signature) {
       throw new Error("Wallet did not return a signature");
